@@ -4,6 +4,7 @@
 // - Mac 内蔵の WebKit で画面を出す
 // - 何か失敗したら、黙らずに画面に理由を出す。記録は ~/Library/Logs/ProjectHub.log
 import Cocoa
+import Darwin
 import WebKit
 import UniformTypeIdentifiers
 
@@ -97,7 +98,23 @@ let privacyFolders: [(name: String, path: String, service: String)] = [
 ]
 // 中を読んでみる。まだ決めていなければ、ここで Mac が「アクセスを求めています」と確認を出す
 func canRead(_ dir: String) -> Bool {
-    return (try? FileManager.default.contentsOfDirectory(atPath: dir)) != nil
+    guard let handle = opendir(dir) else { return false }
+    defer { closedir(handle) }
+    errno = 0
+    _ = readdir(handle) // A bounded read probe; never read file contents or list all names.
+    return errno == 0
+}
+func checkedFolderAccess(_ dir: String) -> (path: String, ok: Bool)? {
+    guard storageReady() else { return nil }
+    let resolved = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath).resolvingSymlinksInPath().path
+    return (path: resolved, ok: canRead(resolved))
+}
+func probeAccessFolders() -> [(name: String, ok: Bool)]? {
+    guard storageReady() else { return nil }
+    let workspace = ProcessInfo.processInfo.environment["HUB_ROOT"] ?? (configuredHubRoot.isEmpty ? home + "/Documents/AI-Workspace" : configuredHubRoot)
+    let resolved = URL(fileURLWithPath: (workspace as NSString).expandingTildeInPath).resolvingSymlinksInPath().path
+    let name = resolved.hasPrefix("/Volumes/") ? tr("Hub の作業場所（外付け）", "Hub 工作區（外接磁碟）") : tr("Hub の作業場所", "Hub 工作區")
+    return privacyFolders.map { (name: $0.name, ok: canRead($0.path)) } + [(name: name, ok: canRead(resolved))]
 }
 // 前に選んだ答え（許可しない など）を消す。次に読んだ時、確認がもう一度出る
 func resetPrivacy() {
@@ -395,6 +412,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         gptItem.target = self
         appMenu.addItem(withTitle: tr("ファイルの許可を確かめる…", "檢查檔案權限…"), action: #selector(checkAccess), keyEquivalent: "")
         appMenu.addItem(withTitle: tr("ファイルの許可をやり直す（確認をもう一度出す）…", "重新確認檔案權限…"), action: #selector(redoAccess), keyEquivalent: "")
+        appMenu.addItem(withTitle: tr("外部のフォルダを選んで確認…", "選擇外部資料夾檢查…"), action: #selector(checkExternalAccess), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: tr("Project Hub を終了", "結束 Project Hub"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -529,13 +547,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     // 許可を確かめる。reset の時は前の答えを消してから読むので、確認がもう一度出る
     func askAccess(reset: Bool) {
         DispatchQueue.global().async {
+            guard storageReady() else { DispatchQueue.main.async { self.showAccessBlocked() }; return }
             if reset { resetPrivacy() }
-            let result = privacyFolders.map { (name: $0.name, ok: canRead($0.path)) }
+            guard let result = probeAccessFolders() else { DispatchQueue.main.async { self.showAccessBlocked() }; return }
             log(tr("許可: ", "權限：") + result.map { "\($0.name)=\($0.ok ? tr("あり", "已允許") : tr("なし", "未允許"))" }.joined(separator: " "))
-            if result.first?.ok == true && serverAlive() && !serverCanRead() {
-                log(tr("許可の後、本体を起動し直します", "權限確認後正在重新啟動伺服器"))
-                if quitServer() { self.startAndLoad() }
-            }
             DispatchQueue.main.async { self.showAccess(result) }
         }
     }
@@ -545,16 +560,45 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         a.messageText = tr("Mac のファイルの許可", "Mac 檔案權限")
         let lines = result.map { "\($0.ok ? "✓" : "✕") \($0.name)\(tr("フォルダ：", "檔案夾："))\($0.ok ? tr("許可あり", "已允許") : tr("許可なし", "未允許"))" }.joined(separator: "\n")
         let allOK = result.allSatisfy { $0.ok }
-        a.informativeText = lines + (allOK ? tr("\n\nすべて使えます。", "\n\n全部都能使用。") : tr("\n\n［確認をもう一度出す］で Mac の確認が出たら「許可」を選んでください。出ない時は［フルディスクアクセスを開く］で、表示された Project Hub をリストに入れてオンにしてください。", "\n\n請按［重新確認權限］，在 Mac 提示時選「允許」。若未出現提示，請按［開啟完整磁碟存取權］，把 Project Hub 加入清單並開啟。"))
+        a.informativeText = lines + (allOK ? tr("\n\n確認した場所は読めます。", "\n\n已檢查的資料夾可讀取。") : tr("\n\n読めない場所は［ファイルとフォルダを開く］で確認してください。Mac の確認が出た時は自分で判断して選んでください。", "\n\n無法讀取的資料夾，請按［開啟檔案與資料夾］查看。Mac 顯示確認時，請自行選擇。")) + tr("\n\nこれは Mac の読み取りの確認です。AI の書き込み先は、その作業場所と同じプロジェクトの台帳に限ります。", "\n\n這是 Mac 的讀取檢查。AI 的可寫範圍仍限於該任務工作區及同專案台帳。")
         if allOK { a.addButton(withTitle: "OK"); a.runModal(); return }
         a.addButton(withTitle: tr("確認をもう一度出す", "重新確認權限"))
-        a.addButton(withTitle: tr("フルディスクアクセスを開く", "開啟完整磁碟存取權"))
+        a.addButton(withTitle: tr("ファイルとフォルダを開く", "開啟檔案與資料夾"))
         a.addButton(withTitle: tr("閉じる", "關閉"))
         let r = a.runModal()
         if r == .alertFirstButtonReturn { askAccess(reset: true) }
         else if r == .alertSecondButtonReturn {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
-            NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])   // リストに落として入れられるように
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!)
+        }
+    }
+
+    func showAccessBlocked() {
+        let a = NSAlert()
+        a.messageText = tr("データ用ディスクを使えません", "無法使用資料磁碟")
+        a.informativeText = tr("ストレージの確認に通らなかったため、フォルダは読みませんでした。データ用ディスクを確認してください。", "磁碟檢查未通過，因此沒有讀取資料夾。請確認資料磁碟。")
+        a.addButton(withTitle: tr("閉じる", "關閉")); a.runModal()
+    }
+    @objc func checkExternalAccess() {
+        guard storageReady() else { showAccessBlocked(); return }
+        let panel = NSOpenPanel()
+        panel.title = tr("外部のフォルダを選んで確認", "選擇外部資料夾檢查")
+        panel.message = tr("確認するプロジェクトのフォルダを1つ選んでください。読み取りだけを確かめ、ファイル・権限・AI の作業範囲は変更しません。", "請選取一個要檢查的專案資料夾。只檢查能否讀取，不修改檔案、權限或 AI 工作範圍。")
+        panel.prompt = tr("読み取りを確かめる", "檢查讀取")
+        panel.canChooseFiles = false; panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false; panel.canCreateDirectories = false
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            DispatchQueue.global().async {
+                let result = checkedFolderAccess(url.path)
+                DispatchQueue.main.async {
+                    guard let result = result else { self.showAccessBlocked(); return }
+                    let a = NSAlert()
+                    a.messageText = result.ok ? tr("選んだフォルダは読めます", "選取的資料夾可讀取") : tr("選んだフォルダを読めません", "無法讀取選取的資料夾")
+                    a.informativeText = result.path + tr("\n\n読み取りだけを確かめました。ファイルや AI の書き込み範囲は変更していません。", "\n\n僅檢查讀取；沒有修改檔案或 AI 的可寫範圍。")
+                    if !result.ok { a.informativeText += tr("\n「システム設定 → プライバシーとセキュリティ → ファイルとフォルダ」を確認してください。", "\n請查看「系統設定 → 隱私權與安全性 → 檔案與資料夾」。") }
+                    a.addButton(withTitle: tr("閉じる", "關閉")); a.runModal()
+                }
+            }
         }
     }
 
@@ -566,6 +610,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         // 画面の設定から：hubapp://access（確かめる）／ hubapp://access?reset=1（確認をもう一度出す）
         if let u = a.request.url, u.scheme == "hubapp" {
             if u.host == "access" { askAccess(reset: (u.query ?? "").contains("reset=1")) }
+            if u.host == "external-access" { checkExternalAccess() }
             if u.host == "reveal" { revealFromPage(u) }
             if u.host == "gpt" { showGpt((u.query ?? "").contains("open=0") ? false : true) }
             decisionHandler(.cancel); return

@@ -22,9 +22,10 @@ roles:
 
 # ※ モデル名・思考・画像生成の経路は、使えるか・料金を確認してから確定する
 
-permissions:                 # 作業の権限（最大・確認なし）
-  claude-code: claude --dangerously-skip-permissions
-  codex:       codex --dangerously-bypass-approvals-and-sandbox
+# Hub は起動時にこの範囲へ絞る。元のコード・参照フォルダへ書き込み範囲を広げない。
+permissions:                 # 作業の権限（作業フォルダと同プロジェクトの台帳だけ）
+  claude-code: claude --permission-mode acceptEdits
+  codex:       codex --sandbox workspace-write
   ask_before: []             # 聞いてほしい操作があれば書く（例: [課金, 公開]）
 
 switch:                      # 第2段階から使う

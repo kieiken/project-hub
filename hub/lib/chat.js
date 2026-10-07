@@ -91,7 +91,7 @@ function parseAsk(text) {
 }
 
 // 1回分の起動のしかたを決める。rows は今回の依頼を足す前の会話
-function buildTurn({ ai, model, effort, meta, rows, text, basePrompt, policy, perm, noEffort, images = [], limitSwitch, task }) {
+function buildTurn({ ai, model, effort, meta, rows, text, basePrompt, policy, perm, noEffort, images = [], limitSwitch, task, dir, pdir }) {
   const sid = meta.sessions && meta.sessions[ai];
   // Codex はモデルを変えたら新しい会話にする（再開の時にモデルを変えられるか確かでないため）
   const resume = Boolean(sid) && (ai === 'claude' || (meta.models || {})[ai] === model);
@@ -108,6 +108,7 @@ function buildTurn({ ai, model, effort, meta, rows, text, basePrompt, policy, pe
   const m = launch.flagFor(ai, model);
   const prompt = [prefix, launch.startupInfo(ai, model, m) + (limitSwitch ? lt('（Fable の利用上限による自動の引き継ぎ）') : ''), String(prefix || '').includes(launch.CONTEXT_RULE) ? '' : launch.CONTEXT_RULE, ASK_RULE, ctx, lt`# 今回の依頼\n${text}`].filter(Boolean).join('\n\n');
   const base = (perm || launch.DEFAULT_CMD[ai]).trim().split(/\s+/).filter(Boolean);
+  const access = launch.scopedArgs(ai, base.slice(1), { dir, writableDirs: pdir ? [pdir] : [] });
   const e = noEffort ? '' : effort && launch.EFFORT_FLAG[ai][effort];
   let args;
   if (ai === 'agy') {
@@ -115,12 +116,12 @@ function buildTurn({ ai, model, effort, meta, rows, text, basePrompt, policy, pe
     args = ['--dangerously-skip-permissions', '--output-format', 'stream-json', '--model', m, '--print=' + prompt];
     if (resume) args.push('--conversation', sid);
   } else if (ai === 'claude') {
-    args = [...base.slice(1), '-p', '--output-format', 'stream-json', '--verbose'];
+    args = [...access, '-p', '--output-format', 'stream-json', '--verbose'];
     if (m) args.push('--model', m);
     if (e) args.push('--effort', e);
     if (resume) args.push('--resume', sid);
   } else {
-    args = ['exec', ...base.slice(1), '--json', '--skip-git-repo-check', ...launch.CODEX_CONTEXT_ARGS];
+    args = ['exec', ...access, '--json', '--skip-git-repo-check', ...launch.CODEX_CONTEXT_ARGS];
     if (m) args.push('--model', m);
     if (e) args.push('-c', `model_reasoning_effort=${e}`);
     if (resume) args.push('resume', sid);

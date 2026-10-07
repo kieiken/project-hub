@@ -28,6 +28,7 @@
 <div class="mobile-information"><button id="mobile-info" class="mobile-strip" type="button" aria-label="情報と操作を開く" aria-expanded="false" aria-controls="mobile-work-info" data-ui>▼</button><span id="mobile-badges"></span></div>
 <div class="app">
   <nav class="list" id="list" aria-label="プロジェクトと作業" data-ui></nav>
+  <div class="sidebar-resize" id="sidebar-resize" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="list" aria-valuemin="180" aria-valuemax="480" aria-valuenow="240" aria-label="プロジェクト一覧の幅を調整" title="ドラッグまたは左右キーで一覧の幅を調整" data-ui></div>
   <main class="main" id="main"></main>
 </div>
 
@@ -43,12 +44,14 @@
 <div class="toast" id="toast" hidden></div>
 <script src="locale-config.js"></script>
 <script src="locale.js"></script>
+<script src="sidebar-resize.js"></script>
 <script src="project-order.js"></script>
 <script src="chat-scroll.js"></script>
 <script src="mobile.js"></script>
 <script src="model-order.js"></script>
 <script src="app.js"></script>
 <script src="app-update.js"></script>
+<script src="session-links.js"></script>
 <script src="hierarchy.js"></script>
 <script src="remove.js"></script>
 <script src="github.js"></script>

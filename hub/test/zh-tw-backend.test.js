@@ -162,7 +162,7 @@ test('HTTP locale and Chinese generated projects work without translating user f
   const script = await (await fetch(base + '/locale-config.js')).text();
   assert.match(script, /^window.HUB_LOCALE = /);
   const changelog = await (await fetch(base + '/api/changelog')).json();
-  assert.ok(changelog[0].items.some(item => item.includes('繁體中文')));
+  assert.ok(changelog.find(entry => entry.version === '4.69.0')?.items.some(item => item.includes('繁體中文')));
   const project = await post('/api/project/new', { name: 'HTTP 日本語', description: '作業が見つかりません' });
   assert.equal(project.status, 200);
   assert.equal(project.body.description, '作業が見つかりません');

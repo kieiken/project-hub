@@ -34,8 +34,8 @@ function childEnv(ai, env) {
 }
 
 const DEFAULT_CMD = {
-  claude: 'claude --dangerously-skip-permissions',
-  codex: 'codex --dangerously-bypass-approvals-and-sandbox',
+  claude: 'claude --permission-mode acceptEdits',
+  codex: 'codex --sandbox workspace-write',
   agy: 'agy --dangerously-skip-permissions',
 };
 
@@ -110,31 +110,74 @@ function switchCommand(ai, field, value) {
 function sq(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
 function as(s) { return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
 
+// Hub-owned work gets writable access to its cwd and explicitly supplied project ledger only.
+// References in prompts remain read only. Native linked sessions do not use this helper.
+function scopedArgs(ai, original = [], { dir, writableDirs = [] } = {}) {
+  if (!['claude', 'codex'].includes(ai)) return [...original];
+  const args = [];
+  for (let i = 0; i < original.length; i++) {
+    const value = original[i];
+    if (/^--(?:dangerously-|allow-dangerously-)/.test(value) || ['--yolo', '--full-auto'].includes(value)) continue;
+    if (['--sandbox', '-s', '--permission-mode', '--cd', '-C'].includes(value)) { i++; continue; }
+    if (/^--(?:sandbox|permission-mode|cd)=/.test(value)) continue;
+    if (value === '--add-dir') { while (i + 1 < original.length && !original[i + 1].startsWith('-')) i++; continue; }
+    if (value.startsWith('--add-dir=')) continue;
+    if (['-c', '--config'].includes(value) && /^(?:sandbox_mode|sandbox_workspace_write|permissions|permission_profile)(?:[.=]|$)/.test(original[i + 1] || '')) { i++; continue; }
+    args.push(value);
+  }
+  args.push(...(ai === 'codex' ? ['--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.writable_roots=[]'] : ['--permission-mode', 'acceptEdits']));
+  const home = fs.existsSync(os.homedir()) ? fs.realpathSync(os.homedir()) : path.resolve(os.homedir());
+  const broadRoot = actual => actual === path.parse(actual).root || actual === home || actual === '/Volumes' || path.dirname(actual) === '/Volumes';
+  let current;
+  if (dir) {
+    if (typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error(lt('形式が違います'));
+    current = path.resolve(dir);
+    try {
+      current = fs.realpathSync(current);
+      if (!fs.statSync(current).isDirectory()) throw new Error(lt('形式が違います'));
+    } catch (error) {
+      // Pure command-composition callers may provide an as-yet nonexistent project path.
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+    }
+    if (broadRoot(current)) throw new Error(lt('形式が違います'));
+  }
+  const roots = new Set();
+  for (const candidate of writableDirs) {
+    if (typeof candidate !== 'string' || !path.isAbsolute(candidate)) throw new Error(lt('形式が違います'));
+    const actual = fs.realpathSync(candidate);
+    if (!fs.statSync(actual).isDirectory() || broadRoot(actual)) throw new Error(lt('形式が違います'));
+    if (actual !== current) roots.add(actual);
+  }
+  for (const root of roots) args.push('--add-dir', root);
+  return args;
+}
+
 // シェル用の1行（ターミナルの窓を開く時に使う）
-function buildCommand({ ai, dir, prompt, cmd, model, effort }) {
+function buildCommand({ ai, dir, prompt, cmd, model, effort, writableDirs }) {
   if (ai === 'agy') {
     const argv = buildArgv({ ai, prompt, model, effort });
     return `cd ${sq(dir)} && env ${API_ENV.flatMap(k => ['-u', k]).map(sq).join(' ')} ${[argv.command, ...argv.args].map(sq).join(' ')}`;
   }
-  const base = cmd || DEFAULT_CMD[ai];
-  if (!base) throw new Error('unknown ai');
-  const args = ai === 'codex' ? [...CODEX_CONTEXT_ARGS] : [];
+  const base = (cmd || DEFAULT_CMD[ai] || '').trim().split(/\s+/).filter(Boolean);
+  if (!base.length || !['claude', 'codex'].includes(ai)) throw new Error('unknown ai');
+  const args = scopedArgs(ai, base.slice(1), { dir, writableDirs });
+  if (ai === 'codex') args.push(...CODEX_CONTEXT_ARGS);
   const m = flagFor(ai, model);
   const e = effort && EFFORT_FLAG[ai]?.[effort];
   if (m) args.push('--model', m);
   if (e) args.push(...(ai === 'claude' ? ['--effort', e] : ['-c', `model_reasoning_effort=${e}`]));
-  return `cd ${sq(dir)} && ${base}${args.map(a => ' ' + sq(a)).join('')} ${sq(prompt)}`;
+  return `cd ${sq(dir)} && ${sq(base[0])}${args.map(a => ' ' + sq(a)).join('')} ${sq(prompt)}`;
 }
 
 // 画面の中の作業画面用：実行ファイルと引数に分ける（シェルを通さない）
-function buildArgv({ ai, prompt, cmd, model, effort }) {
+function buildArgv({ ai, prompt, cmd, model, effort, dir, writableDirs }) {
   if (ai === 'agy') {
     if (model && !flagFor(ai, model)) throw new Error(lt('Agy で承認されているモデルは Gemini 3.1 Pro (High) だけです'));
     return { command: 'agy', args: ['--dangerously-skip-permissions', '--model', AGY_MODEL.id, ...(prompt ? [`--prompt-interactive=${prompt}`] : [])] };
   }
   const base = (cmd || DEFAULT_CMD[ai] || '').trim().split(/\s+/).filter(Boolean);
   if (!base.length || !['claude', 'codex'].includes(ai)) throw new Error('unknown ai');
-  const args = base.slice(1);
+  const args = scopedArgs(ai, base.slice(1), { dir, writableDirs });
   const m = flagFor(ai, model);
   const e = effort && EFFORT_FLAG[ai][effort];
   if (ai === 'claude') {
@@ -168,4 +211,4 @@ function openFolder(p, dry) { return run('open', [p], dry); }
 function revealFile(p, dry) { return run('open', ['-R', p], dry); }
 function openUrl(u, dry) { return run('open', [u], dry); }
 
-module.exports = { AIS, AI_KEY, AI_LABEL, AGY_MODEL, agyAccountError, childEnv, buildCommand, buildArgv, openTerminal, openFolder, revealFile, openUrl, sq, DEFAULT_CMD, CODEX_CONTEXT_ARGS, CONTEXT_RULE, MODEL_FLAG, EFFORT_FLAG, SWITCH_CMD, switchCommand, flagFor, modelLabel, startupInfo, setOverrides, getOverrides, setDiscoveredModels };
+module.exports = { AIS, AI_KEY, AI_LABEL, AGY_MODEL, agyAccountError, childEnv, buildCommand, buildArgv, openTerminal, openFolder, revealFile, openUrl, sq, DEFAULT_CMD, CODEX_CONTEXT_ARGS, CONTEXT_RULE, MODEL_FLAG, EFFORT_FLAG, SWITCH_CMD, switchCommand, flagFor, modelLabel, startupInfo, scopedArgs, setOverrides, getOverrides, setDiscoveredModels };

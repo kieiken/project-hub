@@ -23,9 +23,10 @@ roles:
 
 # 使用前確認模型、思考程度與圖片生成方式是否可用，以及相關費用。
 
-permissions:                 # 工作權限（最大權限，略過確認）
-  claude-code: claude --dangerously-skip-permissions
-  codex:       codex --dangerously-bypass-approvals-and-sandbox
+# Hub 啟動時會收斂工作範圍，不加入原始程式碼或參考資料夾的寫入權限。
+permissions:                 # 工作權限（工作資料夾與同專案台帳）
+  claude-code: claude --permission-mode acceptEdits
+  codex:       codex --sandbox workspace-write
   ask_before: []             # 寫下需要詢問的操作，例如 [付費, 公開]。
 
 switch:                      # 從第二階段開始使用

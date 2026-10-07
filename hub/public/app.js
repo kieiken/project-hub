@@ -312,7 +312,7 @@ function mainKey() {
 function renderTree() {
   const roots = projectSiblings('');
   $('#list').innerHTML = UI.template`<div class="cap">プロジェクト</div><div class="tree">${roots.map(p => projectNode(p, 0)).join('')}</div>
-    <button class="newp ${view.kind === 'newproject' ? 'sel' : ''}" data-go="newproject" type="button">＋ 新しいプロジェクト</button>`;
+    <button class="newp ${view.kind === 'newproject' ? 'sel' : ''}" data-go="newproject" type="button">＋ 新しいプロジェクト</button>${typeof sessionLinkTreeHtml === 'function' ? sessionLinkTreeHtml() : ''}`;
   renderedTreeKey = treeKey();
 }
 
@@ -336,6 +336,7 @@ function render() {
   if (view.kind !== 'work') closePanes();
   if (view.kind === 'settings') renderSettings();
   else if (view.kind === 'newproject') renderNewProject();
+  else if (view.kind === 'external' && typeof renderSessionLink === 'function') renderSessionLink();
   else if (!state.projects.length) renderEmpty();
   else if (view.kind === 'turn') renderTurn(waiting);
   else if (view.kind === 'work') renderWork();
@@ -1896,9 +1897,9 @@ function renderSettings() {
       <p>新規プロジェクト・子作業・分岐の初期値です。役割の担当・既存作業・各プロジェクトで前回選んだ［始める］欄は変わりません。</p>
       <div id="initial-pick">${initialPickHtml()}</div></div>
     <div class="card"><h2>Mac のファイルの許可</h2>
-      <p>書類・デスクトップ・ダウンロードのフォルダを、Project Hub が読めるか確かめます。「システム設定 → プライバシーとセキュリティ → ファイルとフォルダ」に Project Hub が無い時は、［確認をもう一度出す］を押し、Mac の確認で「許可」を選んでください。</p>
-      ${/ProjectHubApp/.test(navigator.userAgent) ? UI.template`<div class="acts"><a class="btn plain" href="hubapp://access">許可を確かめる</a><a class="btn" href="hubapp://access?reset=1">確認をもう一度出す</a></div>
-      <p class="small">それでも出ない時は、確かめた後の画面の［フルディスクアクセスを開く］から、Project Hub をリストに入れてオンにしてください（アプリのメニューからも同じことができます）。</p>`
+      <p>書類・デスクトップ・ダウンロードと、現在の Hub の作業場所を Project Hub が読めるか確かめます。外付けディスクの別のプロジェクトは［外部のフォルダを選んで確認］で1つ選べます。</p>
+      ${/ProjectHubApp/.test(navigator.userAgent) ? UI.template`<div class="acts"><a class="btn plain" href="hubapp://access">許可を確かめる</a><a class="btn" href="hubapp://access?reset=1">確認をもう一度出す</a><a class="btn plain" href="hubapp://external-access">外部のフォルダを選んで確認</a></div>
+      <p class="small">読めない時は「システム設定 → プライバシーとセキュリティ → ファイルとフォルダ」を確認してください。これは Mac が読むことを許す設定です。AI が書き込める場所は、その作業の作業場所と同じプロジェクトの台帳に限ります。</p>`
         : UI.html('<p class="small">アプリ（Project Hub.app）で開いた時に使えます。アプリが古い時は、ターミナルで <code>bash hub/app/build-app.sh</code> を実行して作り直してください。</p>')}</div>
     <div class="card"><h2>外から使う（iPhone）</h2>
       <p>iPhone からも、Mac と同じ操作ができます。操作は接続先の Mac で実行されます。</p>
@@ -1910,6 +1911,9 @@ function renderSettings() {
         <li><div>iPhone の Safari で、上の「iPhone で開くアドレス」を開き、合言葉を入れます。<br>アドレスが出ていない時は、Mac のターミナルで <code>tailscale serve status</code><button type="button" class="cp" data-copy="tailscale serve status" title="コピー" aria-label="コピー">⧉ コピー</button> を実行します。1行目の <code>https://〜.ts.net</code> が開くアドレスです。</div></li>
         <li>共有メニューの「ホーム画面に追加」で、アプリのように開けます。</li></ol></details></div>
     <div class="card"><h2>GitHub</h2><div id="github-box" aria-live="polite">確認中…</div></div>
+    <div class="card"><h2>Codex・Claude の会話をリンク</h2>
+      <p>選んだ会話だけをリンクします。元の会話・コードは元の場所に残り、送った指示は元のアプリの同じ会話につながります。リンクだけでは AI を起動しません。</p>
+      <div class="acts"><button class="btn plain" data-session-links="show" type="button">グループ・会話を選ぶ</button></div></div>
     <div class="card"><h2>ChatGPT</h2>
       <p>ChatGPT アプリ（6pro など）に作業を頼めます。Hub は ChatGPT を動かせないので、貼る文を作り、返事を貼って戻します。</p>
       <p class="small"><b>使い方</b>：会話のモデル欄で「ChatGPT」を選んで依頼を書き［送る］→ 貼る文がコピーされる → ChatGPT アプリでモデルを選んで貼って送る → 返事をコピーして、作業画面の「② 返事を貼る」欄に貼り［Hub に戻す］（続きを Codex に作らせる時は［戻して Codex に続けさせる］）。貼る文には作業ファイル・台帳・最近の会話が入っているので、ChatGPT が自分で読みに行く必要はありません。</p>

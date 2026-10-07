@@ -42,6 +42,10 @@ const PUBLIC = path.join(__dirname, 'public');
 const ROLES_FILE = path.join(ROOT, '_hub', 'roles.yaml');
 const store = new Store(ROOT);
 const projectOrder = new (require('./lib/project-order').ProjectOrder)(store);
+const sessionLinks = new (require('./lib/session-links').SessionLinks)({ root: ROOT, env: process.env, sources: {
+  claude: new (require('./lib/claude-session-source').ClaudeSessionSource)({ env: process.env }),
+  codex: new (require('./lib/codex-session-source').CodexSessionSource)({ env: process.env }),
+} });
 // 外から使う（iPhone）の設定と、今の要求が外からかどうか（記録に「外から」と印を付けるため）
 const remote = new remoteLib.Remote({ file: path.join(ROOT, '_hub', 'remote.json') });
 const reqCtx = new AsyncLocalStorage();
@@ -93,7 +97,7 @@ const removal=new Removal({store,locked:id=>{const p=store.readProject(id);retur
   sessions.list().some(x=>x.running&&x.project===project&&(!task||x.task===task)) ||
   [...chats.running.keys()].some(k=>k.split('\u0000')[0]===project&&(!task||k.split('\u0000')[1]===task)) ||
   procwatch.list().some(x=>x.project===project&&(!task||!x.task||x.task===task))});
-const aiTools = new AiTools({ root: ROOT, dry: DRY, busy: () => sessions.list().filter(x => x.running).length + chats.running.size });
+const aiTools = new AiTools({ root: ROOT, dry: DRY, busy: () => sessions.list().filter(x => x.running).length + chats.running.size + (sessionLinkRunner.busy() ? 1 : 0) });
 function applyModelCatalog() {
   const catalog = aiTools.catalog();
   launch.setDiscoveredModels(catalog);
@@ -290,7 +294,35 @@ function reportChild(child, kind, text) {
 // 裏で動いている AI（チャットの AI が nohup などで起動した codex / claude / agy）。終わったら、その作業を未読にする
 const procwatch = require('./lib/procwatch').create({ projects: () => store.listProjects(), baseOf });
 
-const updateBusy = () => aiTools.isOperating() || sessions.list().some(x => x.running) || chats.running.size > 0 || procwatch.list().length > 0 ||
+function linkedSourceBusy(reference, excludeId = '') {
+  const canonical = directory => { try { return fs.realpathSync(directory); } catch { return ''; } };
+  const cwd = canonical(reference.cwd); if (!cwd) return true;
+  if (aiTools.isOperating() || appUpdate.applying()) return true;
+  if ([...sessionLinkRunner.runs.values()].some(run => run.busy && run.id !== excludeId && canonical(run.cwd) === cwd)) return true;
+  if (procwatch.list().some(item => canonical(item.cwd) === cwd)) return true;
+  const projects = store.listProjects();
+  const active = [...sessions.list().filter(item => item.running), ...[...chats.running.keys()].map(key => {
+    const [project, task] = key.split('\u0000'); return { project, task };
+  })];
+  return active.some(item => {
+    const project = projects.find(p => p.id === item.project); if (!project) return false;
+    const task = project.tasks.find(t => t.id === item.task), workdir = task?.workdir ? expandHome(task.workdir) : baseOf(project);
+    return canonical(workdir) === cwd || (task?.workspaceMode === 'direct' && canonical(baseOf(project)) === cwd);
+  }) || projects.some(project => canonical(baseOf(project)) === cwd && (maintenance.locked(project.id) || github.locked(baseOf(project))));
+}
+async function linkedHistory(id, ownActivity = false) {
+  const result = await sessionLinks.history(id);
+  let active = result.active ?? null;
+  if (!result.broken) try { const reference = await sessionLinks.referenceFor(id); if (linkedSourceBusy(reference, id)) active = true; } catch { /* Reading history remains useful when its working folder is unavailable. */ }
+  if (ownActivity && sessionLinkRunner.status(id).busy) active = true;
+  return { ...result, active };
+}
+const sessionLinkRunner = new (require('./lib/session-link-runner').SessionLinkRunner)({
+  env: process.env, receiptsFile: path.join(fs.realpathSync(ROOT), '_hub', 'session-link-runs.json'),
+  referenceFor: async id => { const reference = await sessionLinks.referenceFor(id); await procwatch.scan(); return { ...reference, active: linkedSourceBusy(reference, id) }; },
+  history: id => linkedHistory(id), message: (code, fallback) => sessionLinks.runnerMessage(code, fallback),
+});
+const updateBusy = () => sessionLinks.running || sessionLinkRunner.busy() || aiTools.isOperating() || sessions.list().some(x => x.running) || chats.running.size > 0 || procwatch.list().some(x => x.project) ||
   store.listProjects().some(p => maintenance.locked(p.id) || github.locked(baseOf(p)) || p.tasks.some(t => chats.queue(p.id, t.id).length > 0));
 const automation = process.env.HUB_AUTO_TRANSLATE === '1' && process.env.HUB_TRANSLATION_FORK
   ? require('./lib/app-update-workflow').createAutomation({ root: ROOT, env: process.env }) : {};
@@ -372,6 +404,11 @@ function assertWorkspaceIdle(p, t, permitChat, githubOperation = false) {
   const canonical = dir => { try { return fs.realpathSync(dir); } catch(e) { return path.resolve(dir); } };
   const base = canonical(baseOf(p));
   const targetDirect = t.workspaceMode === 'direct';
+  const target = canonical(t.workdir ? expandHome(t.workdir) : baseOf(p));
+  if ([...sessionLinkRunner.runs.values()].some(run => run.busy && (!run.cwd || canonical(run.cwd) === target || (t.workspaceMode === 'direct' && canonical(run.cwd) === base)))) {
+    const error = Error(sessionLinks.runnerMessage('busy', '')); error.status = 409; throw error;
+  }
+
   const active = [...sessions.list().filter(s=>s.running), ...[...chats.running.keys()].map(k=>{const [project,task]=k.split('\u0000');return {project,task,chat:true};})];
   if (!active.length) return;
   const all = store.listProjects();
@@ -496,6 +533,37 @@ async function api(req, res, url) {
   }
   if (req.method === 'POST' && appUpdate.applying() && !(['/api/quit', '/api/restart'].includes(url.pathname) && appUpdate.status().phase === 'installed')) return send(res, 409, { error: appUpdate.busyMessage() });
   if (req.method === 'GET' && url.pathname === '/api/locale') return send(res, 200, localeConfig());
+  if (req.method === 'GET' && ['/api/session-links', '/api/session-links/history'].includes(url.pathname)) {
+    if (fromRemote()) return send(res, 403, { error: 'forbidden' });
+    try { return send(res, 200, url.pathname.endsWith('/history') ? await linkedHistory(url.searchParams.get('id'), true) : await sessionLinks.inventory()); }
+    catch (error) { return send(res, error.status || 400, sessionLinks.error(error)); }
+  }
+  if (req.method === 'POST' && ['/api/session-links/preview', '/api/session-links/apply', '/api/session-links/remove'].includes(url.pathname)) {
+    if (fromRemote()) return send(res, 403, { error: 'forbidden' });
+    try {
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return send(res, 400, { error: lt('形式が違います'), code: 'selection' });
+      const result = url.pathname.endsWith('/preview') ? await sessionLinks.preview(body.selected)
+        : url.pathname.endsWith('/remove') ? await (async () => { if (sessionLinkRunner.status(body.id).busy) throw sessionLinks.fail('busy', 409); return sessionLinks.remove(body); })() : await sessionLinks.apply(body);
+      return send(res, 200, result);
+    } catch (error) { return send(res, error.status || 400, sessionLinks.error(error)); }
+  }
+  if (req.method === 'GET' && url.pathname === '/api/session-links/status') {
+    if (fromRemote()) return send(res, 403, { error: 'forbidden' });
+    try { const id = url.searchParams.get('id'); sessionLinks.find(id); return send(res, 200, sessionLinkRunner.status(id)); }
+    catch (error) { return send(res, error.status || 400, sessionLinks.error(error)); }
+  }
+  if (req.method === 'POST' && ['/api/session-links/send', '/api/session-links/answer', '/api/session-links/stop'].includes(url.pathname)) {
+    if (fromRemote()) return send(res, 403, { error: 'forbidden' });
+    try {
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw sessionLinks.fail('selection');
+      sessionLinks.find(body.id);
+      const result = url.pathname.endsWith('/send') ? await sessionLinkRunner.send(body)
+        : url.pathname.endsWith('/answer') ? await sessionLinkRunner.answer(body) : await sessionLinkRunner.stop(body.id);
+      return send(res, 200, result);
+    } catch (error) { return send(res, error.status || 400, { code: error.code || 'source', error: sessionLinks.runnerMessage(error.code || 'source', error.message) }); }
+  }
   // Mac の許可が無くて中を読めない時の知らせ（Finder が違う場所で開くのを防ぐ）
   const denied = x => { try { fs.readdirSync(fs.statSync(x).isDirectory() ? x : path.dirname(x)); return ''; } catch (e) { return ['EPERM', 'EACCES'].includes(e.code) ? lt('Mac の許可が無くて開けません。設定画面の「Mac のファイルの許可」で［確認をもう一度出す］を押し、「許可」を選んでください') : ''; } };
   // 本体が台帳のフォルダ（書類フォルダの中）を読めるか。Mac の許可が本体に効いているかをアプリが確かめる
@@ -830,7 +898,7 @@ async function api(req, res, url) {
     if (invalidModel) return send(res, 409, { error: invalidModel });
     const cur = sessions.get(b.project, b.task, b.ai);
     const { dir, note } = cur && !cur.exited ? { dir: cur.dir } : startDir(p, t);
-    const argv = launch.buildArgv({ ai: b.ai, prompt: taskPrompt(p, t, file, dir, 'terminal', { ai: b.ai, model }), cmd: permCmd(b.ai), model, effort });
+    const argv = launch.buildArgv({ ai: b.ai, prompt: taskPrompt(p, t, file, dir, 'terminal', { ai: b.ai, model }), cmd: permCmd(b.ai), model, effort, dir, writableDirs: [p.dir] });
     if (DRY) return send(res, 200, { ok: true, dry: true, dir, model, effort, ...argv });
     try {
       const s = sessions.start({ project: b.project, task: b.task, ai: b.ai, dir, command: argv.command, args: argv.args, cols: b.cols, rows: b.rows });
@@ -873,7 +941,7 @@ async function api(req, res, url) {
       sessions.type(b.project, b.task, b.to, msg);
     } else {
       spec = pickSpec(t, b.to);
-      const argv = launch.buildArgv({ ai: b.to, prompt: msg + ' ' + taskPrompt(p, t, file, dir, 'terminal', { ai: b.to, model: spec.model }), cmd: permCmd(b.to), model: spec.model, effort: spec.effort });
+      const argv = launch.buildArgv({ ai: b.to, prompt: msg + ' ' + taskPrompt(p, t, file, dir, 'terminal', { ai: b.to, model: spec.model }), cmd: permCmd(b.to), model: spec.model, effort: spec.effort, dir, writableDirs: [p.dir] });
       if (DRY) return send(res, 200, { ok: true, dry: true, packet: packetFile, kind: convo.kind, ...argv });
       try { sessions.start({ project: b.project, task: b.task, ai: b.to, dir, command: argv.command, args: argv.args, cols: b.cols, rows: b.rows }); started = true; }
       catch (e) { return send(res, 500, { error: String(e.message || e), packet: packetFile }); }
@@ -919,7 +987,7 @@ async function api(req, res, url) {
     const invalidModel = modelError(b.ai, spec.model);
     if (invalidModel) return send(res, 409, { error: invalidModel });
     const { dir } = startDir(p, t);
-    const command = launch.buildCommand({ ai: b.ai, dir, prompt: taskPrompt(p, t, file, dir, 'terminal', { ai: b.ai, model: spec.model }), cmd: permCmd(b.ai), ...spec });
+    const command = launch.buildCommand({ ai: b.ai, dir, prompt: taskPrompt(p, t, file, dir, 'terminal', { ai: b.ai, model: spec.model }), cmd: permCmd(b.ai), ...spec, writableDirs: [p.dir] });
     const r = await launch.openTerminal(command, DRY);
     return send(res, 200, { ok: true, dir, ...(DRY ? { command, r } : {}) });
   }
@@ -1548,4 +1616,4 @@ if (require.main === module) {
   process.on('SIGTERM', shutdown);
 }
 
-module.exports = { server, PORT, sessions, taskPrompt };
+module.exports = { server, PORT, sessions, taskPrompt, sessionLinks, sessionLinkRunner };

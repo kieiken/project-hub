@@ -42,8 +42,13 @@ button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-vis
 .tb.turn[aria-pressed="true"]{background:var(--hold);color:var(--panel)}
 .tb .n{background:var(--hold);color:var(--panel);border-radius:99px;padding:0 7px;font-size:12px;font-variant-numeric:tabular-nums}
 .tb.turn[aria-pressed="true"] .n{background:var(--panel);color:var(--hold)}
-.app{flex:1;display:grid;grid-template-columns:240px minmax(0,1fr);min-height:0}
-.list{border-right:1px solid var(--line);background:var(--panel);padding:10px 8px;overflow:auto;display:flex;flex-direction:column;gap:2px}
+.app{flex:1;display:grid;grid-template-columns:var(--hub-sidebar-width,240px) 6px minmax(0,1fr);min-height:0}
+.list{min-width:0;background:var(--panel);padding:10px 8px;overflow:auto;display:flex;flex-direction:column;gap:2px}
+.sidebar-resize{position:relative;cursor:col-resize;touch-action:none;user-select:none;background:var(--panel)}
+.sidebar-resize::before{content:"";position:absolute;left:2px;top:0;bottom:0;width:1px;background:var(--line)}
+.sidebar-resize:hover::before,.sidebar-resize:focus-visible::before,body.resizing-sidebar .sidebar-resize::before{left:1px;width:3px;background:var(--accent)}
+.sidebar-resize:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+body.resizing-sidebar{cursor:col-resize;user-select:none}
 .cap{font-size:11px;color:var(--muted);letter-spacing:.06em;padding:4px 10px}
 .proj{display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:7px;cursor:pointer;border:0;background:none;text-align:left;width:100%}
 .proj:hover{background:var(--hover)}
@@ -110,8 +115,9 @@ details.more summary{cursor:pointer;font-size:12.5px;color:var(--muted)}
 .menu-toggle{display:none}
 @media (max-width:720px){
   .app{grid-template-columns:1fr;position:relative}
+  .sidebar-resize{display:none}
   .menu-toggle{display:inline-flex;font-size:18px;padding:4px 10px}
-  .list{position:absolute;inset:0 auto 0 0;width:min(86vw,320px);z-index:40;background:var(--panel);box-shadow:4px 0 24px rgba(0,0,0,.35);transform:translateX(-105%);transition:transform .18s ease}
+  .list{border-right:1px solid var(--line);position:absolute;inset:0 auto 0 0;width:min(86vw,320px);z-index:40;background:var(--panel);box-shadow:4px 0 24px rgba(0,0,0,.35);transform:translateX(-105%);transition:transform .18s ease}
   body.show-list .list{transform:none}
   .main{padding:14px 14px calc(14px + env(safe-area-inset-bottom))}
   .bar h1{font-size:16px}
@@ -614,3 +620,25 @@ html[lang="zh-TW"] .view.dropping::after{content:"拖到這裡即可新增參考
 
 /* Settings redraws preserve their own position instead of choosing a new anchor. */
 .settings-view{overflow-anchor:none}
+
+/* External session selection scrolls without replacing the settings view. */
+.session-links-box{max-width:780px}
+.session-links-groups{max-height:42vh;overflow:auto;overscroll-behavior:contain}
+.session-links-group{padding:10px 4px;border-bottom:1px solid var(--line)}
+.session-links-group p{margin:4px 0}
+.session-links-group summary{cursor:pointer}
+.session-links-session{display:flex;align-items:flex-start;gap:10px;padding:8px 12px;overflow-wrap:anywhere}
+.session-links-session input{flex:none;margin-top:5px}
+.session-links-session small{display:block;color:var(--muted)}
+.session-links-preview-group{border-left:3px solid var(--line);padding-left:10px;margin:8px 0}
+
+.external-view{display:flex;flex-direction:column;height:100%;min-height:0}
+.external-header{padding:12px 20px;border-bottom:1px solid var(--line)}
+.external-header h2,.external-header p{margin:3px 0}
+.external-list-empty{padding:0 10px}
+.external-run-output{white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto;max-height:24vh;padding:10px 20px;background:var(--panel)}
+.external-approvals{max-height:32vh;overflow:auto}
+.external-approval{padding:12px 20px;border-top:1px solid var(--line);background:var(--hold-bg)}
+.external-approval pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto}
+#external-status{white-space:pre-wrap;margin:0}
+@media(max-width:720px){.external-header{padding:8px 12px}.external-header h2{font-size:17px}}
