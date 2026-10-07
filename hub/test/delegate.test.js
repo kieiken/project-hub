@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -343,7 +345,7 @@ test('最初の会話・継続の番に画面名案内が入り、手順更新�
   const first = JSON.parse((await waitReplies(before + 1)).text);
   assert.ok(!first.args.includes('resume'));
   chatWording(first.input);
-  assert.match(first.input, /【人への操作案内の決まり】/);
+  assert.match(first.input, /【操作案内】/);
   assert.match(first.input, /【この番の起動】[^\n]*Codex・GPT-6.1-Sol（CLI 引数 --model gpt-6.1-sol）/);
   assert.match(first.input, /作業「元の作業」（作業ID existing）の続きを/);
   assert.match(first.input, /今は確認の黄色い帯なし/);
@@ -396,4 +398,77 @@ test('長い委任は受け付けて差分化の案内を添え、8000字の上�
   assert.equal(r.status, 200); assert.match((await r.json()).note, /Hub が付ける内容を除き、差分だけ/);
   await waitReplies(count + 1);
   assert.equal((await delegate({ ai: 'claude', model: 'claude-fable-5-1', text: 'r'.repeat(8001) })).status, 400);
+});
+
+test('統合画面の衝突解消は設定のコーディング担当へ既存委任で親・保存target・branchを渡す',async()=>{
+ const git=require('../lib/git'),{execFileSync}=require('node:child_process'),{Store}=require('../lib/store');
+ const project='Resolve fixture',body=path.join(root,'System',project),pdir=path.join(root,'Product',project),store=new Store(root);
+ fs.mkdirSync(body,{recursive:true});fs.mkdirSync(pdir,{recursive:true});fs.writeFileSync(path.join(pdir,'PROJECT.md'),`---\nname: ${project}\nfolders:\n  本体: ${body}\n---\n`);
+ const sh=(d,...args)=>execFileSync('git',['-C',d,...args],{encoding:'utf8'}).trim();
+ fs.writeFileSync(path.join(body,'base.txt'),'base\n');sh(body,'init','-q');sh(body,'config','user.name','fixture');sh(body,'config','user.email','fixture@localhost');sh(body,'add','.');sh(body,'commit','-qm','base');
+ const parent=store.createTask(project,{title:'本作業'}),kids=[];
+ for(const title of ['A','B']){const c=store.createTask(project,{title,parent:parent.id,steps:['完成']}),w=git.prepare({base:body,workRoot:path.join(root,'Work',project),taskId:c.id});store.updateTask(project,c.id,{workdir:w.dir});store.setStep(project,c.id,0,true);fs.writeFileSync(path.join(w.dir,'base.txt'),title+'\n');git.save(w.dir,title);kids.push({...c,copy:w.dir});}
+ const request=(route,b)=>post(route,{project,task:parent.id,...b});
+ let res=await request('/api/task/integrate/preview',{}),d=await res.json();assert.equal(res.status,200);
+ const select=kids.map(c=>{const i=d.items.find(i=>i.task===c.id);return {project,task:c.id,files:i.selected};});
+ res=await request('/api/task/integrate',{token:d.token,selected:select,confirm:true});assert.equal(res.status,200);assert.equal((await res.json()).partial,true);
+ res=await request('/api/task/integrate/preview',{});d=await res.json();
+ const resolve={token:d.token,childProject:project,childTask:kids[1].id};
+ assert.equal((await request('/api/task/integrate/resolve',{...resolve,childTask:kids[0].id})).status,409);
+ assert.equal((await request('/api/task/integrate/resolve',{...resolve,token:'invalid'})).status,409);
+ const count=store.listProjects().find(p=>p.id===project).tasks.length,head=sh(body,'rev-parse','HEAD'),branch=git.inspect(kids[1].copy).branch;
+ const role=(await (await fetch(base+'/api/state')).json()).roles.roles.find(r=>r.name==='コーディング');
+ res=await request('/api/task/integrate/resolve',resolve);const out=await res.json();assert.equal(res.status,200,JSON.stringify(out));
+ for(let i=0;i<100&&!chat.read(pdir,parent.id).some(x=>x.role==='assistant');i++)await new Promise(r=>setTimeout(r,30));
+ const row=chat.read(pdir,parent.id).filter(x=>x.role==='assistant').at(-1);assert.ok(row);const data=JSON.parse(row.text);assert.equal(data.ai,'codex');assert.ok(data.args.includes(require('../lib/launch').flagFor('codex',role.main.model)));assert.ok(data.input.includes(body));assert.ok(data.input.includes(branch));assert.match(data.input,/両側の意図/);
+ assert.equal(store.listProjects().find(p=>p.id===project).tasks.length,count);assert.equal(sh(body,'rev-parse','HEAD'),head);assert.equal(fs.existsSync(path.join(root,'Work',project,parent.id)),false);
+});
+
+test('成果記録の無い完了子は画面の明示操作でOpusへ戻し、新しい作業なし・古いtoken拒否',async()=>{
+ const {Store}=require('../lib/store'),store=new Store(root),parent=store.createTask(key.project,{title:'成果整理の親'}),kid=store.createTask(key.project,{title:'確認済みの旧子',parent:parent.id,steps:['確認済み'],workspaceMode:'direct'});
+ store.setStep(key.project,kid.id,0,true);
+ // ゲート導入前に承認された旧子を再現する（現APIでは記録なしの新規承認は拒否）。
+ assert.equal(store.decideTask(key.project,kid.id,'approve',store.readTask(store.taskFile(key.project,kid.id)).completionHash).state,'完了');
+ // 稼働中のStoreとは承認メモリが別なので、旧承認の読込まで再現する。
+ await new Promise(r=>server.close(r));delete require.cache[require.resolve('../server')];({server,sessions}=require('../server'));await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));
+ const before=tasks(),input={project:key.project,task:parent.id};
+ let r=await post('/api/task/integrate/preview',input),d=await r.json();assert.equal(r.status,200,JSON.stringify(d));assert.equal(d.items[0].needsResults,true);assert.deepEqual(d.items[0].files,[]);
+ const b={...input,childProject:key.project,childTask:kid.id,token:d.token};
+ r=await post('/api/task/integrate/results',{...b,token:'bad'});assert.equal(r.status,409);assert.match(fs.readFileSync(store.taskFile(key.project,kid.id),'utf8'),/state: 完了/);
+ // 普通の委任は完了子の保護を維持する。
+ r=await delegate({project:key.project,task:kid.id,ai:'claude',model:'claude-opus-5-5'});assert.equal(r.status,409);
+ r=await post('/api/task/integrate/results',b);const out=await r.json();assert.equal(r.status,200,JSON.stringify(out));assert.equal(out.task,kid.id);assert.equal(out.model,'Opus 5.5');
+ for(let i=0;i<150&&!chat.read(dir,kid.id).some(x=>x.role==='assistant');i++)await new Promise(r=>setTimeout(r,30));
+ const row=chat.read(dir,kid.id).find(x=>x.role==='assistant');assert.ok(row);const response=JSON.parse(row.text);assert.ok(response.args.includes('claude-opus-5-5'));assert.match(response.input,/所属・内容・重複・反映済み/);assert.match(response.input,/人へファイル選別を求めない/);assert.deepEqual(tasks(),before);
+ r=await post('/api/task/integrate/results',b);assert.equal(r.status,409);assert.equal(store.readTask(store.taskFile(key.project,kid.id)).state,'実行中');
+});
+
+test('成果ゲート：最後の手順から一度だけ整理し、古い承認・不正成果の承認を拒否、手動再依頼できる',async()=>{
+ const {Store}=require('../lib/store'),store=new Store(root),parent=store.createTask(key.project,{title:'ゲート親'}),kid=store.createTask(key.project,{title:'ゲート子',parent:parent.id,steps:['完成'],workspaceMode:'direct'}),file=store.taskFile(key.project,kid.id);
+ fs.appendFileSync(file,'\n## 成果\n自由書式の成果\n');const b={project:key.project,task:kid.id};
+ let r=await post('/api/task/step',{...b,index:0,done:true}),shown=await r.json();assert.equal(r.status,200,JSON.stringify(shown));assert.equal(shown.completionPending,false);assert.equal(shown.resultsPending.auto,'running',JSON.stringify(shown));
+ const responses=()=>chat.read(dir,kid.id).filter(r=>r.role==='assistant');
+ for(let i=0;i<250&&!responses().length;i++)await new Promise(r=>setTimeout(r,20));
+ await new Promise(r=>setTimeout(r,80));assert.equal(responses().length,1);
+ let all=await (await fetch(base+'/api/state')).json(),child=all.projects.find(p=>p.id===key.project).tasks.find(t=>t.id===kid.id);
+ assert.equal(child.completionPending,false);assert.equal(child.resultsPending.auto,'failed');
+ assert.match(responses()[0].text,/検出した理由/);assert.equal(responses()[0].model,'Opus 5.5');
+ r=await post('/api/task/completion',{...b,action:'approve',confirm:true,expectedHash:'old'});assert.equal(r.status,409);assert.match((await r.json()).error,/確認中/);
+ r=await post('/api/task/completion',{...b,action:'approve',confirm:true,expectedHash:child.completionHash});assert.equal(r.status,409);assert.match((await r.json()).error,/成果の記録が整っていません/);
+ r=await post('/api/task/results/organize',{...b,expectedHash:child.completionHash});assert.equal(r.status,200,JSON.stringify(await r.json()));
+ for(let i=0;i<250&&responses().length<2;i++)await new Promise(r=>setTimeout(r,20));await new Promise(r=>setTimeout(r,80));assert.equal(responses().length,2);
+ fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace('自由書式の成果','- なし：確認のみ'));
+ all=await (await fetch(base+'/api/state')).json();child=all.projects.find(p=>p.id===key.project).tasks.find(t=>t.id===kid.id);assert.equal(child.completionPending,true);assert.equal(child.resultsPending,undefined);
+ r=await post('/api/task/completion',{...b,action:'approve',confirm:true,expectedHash:child.completionHash});assert.equal(r.status,200,JSON.stringify(await r.json()));
+});
+
+test('AI番終了でも成果整理を起動し、読込だけ・質問待ち・停止では起動しない',async()=>{
+ const {Store}=require('../lib/store'),store=new Store(root),parent=store.createTask(key.project,{title:'終了契機親'});
+ const make=title=>{const k=store.createTask(key.project,{title,parent:parent.id,steps:['完成'],workspaceMode:'direct'});store.setStep(key.project,k.id,0,true);return k;};
+ const k=make('終了契機子'),b={project:key.project,task:k.id},count=()=>chat.read(dir,k.id).filter(r=>r.role==='assistant').length;
+ await fetch(base+'/api/state');await new Promise(r=>setTimeout(r,40));assert.equal(count(),0);
+ let r=await delegate({...b,ai:'claude',model:'claude-opus-5-5'});assert.equal(r.status,200);
+ for(let i=0;i<250&&count()<2;i++)await new Promise(r=>setTimeout(r,20));await new Promise(r=>setTimeout(r,60));assert.equal(count(),2);
+ const q=make('質問待ち子');store.updateTask(key.project,q.id,{state:'返事待ち',question:'選ぶ'});
+ r=await post('/api/task/step',{project:key.project,task:q.id,index:0,done:true});assert.equal(r.status,200);await new Promise(r=>setTimeout(r,80));assert.equal(chat.read(dir,q.id).filter(r=>r.role==='assistant').length,0);
 });

@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 const ModelOrder=require('../public/model-order');
 const models={'claude-code':['Opus 5.5','Fable 5.1'],codex:['GPT-6.1-Sol','GPT-6-Astra'],agy:['Gemini 3.1 Pro (High)']};

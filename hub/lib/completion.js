@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 // AIの完了報告と、人が一覧から完了へ移す判断を分ける。
 const fs = require('node:fs');
 const path = require('node:path');

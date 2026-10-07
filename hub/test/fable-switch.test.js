@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -237,5 +239,22 @@ test('即時APIで受信した委任は送信済みに含めず、同じ番がAP
     assert.equal(log.find(r => r.title === 'RECEIVED_REVIEW').sourceTurn, null);
     if (outgoing) assert.equal(log.find(r => r.title === 'OUTGOING_IMPLEMENTATION').sourceTurn, user.turn);
     assert.deepEqual(fs.readdirSync(path.join(dir, '.ai/tasks')), beforeTasks);
+  }
+});
+
+test('正式上限の終了後に始まるAstraも許可×作業選択だけで加速する', async () => {
+  config();
+  for (const [allowed, selected] of [[true, false], [true, true], [false, true]]) {
+    const id = task('チェック');
+    const permission = on => fetch(base + '/api/acceleration', { method: 'POST', headers: { 'X-Hub': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ codexAllowed: on }) });
+    assert.equal((await permission(true)).status, 200);
+    assert.equal((await post('/api/acceleration/task', id, { on: selected })).status, 200);
+    assert.equal((await permission(allowed)).status, 200);
+    await send(id, 'assistant-only', { fast: true });
+    await wait(() => replies(id).length === 2);
+    const got = captured(replies(id)[1]);
+    assert.ok(got.args.includes('gpt-6-astra'));
+    assert.equal(got.args.includes('service_tier="fast"'), allowed && selected);
+    assert.equal(rows(id).findLast(r => r.role === 'user').fast, allowed && selected);
   }
 });

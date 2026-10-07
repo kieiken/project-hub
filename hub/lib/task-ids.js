@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 // 作業番号は片付け・復元後も再利用しない。旧版の成果・履歴も予約に取り込む。
 const fs = require('node:fs'), path = require('node:path'), { createHash } = require('node:crypto');
 const TASK_ID = /^\d{8}-\d{2,}$/;

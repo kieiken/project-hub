@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 function fixture(){
  class Element {

@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -24,6 +24,7 @@ class ProjectOrder {
     } catch (e) { if (e.code && e.code !== 'ENOENT') throw e; return []; }
   }
   pin({ project, pinned, before }) {
+    if (project === 'freetalk') throw Error(require('./freetalk').PROTECTED);
     const pins = this.readPins();
     if (!this.store.listProjects().some(p => p.id === project) || typeof pinned !== 'boolean' || typeof before !== 'boolean' || pins.includes(project) !== before) throw Error(lt('固定の状態が変わりました。読み直してから操作してください'));
     const next = pins.filter(id => id !== project);
@@ -36,6 +37,7 @@ class ProjectOrder {
     return { ok: true, projectPins: next };
   }
   save({ parent, before, order }) {
+    if ([parent, ...(Array.isArray(before) ? before : []), ...(Array.isArray(order) ? order : [])].includes('freetalk')) throw Error(require('./freetalk').PROTECTED);
     const all = this.store.listProjects(), groups = this.read();
     const valid = ids => Array.isArray(ids) && ids.every(id => typeof id === 'string') && new Set(ids).size === ids.length;
     if (typeof parent !== 'string' || parent && !all.some(p => p.id === parent) || !valid(before) || !valid(order)) throw Error(CHANGED);

@@ -1,18 +1,22 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 // roles.yaml の読み書き。roles: の中だけを書き換え、それ以外の行（コメントを含む）は残す
 const fs = require('fs');
 const { parseYaml } = require('./frontmatter');
-const { MODEL_FLAG, AGY_MODEL } = require('./launch');
+const { MODEL_FLAG, AGY_MODEL, flagFor } = require('./launch');
 
 const EFFORTS = ['中', '高', '極高', 'MAX', 'Ultra'];
-const AIS = ['claude-code', 'codex', '人'];
-let discovered = { 'claude-code': [], codex: [], agy: [] };
+const AIS = ['claude-code', 'codex', 'agy', 'grok', '人'];
+let discovered = { 'claude-code': [], codex: [], agy: [], grok: [] };
 function setModelCatalog(catalog) {
-  discovered = { 'claude-code': catalog.claude?.models || [], codex: catalog.codex?.models || [], agy: (catalog.agy?.models || []).filter(x => x.id === AGY_MODEL.id) };
+  discovered = { grok: catalog.grok?.models || [], 'claude-code': catalog.claude?.models || [], codex: catalog.codex?.models || [], agy: (catalog.agy?.models || []).filter(x => x.id === AGY_MODEL.id) };
 }
 
-const cliOf = ai => (ai === 'codex' ? 'codex' : 'claude');
+const cliOf = ai => (ai === 'claude-code' ? 'claude' : ai);
+function delegateSlot(data, name) {
+  const s = data.roles.find(r => r.name === name)?.main;
+  return s && s.ai !== '人' && s.model ? { ai: cliOf(s.ai), model: flagFor(cliOf(s.ai), s.model) || s.model, effort: s.effort } : null;
+}
 const idOf = (ai, name) => MODEL_FLAG[cliOf(ai)]?.[name] || name;
 // 今の一覧での名前（古い呼び名が同じモデルを指していれば、今の名前に）
 function currentName(ai, name) {
@@ -24,7 +28,7 @@ function currentName(ai, name) {
 // 画面で使いやすい形にする
 function normalize(raw) {
   const source = raw.models || {};
-  const models = { ...source, 'claude-code': [...(source['claude-code'] || [])], codex: [...(source.codex || [])], agy: discovered.agy.map(x => x.label) };
+  const models = { ...source, 'claude-code': [...(source['claude-code'] || [])], codex: [...(source.codex || [])], agy: discovered.agy.map(x => x.label), grok: discovered.grok.map(x => x.label) };
   for (const [ai, cli] of [['claude-code', 'claude'], ['codex', 'codex']]) {
     // CLI から今のモデル一覧が取れている時は、それだけを並べる（古い呼び名は出さない）。
     // roles.yaml の名前が同じモデルを指していれば、その名前を使う（役割の設定がそのまま通るように）
@@ -73,7 +77,8 @@ function validate(models, roles) {
       if (s.ai !== '人') {
         const list = models[s.ai] || [];
         if (!list.includes(s.model)) errors.push(lt`${r.name} の ${k}: モデル「${s.model}」は ${s.ai} で選べません`);
-        if (!EFFORTS.includes(s.effort)) errors.push(lt`${r.name} の ${k}: 思考「${s.effort}」は選べません`);
+        if (s.ai === 'agy' && (s.model !== AGY_MODEL.label || s.effort !== '高')) errors.push(lt`${r.name} の ${k}: Gemini は承認モデル・思考「高」に固定です`);
+        if (!(s.ai === 'grok' ? EFFORTS.filter(x => x !== 'Ultra') : EFFORTS).includes(s.effort)) errors.push(lt`${r.name} の ${k}: 思考「${s.effort}」は選べません`);
       }
     }
     if (/[\n\r]/.test(r.job || '')) errors.push(lt`${r.name} の内容に改行は使えません`);
@@ -159,4 +164,4 @@ function tidy(file) {
   return { ok: true, changes };
 }
 
-module.exports = { read, write, validate, normalize, tidy, EFFORTS, AIS, setModelCatalog };
+module.exports = { read, write, validate, normalize, tidy, EFFORTS, AIS, setModelCatalog, delegateSlot };

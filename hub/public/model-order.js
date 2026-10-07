@@ -4,7 +4,7 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.ModelOrder = factory();
 })(globalThis, function () {
-  const ais = ['claude-code', 'codex', 'agy'];
+  const ais = ['claude-code', 'codex', 'agy', 'grok'];
   const validKey = key => typeof key === 'string' && key.length <= 180 && !/[\u0000-\u001f]/.test(key)
     && ais.includes(key.split('|')[0]) && key.split('|').length === 2 && Boolean(key.split('|')[1].trim());
   const valid = list => Array.isArray(list) && list.length <= 500 && list.every(validKey) && new Set(list).size === list.length;

@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 // 始める欄の画像を手元に保存。元画像を残し、CLI用にPNGへ変換する。
 const fs = require('fs');
 const path = require('path');
@@ -40,7 +40,7 @@ function saveImage(p, name, data) {
       throw Error(lt('画像をPNGに変換できませんでした。画像を書き出し直して追加してください'));
     }
   }
-  return { id, name: /^hub-paste-/i.test(path.basename(name)) ? lt('貼り付け画像.png') : path.basename(name), url: '/api/start/image?project=' + encodeURIComponent(p.id) + '&id=' + id, path: imageFile(p, id, true) };
+  return { id, name: /^hub-paste-/i.test(path.basename(name)) ? '貼り付け画像.png' : path.basename(name), url: '/api/start/image?project=' + encodeURIComponent(p.id) + '&id=' + id, path: imageFile(p, id, true) };
 }
 function imageFromPath(p, raw) {
   const file = fs.realpathSync(String(raw));
@@ -64,6 +64,6 @@ function copyImages(p, ids, dir, task) {
   });
 }
 function imagePrompt(ai, text, images) {
-  return images.length ? text + lt('\n\n参照画像（絶対パス）：\n') + images.join('\n') + '\n' + (ai === 'claude' ? lt('これらの画像を Read で見てから始める。') : ai === 'agy' ? lt('これらの画像を読み、内容を確認してから始める。') : lt('添付画像を確認してから始める。')) : text;
+  return images.length ? text + lt('\n\n参照画像（絶対パス）：\n') + images.join('\n') + '\n' + (ai === 'claude' ? lt('これらの画像を Read で見てから始める。') : ['agy', 'grok'].includes(ai) ? lt('これらの画像を読み、内容を確認してから始める。') : lt('添付画像を確認してから始める。')) : text;
 }
 module.exports = { IMAGE, MAX, lastSpec, saveSpec, imageFile, saveImage, imageFromPath, copyImages, imagePrompt };

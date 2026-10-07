@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 // 外から使う（iPhone）：中継された通信の見分け・合言葉のログイン・ログイン後の作業操作
 const test = require('node:test');
 const assert = require('node:assert/strict');

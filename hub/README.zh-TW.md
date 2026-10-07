@@ -152,17 +152,11 @@ HUB_LANG=zh-TW HUB_APP_DIR=/Applications bash hub/app/build-app.sh
 
 請沿用原有 `HUB_ROOT`、快取與暫存設定；需要更換應用程式前，依本機規則保留可復原備份。
 
-## 建立可分享的 Mac 應用程式
+## Mac App 的建置範圍
 
-```sh
-HUB_LANG=zh-TW HUB_BUNDLE_RUNTIME=1 HUB_APP_DIR="/Volumes/External/Build" HUB_NO_DESKTOP_LINK=1 bash hub/app/build-app.sh
-```
+目前的 `build-app.sh` 建立此電腦上的 App，並指向原始 Hub 資料夾；該資料夾、Node.js 22 以上與已登入的 AI CLI 仍須保留。
 
-此方式將 Hub 服務、介面、範本與已安裝的執行相依套件包入 `.app`，不依賴原始專案資料夾。先完成 npm 相依套件安裝，再執行建置；輸出平台與 CPU 架構須符合使用的 Mac。
-
-應用程式仍需要 Node.js 22 以上，以及已安裝並登入的 AI CLI；Node.js 與 AI CLI 不包含在包內。編譯的 `.app` 使用本機 ad-hoc 簽章，沒有 Apple 開發者發行簽章，也未經 Apple 公證；接收者可能會看到 macOS 的來源確認。正式發行需另外處理開發者簽章與公證。
-
-`HUB_LANG=zh-TW` 會寫入應用程式預設語言。`HUB_ROOT` 指定工作資料位置，與 App 分開儲存；資料磁碟掛載後再啟動，並遵守本機儲存規則。移動或更新前保留原 App、設定與工作資料的可復原備份。
+GitHub Actions 會執行日文與繁中測試、乾式公開檢查，建立包含 Hub 程式的繁中 App 並提供 ZIP 與 SHA256。執行仍需另外安裝 Node.js 22 以上及已登入的 AI CLI；不是包含 Node.js 的完整獨立執行檔。以 `HUB_BUNDLE_RUNTIME=1` 建置時，Hub 程式、繁中辭典、範本與範例放在 App 內，位置會隨 App 移動。一般建置仍使用原始碼位置。C 已加入的 `HUB_LANG=zh-TW` 會寫入 App 預設語言；啟動時設定 `HUB_LANG` 可覆蓋該預設。工作資料與 App 分開，須保留原 App、設定與資料的可復原備份。
 
 ## 運作方式（開發者）
 
@@ -177,3 +171,9 @@ HUB_LANG=zh-TW HUB_BUNDLE_RUNTIME=1 HUB_APP_DIR="/Volumes/External/Build" HUB_NO
 對話文字框右上角的「複製」只複製內容。右鍵「刪除…」會先列出要移至垃圾桶的項目，以及為共用保留的項目；AI 執行、排隊、有子項目或工作副本時無法移動。可從「整理與檢查」的紀錄還原，同名檔案不會被覆寫。
 
 台帳與連結檢查屬於結構檢查；應用程式是否能運作則使用既有測試指令驗證。步驟很多時可在清單內捲動，或按「收合步驟」關閉。
+
+## 最新介面與相容性（4.89.0）
+
+繁中包含 AI 帳號、模型別使用量與票券、freetalk 話題與整理、外部共用刪除保護、自動更新與對話表格。未設定 `HUB_LANG` 時使用日文；`HUB_LANG=zh-TW` 只翻譯程式自身文言，使用者文章、路徑、終端輸出、狀態與角色的儲存值保留原文。既有日文台帳與繁中標題都可讀取，不覆寫既有專案。
+
+自動更新預設關閉。啟用需要 `HUB_UPDATE_SOURCE`、`HUB_UPDATE_APP` 與 `HUB_STORAGE_GUARD`；缺少時顯示尚未支援。確認與翻譯使用永久保存的 24 小時閘門，AI 與排隊結束前等待套用，建置與簽章確認後保留舊 App 備份。自動翻譯與翻譯 PR 另需 `HUB_AUTO_TRANSLATE=1` 與 `HUB_TRANSLATION_FORK`，辭典安裝本身不會啟動 AI 或提交 PR。

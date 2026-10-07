@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const {execFileSync} = require('node:child_process');
@@ -55,7 +57,7 @@ test('旧成功記録は一意の2親履歴から11ファイルを補い、証�
 });
 test('同じ番号の別名・改名・番号不一致・失敗ログ・無効日時は補わない', t => {
   const f = fixture(t); f.merge('確認'); assert.equal(f.receipt(), null);
-  const d = f.transfer().preview('Project Hub', f.child.id); assert.equal(d.integrated, null); assert.ok(d.blockers.some(x=>x.includes('成果ファイルがありません')));
+  const d = f.transfer().preview('Project Hub', f.child.id); assert.equal(d.integrated, null); assert.ok(d.blockers.some(x=>x.includes('成果の記録がありません')));
   f.merge(); assert.equal(f.receipt({...f.record, ok:false}), null);
   assert.equal(f.receipt({...f.record, at:'invalid'}), null); assert.equal(f.receipt({...f.record, task:'other'}), null);
   assert.equal(f.receipt(f.record, {...f.child, title:'改名'}), null); assert.equal(f.receipt(f.record, null), null);

@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {execFileSync}=require('node:child_process');
@@ -116,7 +118,255 @@ test('構造確認は資料の相対パスをプロジェクト基準に解決�
  assert.equal(fs.readFileSync(file,'utf8'),'keep this source');assert.equal(fs.readFileSync(path.join(f.dir,'PROJECT.md'),'utf8'),doc);
 });
 
-test('stopped preview retains protected large reference path, size and busy state',t=>{
- const f=fixture(t),large=f.old('large.json','x'.repeat(1024*1024+1));f.busy(true);
+test('total reference budget stop retains protected path, size and busy state',t=>{
+ const f=fixture(t,{referenceLimits:{bytes:1024*1024}}),large=f.old('large.json','x'.repeat(1024*1024+1));f.busy(true);
  const d=f.m.preview('P');assert.equal(d.token,'');assert.equal(d.candidates.length,0);assert.equal(d.stopped.path,large);assert.equal(d.stopped.size,1024*1024+1);assert.equal(d.busy,true);assert.equal(fs.statSync(large).size,1024*1024+1);
+});
+
+
+test('deep references at depths 7 through 13 protect candidates; excessive depth fails closed',t=>{
+ const f=fixture(t);const file=f.old('.ai/work/deep.dat');
+ for(let depth=7;depth<=13;depth++) {
+  const ref=f.old(Array(depth).fill('level').join('/')+'/ref.md',file);
+  const d=f.m.preview('P');assert.ok(d.token);assert.equal(d.candidates.length,0);fs.unlinkSync(ref);
+ }
+ f.m.referenceLimits.depth=12;f.old(Array(13).fill('other').join('/')+'/ref.md',file);
+ const d=f.m.preview('P');assert.equal(d.token,'');assert.equal(d.candidates.length,0);assert.match(d.stopped.reason,/深さ/);
+});
+test('large reference tail and UTF-8/NFC/Hangul chunk boundaries protect every reference form',t=>{
+ const f=fixture(t,{referenceLimits:{chunk:4096}});
+ const cases=[['café.dat','cafe\u0301.dat'],['データ.dat','テ\u3099ータ.dat'],['각.dat','\u1100\u1161\u11a8.dat'],['😀.dat','😀.dat'],['ḉ.dat','c\u0301\u0327.dat']];
+ for(const [name,ref] of cases) {
+  const file=f.old('.ai/work/'+name);
+  for(const form of [ref,path.relative(f.dir,file).replace(name,ref),file.replace(name,ref)]) {
+   // Put every byte of the spelling on a read boundary, after more than 1 MiB.
+   for(let offset=1;offset<=Buffer.byteLength(ref);offset++) {
+    const padding=4096*257-offset;f.old('large.txt','x'.repeat(padding)+form);
+    const d=f.m.preview('P');assert.ok(d.token,d.stopped?.reason);assert.equal(d.candidates.length,0,form+' offset '+offset);
+   }
+  }
+  fs.unlinkSync(file);
+ }
+});
+for(const chunk of [65536,9])test(`supplementary NFC before Hangul V/T protects all reference forms at chunk ${chunk}`,t=>{
+ // The default size uses the independent R1 reproduction, beyond 1 MiB.
+ const f=fixture(t,chunk===65536?{}:{referenceLimits:{chunk}}),unsafe=[];
+ assert.equal(f.m.referenceLimits.chunk,chunk);
+ for(const jamo of ['\u1161','\u11a8']) {
+  const raw='\u{1D15E}'+jamo+'ab.dat',name=raw.normalize('NFC'),file=f.old('.ai/work/'+name);
+  assert.notEqual(raw,name);
+  for(const prefix of ['', '.ai/work/',path.dirname(file)+path.sep])for(const offset of [0,-1,1]) {
+   const text='x'.repeat(chunk*17-Buffer.byteLength(prefix+'\u{1D15E}'+jamo+'ab')+offset)+prefix+raw;
+   const context=`jamo=${jamo.codePointAt(0).toString(16)} prefix=${prefix} offset=${offset}`;
+   if(chunk===65536)assert.ok(Buffer.byteLength(text)>1024*1024,context);
+   assert.ok(text.normalize('NFC').includes((prefix+name).normalize('NFC')),context);
+   f.old('boundary.txt',text);
+   const d=f.m.preview('P');assert.ok(d.token,d.stopped?.reason);
+   if(d.candidates.length)unsafe.push(context);
+   else assert.ok(d.excluded.some(e=>e.path===file && /参照/.test(e.reason)),context);
+   assert.equal(fs.readFileSync(file,'utf8'),'fixture');
+   assert.equal(fs.existsSync(f.trash),false);assert.deepEqual(f.m.history('P'),[]);
+  }
+  fs.unlinkSync(file);
+ }
+ assert.deepEqual(unsafe,[],'NFC-equivalent references must never be eligible');
+});
+test('minimal supplementary NFC and Hangul boundary retains whole-code-point normalization',t=>{
+ const f=fixture(t,{referenceLimits:{chunk:9}});
+ for(const jamo of ['\u1161','\u11a8']) {
+  const raw='\u{1D15E}'+jamo+'ab.dat',name=raw.normalize('NFC'),file=f.old('.ai/work/'+name);
+  assert.equal(name,'\u{1D157}\u{1D165}'+jamo+'ab.dat');
+  for(const offset of [0,1,2]) {
+   const text='x'.repeat(offset)+raw;assert.ok(text.normalize('NFC').includes(name));
+   f.old('boundary.txt',text);const d=f.m.preview('P');
+   assert.ok(d.token,d.stopped?.reason);assert.equal(d.candidates.length,0,`jamo=${jamo} offset=${offset}`);
+   assert.ok(d.excluded.some(e=>e.path===file && /参照/.test(e.reason)));
+  }
+  assert.equal(fs.readFileSync(file,'utf8'),'fixture');fs.unlinkSync(file);
+ }
+ assert.equal(fs.existsSync(f.trash),false);assert.deepEqual(f.m.history('P'),[]);
+});
+// R2: run the product's actual consume closure against a whole-string NFC oracle.
+function streamedReferenceNFC(text,chunk) {
+ const source=fs.readFileSync(require.resolve('../lib/maintenance'),'utf8');
+ const start=source.indexOf('const consume=(text,last=false)=>{'),end=source.indexOf('let n;while((n=fs.readSync',start);
+ assert.ok(start>=0 && end>start,'extract the actual streaming normalizer');
+ let normalized='';
+ const consume=new Function('limits','match',"let carry='';"+source.slice(start,end)+'return consume;')({carry:1024*1024},text=>normalized+=text);
+ const decoder=new (require('node:string_decoder').StringDecoder)('utf8'),bytes=Buffer.from(text);
+ for(let pos=0;pos<bytes.length;pos+=chunk)consume(decoder.write(bytes.subarray(pos,pos+chunk)));
+ consume(decoder.end(),true);return normalized;
+}
+for(const mode of ['default','short'])test(`combining sequence before Hangul V/T protects all reference forms at ${mode} chunks`,t=>{
+ const f=fixture(t),unsafe=[],nonEquivalent=[];
+ for(const base of ['c','\u{1D15E}']) {
+  const chunk=mode==='default'?65536:base==='c'?10:13;
+  f.m.referenceLimits.chunk=chunk;
+  for(const jamo of ['\u1161','\u11a8']) {
+   const head=base+'\u0301\u0327'+jamo+'ab',raw=head+'.dat',name=raw.normalize('NFC'),file=f.old('.ai/work/'+name);
+   assert.notEqual(raw,name);
+   for(const prefix of ['', '.ai/work/',path.dirname(file)+path.sep])for(const offset of [0,-1,1]) {
+    const text='x'.repeat(chunk*17-Buffer.byteLength(prefix+head)+offset)+prefix+raw;
+    const context=`base=${base.codePointAt(0).toString(16)} jamo=${jamo.codePointAt(0).toString(16)} prefix=${prefix} offset=${offset}`;
+    if(mode==='default')assert.ok(Buffer.byteLength(text)>1024*1024,context);
+    assert.ok(text.normalize('NFC').includes((prefix+name).normalize('NFC')),context);
+    if(streamedReferenceNFC(text,chunk)!==text.normalize('NFC'))nonEquivalent.push(context);
+    f.old('boundary.txt',text);const d=f.m.preview('P');assert.ok(d.token,d.stopped?.reason);
+    if(d.candidates.length)unsafe.push(context);
+    else assert.ok(d.excluded.some(e=>e.path===file && /参照/.test(e.reason)),context);
+    assert.equal(fs.readFileSync(file,'utf8'),'fixture');
+    assert.equal(fs.existsSync(f.trash),false);assert.deepEqual(f.m.history('P'),[]);
+   }
+   fs.unlinkSync(file);
+  }
+ }
+ assert.deepEqual({unsafe,nonEquivalent},{unsafe:[],nonEquivalent:[]},'whole-string NFC and reference protection must agree');
+});
+test('streamed combining and Hangul normalization equals whole-string NFC across byte boundaries',()=>{
+ for(const base of ['c','\u{1D15E}'])for(const join of ['\u1161','\u11a8','\u1100\u1161\u11a8'])for(const marks of ['\u0301\u0327','\u{1D165}\u0301\u0327']) {
+  const raw=base+marks+join+'ab.dat '+base+join+'end';
+  for(const chunk of [1,2,3,4,7,9,10,13,64])for(let offset=0;offset<chunk;offset++) {
+   const text='x'.repeat(offset)+raw;
+   assert.equal(streamedReferenceNFC(text,chunk),text.normalize('NFC'),`base=${base} join=${join} chunk=${chunk} offset=${offset}`);
+  }
+ }
+});
+test('combining and Hangul carry overflow fails closed and preserves the candidate',t=>{
+ const f=fixture(t,{referenceLimits:{chunk:10,carry:16}}),raw='c'+'\u0301\u0327'.repeat(16)+'\u1161ab.dat';
+ const file=f.old('.ai/work/safe.dat');f.old('boundary.txt',raw+file);
+ const d=f.m.preview('P');assert.equal(d.token,'');assert.deepEqual(d.candidates,[]);assert.match(d.stopped.reason,/Unicode/);
+ assert.equal(fs.readFileSync(file,'utf8'),'fixture');assert.equal(fs.existsSync(f.trash),false);assert.deepEqual(f.m.history('P'),[]);
+});
+// End R2 regressions.
+
+// R3 regressions: non-Mark canonical composition in Unicode 17 (Tulu-Tigalari).
+for(const mode of ['default','short','partial-default','partial-short'])test(`non-Mark NFC composition protects all reference forms at ${mode} chunks`,t=>{
+ const f=fixture(t),unsafe=[],nonEquivalent=[];let count=0;
+ const bases=mode.startsWith('partial')?['\u{16D63}\u{16D68}','\u{16D67}\u{16D68}','\u{16D63}\u{16D67}\u{16D68}']:['\u{16D68}','\u{16D69}','\u{16D6A}'].map(c=>c.normalize('NFD'));
+ for(const base of bases)for(const tail of ['ab','\u0301\u0327\u1161ab','\u0301\u0327\u11a8ab']) {
+  const head=base+tail,raw=head+'.dat',name=raw.normalize('NFC'),file=f.old('.ai/work/'+name);
+  const chunk=mode.endsWith('default')?65536:Buffer.byteLength(head);f.m.referenceLimits.chunk=chunk;
+  assert.notEqual(raw,name);
+  for(const prefix of ['', '.ai/work/',path.dirname(file)+path.sep])for(const offset of [-1,0,1]) {
+   const text='x'.repeat(chunk*17-Buffer.byteLength(prefix+head)+offset)+prefix+raw;
+   const context=`base=${[...base].map(c=>c.codePointAt(0).toString(16)).join(",")} tail=${JSON.stringify(tail)} prefix=${prefix} offset=${offset}`;
+   if(mode.endsWith('default'))assert.ok(Buffer.byteLength(text)>1024*1024,context);
+   assert.ok(text.normalize('NFC').includes((prefix+name).normalize('NFC')),context);
+   if(streamedReferenceNFC(text,chunk)!==text.normalize('NFC'))nonEquivalent.push(context);
+   f.old('boundary.txt',text);const d=f.m.preview('P');assert.ok(d.token,d.stopped?.reason);
+   if(d.candidates.length)unsafe.push(context);
+   else assert.ok(d.excluded.some(e=>e.path===file && /参照/.test(e.reason)),context);
+   assert.equal(fs.readFileSync(file,'utf8'),'fixture');
+   assert.equal(fs.existsSync(f.trash),false);assert.deepEqual(f.m.history('P'),[]);count++;
+  }
+  fs.unlinkSync(file);
+ }
+ assert.equal(count,81);
+ console.log(`R3 ${mode}: ${count} conditions, unsafe=${unsafe.length}, nonEquivalent=${nonEquivalent.length}`);
+ assert.deepEqual({unsafe,nonEquivalent},{unsafe:[],nonEquivalent:[]},'whole-string NFC and reference protection must agree');
+});
+test('all Unicode scalars and canonical decompositions stream as whole-string NFC',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../lib/maintenance.js'),'utf8');
+ const start=source.indexOf('const consume=(text,last=false)=>{'),end=source.indexOf('let n;while((n=fs.readSync',start);
+ assert.ok(start>=0 && end>start);
+ const makeConsume=new Function('limits','match',"let carry='';"+source.slice(start,end)+'return consume;');
+ const {StringDecoder}=require('node:string_decoder');let scalars=0,decomposed=0,comparisons=0;
+ const failures=[],continuations=new Set();
+ function compare(text,chunk,context) {
+  let normalized='';const consume=makeConsume({carry:1024*1024},text=>normalized+=text),decoder=new StringDecoder('utf8'),bytes=Buffer.from(text);
+  for(let pos=0;pos<bytes.length;pos+=chunk)consume(decoder.write(bytes.subarray(pos,pos+chunk)));
+  consume(decoder.end(),true);comparisons++;
+  if(normalized!==text.normalize('NFC') && failures.length<20)failures.push(context);
+ }
+ for(let cp=0;cp<=0x10ffff;cp++) {
+  if(cp>=0xd800 && cp<=0xdfff)continue;
+  const scalar=String.fromCodePoint(cp),nfd=scalar.normalize('NFD');scalars++;
+  compare('x'+scalar+'ab.dat',1,`scalar=${cp.toString(16)}`);
+  if(/^[\p{M}\u1161-\u1175\u11a8-\u11c2\u{16D67}]/u.test(nfd)) {
+   for(const prefix of ['c\u0301','\u{16D63}','\u{16D67}','\u1100','\uac00'])for(const chunk of [1,3,7,13]) {
+    compare(prefix+scalar+'ab.dat',chunk,`contextual scalar=${cp.toString(16)} prefix=${prefix} chunk=${chunk}`);
+   }
+  }
+  if(nfd===scalar)continue;decomposed++;
+  // This also detects a runtime Unicode update that needs new non-Mark boundaries.
+  for(const char of [...nfd].slice(1))if(!/\p{M}/u.test(char))continuations.add(char.codePointAt(0));
+  for(const tail of ['ab','\u0301\u0327\u1161ab','\u0301\u0327\u11a8ab'])for(const chunk of [1,3,7,13]) {
+   compare('x'+nfd+tail+'.dat',chunk,`NFD=${cp.toString(16)} tail=${JSON.stringify(tail)} chunk=${chunk}`);
+  }
+ }
+ console.log(`R3 scalar oracle: scalars=${scalars}, decomposed=${decomposed}, comparisons=${comparisons}, failures=${failures.length}; Node=${process.version} Unicode=${process.versions.unicode}`);
+ assert.equal(scalars,0x110000-0x800,'visit every Unicode scalar, including after a mismatch');
+ assert.deepEqual(failures,[]);
+ assert.deepEqual([...continuations].filter(cp=>!(cp>=0x1161&&cp<=0x1175 || cp>=0x11a8&&cp<=0x11c2 || cp===0x16d67)),[],'all non-Mark canonical continuation characters are protected');
+});
+test('non-Mark NFC composition carry overflow fails closed and preserves the candidate',t=>{
+ const f=fixture(t,{referenceLimits:{chunk:10,carry:16}}),file=f.old('.ai/work/safe.dat');
+ f.old('boundary.txt','\u{16D67}'.repeat(32)+file);
+ const d=f.m.preview('P');assert.equal(d.token,'');assert.deepEqual(d.candidates,[]);assert.match(d.stopped.reason,/Unicode/);
+ assert.equal(fs.readFileSync(file,'utf8'),'fixture');assert.equal(fs.existsSync(f.trash),false);assert.deepEqual(f.m.history('P'),[]);
+});
+// End R3 regressions.
+test('item, total byte, elapsed time and normalization budgets fail closed with reasons',t=>{
+ const f=fixture(t);f.old('.ai/work/safe.dat');f.old('one.txt','abc');f.old('two.txt','def');
+ for(const [limits,reason] of [[{items:1},/多すぎ/],[{bytes:5},/総読量/],[{ms:-1},/時間/],[{chunk:8,carry:16},/Unicode/]]) {
+  f.m.referenceLimits={...f.m.referenceLimits,items:50000,bytes:128*1024*1024,ms:15000,chunk:65536,carry:1024*1024,...limits};
+  if(limits.carry)f.old('marks.txt','\u0301'.repeat(32));
+  const d=f.m.preview('P');assert.equal(d.token,'');assert.deepEqual(d.candidates,[]);assert.match(d.stopped.reason,reason);assert.ok(d.stopped.path);
+ }
+});
+test('overlapping roots and symlink loops do not reread references or consume duplicate budgets',t=>{
+ const f=fixture(t),file=f.old('.ai/work/safe.dat'),ref=f.old('nested/ref.txt',file);
+ f.m.baseOf=()=>path.dirname(ref);fs.symlinkSync(f.dir,path.join(path.dirname(ref),'loop'));
+ const bytes=fs.statSync(ref).size+fs.statSync(path.join(f.dir,'PROJECT.md')).size;
+ f.m.referenceLimits.bytes=bytes;const d=f.m.preview('P');assert.ok(d.token,d.stopped?.reason);assert.equal(d.candidates.length,0);
+});
+test('unreadable references and mid-scan file or directory changes stop without a token',t=>{
+ for(const mode of ['unreadable','file','directory','symlink']) {
+  const f=fixture(t),file=f.old('.ai/work/safe.dat'),ref=f.old('ref.txt','no reference');
+  const read=fs.readSync,open=fs.openSync;let changed=false;
+  fs.openSync=(name,...args)=>{if(name===ref && mode==='unreadable')throw Error('read denied');if(name===ref && mode==='symlink'){fs.unlinkSync(ref);fs.symlinkSync(file,ref);}return open(name,...args);};
+  fs.readSync=(...args)=>{const n=read(...args);if(!changed && n && (mode==='file'||mode==='directory')) {changed=true;if(mode==='file')fs.appendFileSync(ref,file);else f.old('new-reference.txt',file);}return n;};
+  let d;try {d=f.m.preview('P');}finally{fs.readSync=read;fs.openSync=open;}
+  assert.equal(d.token,'',mode);assert.equal(d.candidates.length,0,mode);assert.ok(d.stopped.path);assert.equal(fs.readFileSync(file,'utf8'),'fixture');
+ }
+});
+test('apply recheck exposes its stop reason and path before trash or transaction creation',t=>{
+ const f=fixture(t),file=f.old('.ai/work/safe.dat'),d=f.m.preview('P');
+ const ref=f.old('large.txt','x'.repeat(2048));f.m.referenceLimits.bytes=1024;
+ assert.throws(()=>f.m.apply('P',d.token,[d.candidates[0].id],true),e=>/移動前.*総読量/.test(e.message)&&e.message.includes(ref));
+ assert.equal(fs.existsSync(file),true);assert.equal(fs.existsSync(f.trash),false);assert.deepEqual(f.m.history('P'),[]);
+});
+test('more than 5000 reference entries are scanned without relaxing candidate inventory',t=>{
+ const f=fixture(t);const file=f.old('.ai/work/safe.dat');
+ fs.mkdirSync(path.join(f.dir,'many'));for(let i=0;i<5010;i++)fs.writeFileSync(path.join(f.dir,'many',i+'.txt'),i===5009?file:'');
+ const d=f.m.preview('P');assert.ok(d.token,d.stopped?.reason);assert.equal(d.candidates.length,0);
+ f.old('.ai/work/nested/'+Array(7).fill('level').join('/')+'/leaf.dat');
+ const limited=f.m.preview('P');assert.ok(limited.excluded.some(x=>/多すぎ/.test(x.reason)));
+});
+test('Git tracking lists above 2 MiB protect candidates; Git list budget failure stops',t=>{
+ const f=fixture(t),file=f.old('.ai/work/tracked.dat');execFileSync('git',['init','-q',f.dir]);
+ const blob=execFileSync('git',['-C',f.dir,'hash-object','-w','--stdin'],{input:'tracked',encoding:'utf8'}).trim();
+ const names=[path.relative(f.dir,file),...Array.from({length:9000},(_,i)=>'long/'+String(i).padStart(5,'0')+'x'.repeat(230))];
+ execFileSync('git',['-C',f.dir,'update-index','--index-info'],{input:names.map(n=>'100644 '+blob+'\t'+n+'\n').join(''),maxBuffer:16*1024*1024});
+ const d=f.m.preview('P');assert.ok(d.token,d.stopped?.reason);assert.equal(d.candidates.length,0);assert.ok(d.excluded.some(x=>/Gitで追跡/.test(x.reason)));
+ f.m.referenceLimits.gitBytes=1024;const stopped=f.m.preview('P');assert.equal(stopped.token,'');assert.equal(stopped.candidates.length,0);assert.ok(stopped.stopped.reason);
+});
+
+
+test('Git tracking changes during reference reading stop the preview',t=>{
+ const f=fixture(t),file=f.old('.ai/work/safe.dat');execFileSync('git',['init','-q',f.dir]);
+ const read=fs.readSync;let changed=false;
+ fs.readSync=(...args)=>{const n=read(...args);if(n&&!changed){changed=true;execFileSync('git',['-C',f.dir,'add',file]);}return n;};
+ let d;try {d=f.m.preview('P');}finally{fs.readSync=read;}
+ assert.equal(d.token,'');assert.equal(d.candidates.length,0);assert.match(d.stopped.reason,/参照が変わりました/);assert.match(d.stopped.path,/index$/);
+});
+
+
+test('large references are read in bounded chunks without whole-file reads',t=>{
+ const f=fixture(t),file=f.old('.ai/work/safe.dat'),ref=f.old('large.txt','x'.repeat(3*1024*1024)+file);
+ const whole=fs.readFileSync,read=fs.readSync;let largest=0;
+ fs.readFileSync=(name,...args)=>{assert.notEqual(name,ref,'reference must not be read as a whole');return whole(name,...args);};
+ fs.readSync=(fd,buffer,offset,length,...args)=>{largest=Math.max(largest,length);return read(fd,buffer,offset,length,...args);};
+ let d;try {d=f.m.preview('P');}finally{fs.readFileSync=whole;fs.readSync=read;}
+ assert.ok(d.token,d.stopped?.reason);assert.equal(d.candidates.length,0);assert.equal(largest,65536);
 });

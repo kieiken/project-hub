@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -32,13 +34,13 @@ function fixture(t, options = {}) {
   const latestCommit = git(upstream, 'rev-parse', 'HEAD'), events = [];
   let remoteReads = 0, time = 1700000000000, busy = false;
   const defaults = {
-    root, source, appPath, upstream, platform: 'darwin', env: { HUB_AUTO_UPDATE: '1', HUB_LANG: 'zh-TW' }, now: () => time, guard: async () => true, busy: () => busy,
+    root, source, appPath, upstream, platform: 'darwin', env: { HUB_AUTO_UPDATE: '1', HUB_STORAGE_GUARD: '/fixture/guard' }, now: () => time, guard: async () => true, busy: () => busy,
     latest: async () => { remoteReads++; return { commit: latestCommit, version: options.newVersion === false ? '1.0.0' : '1.0.1' }; },
     run: async (file, args, opts) => {
       if (file === 'git') return git(opts.cwd || dir, ...args);
       events.push(file + ':' + args[0]);
       assert.equal(file, 'npm');
-      assert.equal(opts.env.HUB_LANG, 'ja'); assert.equal(opts.env.HUB_SKIP_APP, '1');
+      assert.equal(opts.env.HUB_SKIP_APP, '1');
       assert.notEqual(opts.env.HUB_ROOT, root);
       if (options.failStep === args[0]) throw Error('fixture command failure');
       return '';
@@ -51,7 +53,7 @@ function fixture(t, options = {}) {
 }
 
 test('public default is off; saved switch overrides the local opt-in environment', async t => {
-  const f = fixture(t), app = f.make({ env: { HUB_AUTO_UPDATE: '0' } });
+  const f = fixture(t), app = f.make({ env: { HUB_AUTO_UPDATE: '0', HUB_STORAGE_GUARD: '/fixture/guard' } });
   assert.equal(app.status().enabled, false);
   await app.settings(false);
   assert.equal(f.make().status().enabled, false);
@@ -59,9 +61,9 @@ test('public default is off; saved switch overrides the local opt-in environment
 });
 
 test('daily gate includes manual requests and restarts; a disabled check only reads metadata', async t => {
-  const f = fixture(t), app = f.make({ env: { HUB_AUTO_UPDATE: '0' } });
+  const f = fixture(t), app = f.make({ env: { HUB_AUTO_UPDATE: '0', HUB_STORAGE_GUARD: '/fixture/guard' } });
   const first = await app.check(); assert.equal(first.pending, true); assert.equal(first.latestVersion, '1.0.1');
-  await app.check(); await f.make({ env: { HUB_AUTO_UPDATE: '0' } }).check();
+  await app.check(); await f.make({ env: { HUB_AUTO_UPDATE: '0', HUB_STORAGE_GUARD: '/fixture/guard' } }).check();
   assert.equal(f.reads(), 1); assert.equal(f.marker(), 'old');
   f.advance(); await app.check(); assert.equal(f.reads(), 2);
 });
@@ -97,16 +99,11 @@ test('guard failure does not fetch upstream, create updater state, or replace an
   assert.equal(fs.existsSync(path.join(f.root, '_hub')), false); assert.equal(f.marker(), 'old');
 });
 
-test('owned update errors and idle explanations follow the selected language', async t => {
-  const before = process.env.HUB_LANG;
-  t.after(() => { if (before === undefined) delete process.env.HUB_LANG; else process.env.HUB_LANG = before; });
-  process.env.HUB_LANG = 'zh-TW';
+test('update errors and idle explanations remain Japanese before C', async t => {
   const f = fixture(t), app = f.make({ guard: async () => false });
-  assert.equal((await app.check()).error, 'Storage Guard 已停止更新，原本的 App 保持不變');
-  assert.equal(app.idleMessage(), '等待 AI、排隊指示及整理結束後更新');
-  await assert.rejects(app.settings('yes'), /enabled 必須為 true 或 false/);
-  process.env.HUB_LANG = 'ja';
+  assert.equal((await app.check()).error, 'Storage Guard が更新を止めました。今のアプリは変更していません');
   assert.equal(app.idleMessage(), 'AI・順番待ち・整理が終わるまで更新を待ちます');
+  await assert.rejects(app.settings('yes'), /enabled は true または false/);
 });
 
 test('merge conflict without a translator keeps source and app; bounded translator can resolve in the isolated stage', async t => {
@@ -299,4 +296,38 @@ test('guard refusal after a durable app replacement keeps installed phase and a 
     assert.equal(fs.readFileSync(path.join(result.backup, 'marker'), 'utf8'), 'old');
     assert.equal(f.make().status().phase, 'installed');
   }
+});
+
+test('missing source, app or guard remains unsupported even when a test build callback exists', t => {
+  const f = fixture(t);
+  assert.equal(f.make({ source: '' }).supported(), false);
+  assert.equal(f.make({ appPath: '' }).supported(), false);
+  assert.equal(f.make({ env: { HUB_STORAGE_GUARD: '' } }).supported(), false);
+});
+
+test('failed and interrupted translation cannot retry on manual resume or restart before24hours', async t => {
+  const f = fixture(t); let calls = 0;
+  const translate = async () => { calls++; throw Error('fixture translator failure'); };
+  assert.equal((await f.make({ translate }).check()).phase, 'failed');
+  const restarted = f.make({ translate });
+  await restarted.check(); await restarted.resume(); await restarted.resume();
+  assert.equal(calls, 1); assert.equal(f.reads(), 1); assert.equal(f.marker(), 'old');
+  restarted.data.phase = 'translating'; await restarted.persist();
+  await f.make({ translate }).resume(); assert.equal(calls, 1);
+  f.advance(); await f.make({ translate }).check(); assert.equal(calls, 2);
+});
+
+test('a prepared source changed while waiting cannot replace the signed app', async t => {
+  const f = fixture(t), app = f.make({ beforeInstall: async () => f.busy(true) });
+  assert.equal((await app.check()).phase, 'deferred');
+  fs.writeFileSync(path.join(app.data.job.stage, 'text.txt'), 'changed after testing');
+  f.busy(false); app.beforeInstall = null;
+  assert.equal((await app.resume()).phase, 'failed'); assert.equal(f.marker(), 'old');
+});
+
+test('guard refusal immediately before replacement preserves both source and old app', async t => {
+  const f = fixture(t); let allowed = true;
+  const app = f.make({ guard: async () => allowed, beforeInstall: async () => { allowed = false; } });
+  assert.equal((await app.check()).phase, 'failed'); assert.equal(f.marker(), 'old');
+  assert.equal(git(f.source, 'rev-parse', 'HEAD'), f.originalHead);
 });

@@ -1,12 +1,13 @@
 'use strict';
-const uiLocale = require('./ui-locale-fixture');
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');
 const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const definitions=[{question:'記事の価格は？',options:['500円（おすすめ）','300円'],multi:false},{question:'返金は？',options:['受け付ける','受け付けない'],multi:false}];
 const classes=(...initial)=>{const set=new Set(initial);return {contains:x=>set.has(x),add:(...x)=>x.forEach(v=>set.add(v)),remove:x=>set.delete(x),toggle(x,on){on=on===undefined?!set.has(x):on;on?set.add(x):set.delete(x);}};};
 function fixture(asks=definitions,send=async()=>true){
- const context=vm.createContext({UI:uiLocale(),esc,richText:esc,view:{project:'p',task:'t'},document:{querySelectorAll:()=>[]}});
+ const context=vm.createContext({UI:require('./ui-locale-fixture')(),esc,richText:esc,view:{project:'p',task:'t'},document:{querySelectorAll:()=>[]}});
  vm.runInContext(source.slice(source.indexOf('// 質問ごとに選択'),source.indexOf('// かかった時間：')),context);
  const handlers={},box={addEventListener:(event,cb)=>handlers[event]=cb};
  const key=JSON.stringify(['p','t',asks]),status={textContent:''},submit={textContent:'',disabled:false};
@@ -107,4 +108,10 @@ test('初期履歴待ちの空DOMだけで再送対象を消さず、取得済�
  box.querySelectorAll=()=>[];f.context.refreshAsks(box);assert.equal(attempts.size,0,'履歴取得後に対象が無い場合は失効');
  box.dataset.askHistoryPending='1';attempts.set(work,attempt);t.question='新質問';f.context.refreshAsks(box);assert.equal(attempts.size,0,'履歴待ちでも原文変更は確定情報');
  attempts.set(work,attempt);t.question='';f.context.refreshAsks(box);assert.equal(attempts.size,0,'解除済みも復活させない');
+});
+
+
+test('プロジェクト化した自由対話の質問は読取専用で、下書きを保持して送信を無効化',()=>{
+ const f=fixture();f.input(0,'元の下書き');f.ask.closest=()=>({dataset:{readonly:'true'}});f.context.updateAskControls(f.ask);
+ assert.equal(f.submit.disabled,true);assert.ok(f.qs.every(q=>q.free.disabled&&q.opts.every(o=>o.disabled)));assert.equal(f.draft()[0].free,'元の下書き');
 });

@@ -1,19 +1,16 @@
  'use strict';
-// Japanese remains the default when this module is loaded on its own.
-var UI = globalThis.HubI18n || { text: value => value, html: value => value, label: value => value, message: value => value, valueAttribute: () => '', dateLocale: 'ja-JP',
-  template: (strings, ...values) => strings.reduce((out, part, i) => out + part + (i < values.length ? values[i] : ''), '') };
-
+var UI = globalThis.HubI18n || {text: x=>x, html:x=>x, label:x=>x, message:x=>x, valueAttribute:()=>'', dateLocale:'ja-JP', template:(strings,...values)=>strings.reduce((s,x,i)=>s+x+(i<values.length?values[i]:''),'')};
 // 右クリックと、キーボードで押せる「…」は同じ操作を開く。
 function showTreeMenu(pId, tId, x, y) {
   const p = proj(pId), t = tId && taskOf(p, tId); if (!p || tId && !t) return;
   const menu = $('#menu');
   // 表示した操作の意図を保持し、定期取得後も同じ before で競合を照合する。
   const pinBefore = !t && isProjectPinned(p.id);
-  menu.innerHTML = UI.template`<button type="button" data-tree-action="rename" role="menuitem">名前の変更</button><button type="button" data-tree-action="branch" role="menuitem">同じ階層に分岐</button><button type="button" data-tree-action="child" role="menuitem">さらに子${t ? UI.text('作業') : UI.text('プロジェクト')}を作る</button><button class="danger" type="button" data-tree-action="remove" role="menuitem">削除…</button>`;
+  menu.innerHTML = UI.template`<button type="button" data-tree-action="rename" role="menuitem">名前の変更</button><button type="button" data-tree-action="branch" role="menuitem">同じ階層に分岐</button><button type="button" data-tree-action="child" role="menuitem">さらに子${t ? '作業' : UI.text('プロジェクト')}を作る</button><button class="danger" type="button" data-tree-action="remove" role="menuitem">削除…</button>`;
   if (!t && canReorderProjects()) {
     const siblings = projectSiblings(displayParent(p, state.projects)), index = siblings.findIndex(q => q.id === p.id);
     const pinned = pinBefore;
-    menu.innerHTML += `<button type="button" data-tree-action="pin" role="menuitem" ${projectOrderBusy ? 'disabled' : ''}>${pinned ? UI.text('固定を解除') : UI.text('上部に固定')}</button>`;
+    menu.innerHTML += UI.template`<button type="button" data-tree-action="pin" role="menuitem" ${projectOrderBusy ? 'disabled' : ''}>${pinned ? UI.text('固定を解除') : UI.text('上部に固定')}</button>`;
     menu.innerHTML += UI.template`<button type="button" data-tree-action="up" role="menuitem" ${index <= 0 || isProjectPinned(siblings[index - 1]?.id) !== pinned || projectOrderBusy ? 'disabled' : ''}>上へ移動</button><button type="button" data-tree-action="down" role="menuitem" ${index >= siblings.length - 1 || isProjectPinned(siblings[index + 1]?.id) !== pinned || projectOrderBusy ? 'disabled' : ''}>下へ移動</button>`;
   }
   menu.hidden = false;

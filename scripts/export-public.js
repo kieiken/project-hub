@@ -13,7 +13,8 @@ const publicFiles = new Set([
 const required = [...publicFiles, '.github/ISSUE_TEMPLATE/feedback.md',
   '.github/ISSUE_TEMPLATE/bug_report.md', '.github/ISSUE_TEMPLATE/config.yml',
   '.github/pull_request_template.md', 'hub/package.json', 'hub/CHANGELOG.md',
-  'hub/server.js', 'hub/mcp.js', 'hub/public/index.html'];
+  'hub/server.js', 'hub/mcp.js', 'hub/public/index.html',
+  'hub/locales/zh-TW.json', 'hub/lib/locale.js', '.github/workflows/macos-app.yml'];
 const git = args => execFileSync('git', args, { cwd: root, maxBuffer: 32 * 1024 * 1024 });
 function commit(ref) {
   return git(['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`]).toString().trim();
@@ -43,8 +44,8 @@ function excluded(name) {
 }
 function selected(name, isPublic) {
   return isPublic ? publicFiles.has(name) || name.startsWith('.github/ISSUE_TEMPLATE/')
-    || name === '.github/pull_request_template.md'
-    || name.startsWith('.github/PULL_REQUEST_TEMPLATE/') || name.startsWith('.github/workflows/')
+    || name === '.github/pull_request_template.md' || name.startsWith('.github/PULL_REQUEST_TEMPLATE/')
+    || name === '.github/workflows/macos-app.yml'
     : name.startsWith('hub/') || name.startsWith('docs/project-hub/templates/')
     || /^docs\/screenshots\/[^/]+-redacted\.png$/.test(name);
 }
@@ -63,6 +64,7 @@ const rules = [
 const safeLiterals = {
   'hub/lib/git.js': new Set(['git' + '@github.com']),
   'hub/lib/update-check.js': new Set(['claude-code' + '@latest.json']),
+  'hub/test/accounts.test.js': new Set(['a' + '@example.test']),
   'hub/test/git.test.js': new Set(['git' + '@github.com', 'secret' + '@github.com']),
   'hub/test/github.test.js': new Set(['password' + '@github.com']),
   'hub/test/remote.test.js': new Set(['owner' + '@example.com', 'guest' + '@example.com']),

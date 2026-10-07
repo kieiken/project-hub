@@ -74,7 +74,7 @@ test('Chinese and Japanese task sections share steps, completion and append logi
   assert.equal(result.project.name, '日本語名稱');
   assert.equal(result.project.description, '作業が見つかりません');
   assert.equal(result.project.status, '進行中');
-  assert.deepEqual(result.project.phases.map(p => p.name), ['規劃', '製作', '檢查', '收尾']);
+  assert.deepEqual(result.project.phases.map(p => p.name), ['規劃', '建立', '檢查', '收尾']);
   assert.match(fs.readFileSync(path.join(result.project.dir, '.ai/rules.md'), 'utf8'), /繁體中文|專案|作業/);
   const task = store.createTask(result.project.id, { title: '作業が見つかりません', role: '司令塔', owner: 'codex', steps: ['日本語步驟'], next: '下一步內容' });
   assert.equal(task.title, '作業が見つかりません');
@@ -123,7 +123,7 @@ test('Chinese prompts keep the model rules, compressed rule file and path refere
   const project = store.readProject('日本語名稱');
   const task = project.tasks[0];
   const prompt = taskPrompt(project, task, store.taskFile(project.id, task.id), project.dir);
-  assert.match(prompt, /不要自行在背景啟動 codex/);
+  assert.match(prompt, /不要(?:自行)?在背景啟動 codex/);
   assert.match(prompt, /目前自動切換已關閉/);
   assert.match(prompt, /指揮＝Codex/);
   assert.ok(!prompt.includes('undefined＝'));
@@ -162,7 +162,9 @@ test('HTTP locale and Chinese generated projects work without translating user f
   const script = await (await fetch(base + '/locale-config.js')).text();
   assert.match(script, /^window.HUB_LOCALE = /);
   const changelog = await (await fetch(base + '/api/changelog')).json();
-  assert.ok(changelog[0].items.some(item => item.includes('繁體中文')));
+  assert.equal(changelog[0].version, require('../package.json').version);
+  assert.ok(changelog.flatMap(release => release.items).some(item => item.includes('繁體中文')));
+  for (const item of changelog[0].items) assert.doesNotMatch(item, /[ぁ-んァ-ヶ]/);
   const project = await post('/api/project/new', { name: 'HTTP 日本語', description: '作業が見つかりません' });
   assert.equal(project.status, 200);
   assert.equal(project.body.description, '作業が見つかりません');
@@ -170,6 +172,11 @@ test('HTTP locale and Chinese generated projects work without translating user f
   assert.equal(task.status, 200);
   assert.equal(task.body.title, '作業が見つかりません');
   assert.equal(task.body.state, '未着手');
+  const document = path.join(store.product, project.body.id, '繁中資料.md');
+  fs.writeFileSync(document, '使用者原文 日本語');
+  const reveal = await post('/api/reveal', { project: project.body.id, task: task.body.id, path: project.body.id + '/繁中資料.md', how: 'info' });
+  assert.equal(reveal.status, 200);
+  assert.equal(reveal.body.path, document);
   assert.match(fs.readFileSync(store.taskFile(project.body.id, task.body.id), 'utf8'), /## 已完成的工作/);
   const bad = await post('/api/task/new', { project: 'missing', title: 'test' });
   assert.equal(bad.status, 400);
@@ -234,4 +241,28 @@ test('HTTP update status and restart preserve queued AI instructions', async () 
   await post('/api/chat/unqueue', { project: project.id, task: task.id, id: requests[0].id });
   assert.equal((await post('/api/restart', {})).status, 200);
   assert.equal((await post('/api/quit', {})).status, 200);
+});
+
+test('Chinese account errors keep API classification and cached messages change with locale only', async () => {
+  const home = path.join(tmp, 'account-language');
+  const settings = path.join(home, '.gemini/antigravity-cli/settings.json');
+  fs.mkdirSync(path.dirname(settings), {recursive:true});
+  fs.writeFileSync(settings, JSON.stringify({modelProvider:'api'}));
+  const {Accounts} = require('../lib/accounts'), launch = require('../lib/launch');
+  const account = new Accounts({file:path.join(home,'registry.json'), home, dry:true});
+  const status = await account.status('agy','default');
+  assert.equal(status.status,'api');
+  assert.ok(!/[\u3041-\u3096\u30a1-\u30fa]/.test(status.message));
+  process.env.HUB_LANG='ja';
+  assert.match(launch.agyAccountError(home),/API の利用設定/);
+  process.env.HUB_LANG='zh-TW';
+  assert.equal(launch.agyAccountError(home),status.message);
+  assert.match(launch.agyAccountError(home,false),/API の利用設定/);
+});
+test('Chinese unknown MCP tool errors retain the machine-readable unknown flag', async () => {
+  const result = await post('/api/mcp/call',{name:'not-a-real-tool',arguments:{}});
+  assert.equal(result.status,404);
+  assert.equal(result.body.unknown,true);
+  assert.match(result.body.error,/not-a-real-tool/);
+  assert.ok(!/[\u3041-\u3096\u30a1-\u30fa]/.test(result.body.error));
 });

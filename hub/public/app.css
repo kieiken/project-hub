@@ -9,6 +9,22 @@
   --mono:ui-monospace,Menlo,Consolas,monospace;
   color-scheme:light;
 }
+
+/* はじめの設定：native dialog がフォーカスと背景操作を制御する。 */
+.onboarding-sheet{width:100vw;height:100dvh;max-width:none;max-height:none;inset:0;margin:0;border:0;padding:24px;background:var(--bg);color:var(--ink);overflow:auto;box-sizing:border-box}
+.onboarding-sheet::backdrop{background:var(--bg)}
+.onboarding-box{max-width:740px;margin:0 auto}
+.onboarding-progress{list-style:none;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:20px 0}
+.onboarding-progress li{padding:10px;border-radius:8px;background:var(--panel);color:var(--muted);font-size:13px}
+.onboarding-progress [aria-current="step"]{background:var(--accent-soft);color:var(--accent);font-weight:700}
+.onboarding-body{line-height:1.75}.onboarding-body .card{margin:16px 0}.onboarding-body h3{margin:0 0 10px}
+.onboarding-choices{display:grid;gap:12px;margin:20px 0}.onboarding-choices label{padding:16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);cursor:pointer}
+.onboarding-choices input{margin-right:8px;accent-color:var(--accent)}
+.onboarding-command{display:flex;gap:12px;align-items:flex-start;padding:12px;background:var(--bg);border-radius:8px}
+.onboarding-command code{flex:1;overflow-wrap:anywhere;min-width:0}.onboarding-command button{flex-shrink:0}
+.onboarding-start{display:flex;flex-wrap:wrap;gap:12px}.onboarding-message{min-height:24px;color:var(--muted);overflow-wrap:anywhere}
+.onboarding-footer{display:flex;gap:10px;padding:16px 0;border-top:1px solid var(--line);align-items:center}
+@media(max-width:520px){.onboarding-sheet{padding:16px}.onboarding-progress{grid-template-columns:repeat(2,1fr)}.onboarding-start{flex-direction:column}.onboarding-footer{gap:6px}.onboarding-footer .btn{padding:8px 12px}}
 @media (prefers-color-scheme:dark){:root{
   color-scheme:dark;--bg:#121520;--panel:#1a1e29;--ink:#e6e9f0;--muted:#9aa3b5;--line:#2c3241;--hover:#222735;
   --accent:#8199ff;--accent-soft:#262e4f;--ok:#5cc189;--run:#8199ff;--hold:#e0ad45;--bad:#f07b70;--idle:#7d869a;
@@ -21,11 +37,17 @@ button,select,input,textarea{font:inherit;color:inherit}
 button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .bar{display:flex;align-items:center;gap:10px;padding:12px 20px;background:var(--panel);border-bottom:1px solid var(--line)}
 .bar h1{font-size:17px;margin:0}
-.usage-toggle{font-size:11px;max-width:420px;text-align:left;white-space:normal}
+.usage-toggle{font-size:11px;max-width:420px;min-width:0;text-align:left;white-space:nowrap}
+.usage-toggle>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .usage-drawer{width:min(460px,100%);z-index:8}
 .usage-drawer p{margin:0}
 .usage-card{margin-bottom:12px}
-.usage-card h3{font-size:15px;color:var(--ink);letter-spacing:0;font-weight:600;display:flex;align-items:center;gap:6px}
+.usage-card h3{font-size:15px;color:var(--ink);letter-spacing:0;font-weight:600;display:flex;align-items:center;flex-wrap:wrap;gap:6px;overflow-wrap:anywhere}
+.usage-plan{margin-left:auto;border:1px solid var(--line);border-radius:999px;padding:1px 7px;font-size:11px;font-weight:500;color:var(--muted)}
+.usage-current{border-radius:4px;padding:1px 5px;font-size:11px;font-weight:500;background:var(--hover);color:var(--ink)}
+.usage-warning{color:#866000}
+.usage-limit{color:#b42318}
+@media (prefers-color-scheme:dark){.usage-warning{color:#f5cf5a}.usage-limit{color:#ff8f87}}
 .usage-icon{flex:none;width:16px;height:16px}
 .usage-icon-codex{color:var(--ink)}
 .usage-icon-claude{color:#d97757}
@@ -34,6 +56,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-vis
 .usage-pct{margin-left:auto;font-variant-numeric:tabular-nums}
 .usage-progress{width:100%;height:10px;accent-color:var(--accent)}
 .usage-expired .usage-progress{opacity:.45}
+.usage-extras{display:grid;gap:4px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:13px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 @media(max-width:900px){.bar{flex-wrap:wrap;gap:8px;padding:10px 12px}.usage-toggle{order:1;max-width:100%;width:100%;justify-content:center}.bar .sp{min-width:0}}
 .sp{flex:1}
 .tb{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;display:inline-flex;gap:8px;align-items:center}
@@ -160,6 +183,12 @@ details.more summary{cursor:pointer;font-size:12.5px;color:var(--muted)}
 .spec{display:inline-flex;gap:4px;align-items:center;font-size:11.5px;color:var(--muted)}
 .spec select{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:1px 4px;font-size:11.5px}
 .settings{display:flex;flex-direction:column;gap:14px}
+.settings > [hidden]{display:none}
+.settings-tabs{display:flex;gap:6px;overflow-x:auto;position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 0;flex-shrink:0}
+.settings-tabs button{flex:1;min-width:70px;white-space:nowrap;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--muted);padding:10px 16px;font:inherit;cursor:pointer}
+.settings-tabs button[aria-selected="true"]{color:var(--ink);border-color:var(--accent);background:var(--accent-soft)}
+.settings-tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.fast-pick{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .ai-tool-row{padding:10px 0;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
 .ai-tool-row:first-child{border-top:0;padding-top:0}
 .ai-tool-head,.ai-tool-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -237,17 +266,15 @@ td.job{color:var(--muted);font-size:12px}
 .issue-detail summary,.issue-history>summary{cursor:pointer;color:var(--muted);font-size:12.5px}
 .issue-original{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;line-height:1.6}
 .issue-history .issue-list{margin-top:10px}
-.trow{display:grid;grid-template-columns:minmax(0,1fr) 220px 110px 190px;grid-template-areas:"tt tw prog act" "ctx ctx ctx ctx" "pend pend pend pend";align-items:center;column-gap:14px;row-gap:4px;padding:10px 0;border-top:1px solid var(--line)}
+.trow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"tt act";align-items:center;column-gap:14px;row-gap:6px;padding:10px 0;border-top:1px solid var(--line)}
 .trow .tt{grid-area:tt;min-width:0}
-.trow .tw{grid-area:tw;min-width:0}
-.trow .tw .chip{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.trow .prog{grid-area:prog}
+.trow .task-title{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.trow .task-title b{min-width:0;overflow-wrap:anywhere}
+.trow .task-status{font-size:11px;line-height:20px;padding:0 7px}
+.trow .task-status.needs{background:var(--hold-bg);color:var(--hold)}
+.trow .task-status.busy{background:var(--ok-bg);color:var(--ok)}
 .trow .tact{grid-area:act;display:flex;gap:6px;justify-content:flex-end;white-space:nowrap}
-.trow .task-context{grid-area:ctx;display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;padding:0}
 .task-context .sep{font-style:normal;opacity:.5}
-.trow .pend{grid-area:pend;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;border-radius:8px;background:var(--hold-bg);font-size:13px}
-.trow .pend b{color:var(--hold)}
-.trow .pend .note{flex-basis:100%;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trow.fin .tt b::after{content:" ✓";color:var(--ok)}
 .trow .q2{color:var(--hold)}
 .tw{min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:2px}
@@ -290,16 +317,12 @@ td.job{color:var(--muted);font-size:12px}
 .addstep input{flex:1;min-width:120px;border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:4px 8px}
 .steps .stepbox label{display:flex;gap:6px;align-items:flex-start;font-size:13px;cursor:pointer}
 /* 行の並べ方は、窓ではなく作業の欄の幅で切り替える（左の一覧がある分、欄が狭いことがあるため） */
-.card:has(.trow){container-type:inline-size}
-/* 中くらい：題名を上に1段、その下に担当・進み・操作を横に */
-@container (max-width:820px){
-  .trow{grid-template-columns:auto 110px minmax(0,1fr);grid-template-areas:"tt tt tt" "tw prog act" "ctx ctx ctx" "pend pend pend"}
-}
-/* 狭い（スマホ）：担当と進み、その下に操作 */
+.card:has(.trow),.view>.more:has(.trow){container-type:inline-size}
+/* PC・中くらいは名前と操作の2列。狭い欄では操作を下に並べる。 */
 @container (max-width:480px){
-  .trow{grid-template-columns:1fr auto;grid-template-areas:"tt tt" "tw prog" "ctx ctx" "act act" "pend pend"}
+  .trow{grid-template-columns:minmax(0,1fr);grid-template-areas:"tt" "act"}
+  .trow .tact{flex-wrap:wrap}
   .trow .tact .btn{flex:1}
-  .trow .prog{min-width:110px}
 }
 .trow:first-of-type{border-top:0}
 .trow .tt b{display:block;font-size:14px}
@@ -366,7 +389,17 @@ td.job{color:var(--muted);font-size:12px}
 .m.me{align-self:flex-end;align-items:flex-end}
 .m.ai{align-self:flex-start}
 .mh{display:flex;align-items:center;gap:8px}
-.mb{white-space:pre-wrap;overflow-wrap:anywhere;padding:9px 13px;border-radius:12px;line-height:1.65}
+.mb{white-space:pre-wrap;overflow-wrap:anywhere;padding:9px 13px;border-radius:12px;line-height:1.65;min-width:0;max-width:100%}
+.rt-table-wrap{max-width:100%;overflow-x:auto;margin:10px 0;white-space:normal;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)}
+.rt-table-wrap:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.rt-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.rt-table th,.rt-table td{min-width:8rem;max-width:28rem;padding:9px 12px;vertical-align:top;white-space:normal;overflow-wrap:anywhere;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.rt-table th{background:var(--hover);font-weight:700}
+.rt-table th:last-child,.rt-table td:last-child{border-right:0}
+.rt-table tbody tr:last-child td{border-bottom:0}
+.rt-table .rt-left{text-align:left}.rt-table .rt-center{text-align:center}.rt-table .rt-right{text-align:right}
+.rt-inline{font-family:var(--mono);font-size:.92em;background:var(--hover);padding:1px 4px;border-radius:3px}
+.m.me .rt-table .lk{color:var(--accent)}
 .m.me .mb{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
 .m.ai .mb{background:var(--panel);border:1px solid var(--line);border-bottom-left-radius:4px}
 .m.partial .mb{opacity:.75}
@@ -496,7 +529,8 @@ input.cm{width:100%;border:1px solid var(--line);background:var(--panel);border-
 .maintenance-drawer{width:min(680px,100vw);overflow:auto}.maintenance-choice{display:flex;align-items:flex-start;gap:10px;padding:9px 0;word-break:break-word}.maintenance-choice small{display:block;color:var(--muted);font-size:11px}.maintenance-choice select{max-width:100%;min-width:0}#maintenance-result pre{white-space:pre-wrap;word-break:break-word;max-height:300px;overflow:auto}
 .new{flex:none;font-size:10.5px;font-weight:700;color:var(--panel);background:var(--accent);border-radius:99px;min-width:18px;padding:0 5px;text-align:center;line-height:18px}
 .ask-box{flex-direction:column;align-items:stretch;gap:6px}
-.ask-head{display:flex;gap:8px;flex-wrap:wrap}
+.ask-head{display:flex;gap:8px;flex-wrap:wrap;min-width:0;max-width:100%}
+.ask-head>span{min-width:0;max-width:100%}
 .ask-form{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .ask-form input{flex:1;min-width:200px;border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:6px 10px}
 .bg-note{background:var(--bad-bg);border-radius:10px;margin:0 0 10px}
@@ -607,10 +641,55 @@ input.cm{width:100%;border:1px solid var(--line);background:var(--panel);border-
   .composer .crow select{min-width:0;max-width:100%}
 }
 
-/* Localized drag hints; the Japanese edition keeps its original content. */
+.account-row { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line, #ddd); padding:12px 0; }
+.account-pick { display:inline-flex; align-items:center; gap:6px; max-width:100%; }
+.account-pick[hidden] { display:none; }
+.account-pick select { max-width:240px; }
+.account-term { padding:8px 12px; flex-wrap:wrap; }
+.account-row .acts { flex-wrap:wrap; }
+@media(max-width:900px) { .account-row input { min-width:0; max-width:100%; font-size:16px; } .account-pick select { font-size:16px; min-height:40px; max-width:200px; } }
+
+.remove-box .acts{flex-wrap:wrap}.remove-box #remove-review{white-space:normal}.remove-box #remove-typed{width:100%;max-width:100%;box-sizing:border-box}
+:root{--grok:#6b4d99;--grok-bg:#f0e9fa}
+@media(prefers-color-scheme:dark){:root{--grok:#c9abea;--grok-bg:#342846}}
+.btn.grok{background:var(--grok);border-color:var(--grok)}
+.btn.grok.sub{background:none;color:var(--grok)}
+.w-grok{color:var(--grok)}
+.k-grok{background:var(--grok-bg);color:var(--grok)}
+.k-grok .ic{background:var(--grok)}
+.phead .who.w-grok{color:#c9abea}
+@media(prefers-color-scheme:dark){.btn.grok:not(.sub),.k-grok .ic{color:#1c2230}}
+
+/* 常設の自由対話枠は通常の固定・並べ替えから独立する。 */
+.freetalk-frame { margin: 8px; padding: 8px; border: 1px solid var(--line, #ddd); border-radius: 12px; display: flex; flex-direction: column; gap: 4px; }
+.freetalk-name { align-self: flex-start; background: none; border: 0; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; padding: 2px 4px; }
+.freetalk-frame > .note { overflow-wrap: anywhere; margin: 0; }
+.freetalk-frame > .freetalk-new { margin: 0; }
+.freetalk-row { display: flex; align-items: center; gap: 2px; border-radius: 8px; min-width: 0; }
+.freetalk-row:hover { background: var(--hover); }
+.freetalk-row.sel { background: var(--accent-soft); }
+.freetalk-row.sel .freetalk-topic { font-weight: 700; }
+.freetalk-topic { flex: 1; min-width: 0; padding: 7px 8px; background: none; border: 0; color: var(--ink); font: inherit; font-size: 13px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.freetalk-del { flex: none; width: 28px; height: 28px; padding: 0; background: none; border: 0; border-radius: 6px; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; }
+.freetalk-del:hover { background: var(--line); color: var(--bad, #c0392b); }
+.freetalk-overview .freetalk-row { max-width: 640px; }
+.freetalk-work .whead h2 { min-width: 0; overflow-wrap: anywhere; }
+
+.freetalk-history {margin:8px 0; min-width:0}
+.freetalk-warning {background:#fff3ce;color:#614b00;padding:12px;border-radius:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.freetalk-summary-input {width:100%;box-sizing:border-box;font-size:16px;resize:vertical}
+.freetalk-summary {margin-top:10px}
+
+.freetalk-cleanup {display:flex;flex-wrap:wrap;gap:8px;align-items:center;overflow-wrap:anywhere;min-width:0}
+.freetalk-promotion {margin:12px 0;padding:12px;border:1px solid var(--line,#ddd);border-radius:10px;min-width:0;overflow-wrap:anywhere}
+.freetalk-promotion > label {display:block;margin:8px 0}
+.freetalk-promotion input[data-promotion-field] {width:100%;box-sizing:border-box;font-size:16px}
+.freetalk-promotion fieldset {min-width:0;margin:10px 0}
+.freetalk-promotion .chk {overflow-wrap:anywhere;min-width:0}
+
+/* 設定の再描画ではブラウザのアンカー補正で位置を変えない。 */
+.settings-view{overflow-anchor:none}
+
 html[lang="zh-TW"] .pane.dropping::after{content:"拖到這裡即可交付"}
 html[lang="zh-TW"] .chat.dropping::after{content:"拖到這裡即可加入指示欄"}
 html[lang="zh-TW"] .view.dropping::after{content:"拖到這裡即可新增參考資料夾（AI 只讀取）"}
-
-/* Settings redraws preserve their own position instead of choosing a new anchor. */
-.settings-view{overflow-anchor:none}

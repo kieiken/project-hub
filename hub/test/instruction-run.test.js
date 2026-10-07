@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const chat = require('../lib/chat'), instructions = require('../lib/instructions');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-rules-run-'));

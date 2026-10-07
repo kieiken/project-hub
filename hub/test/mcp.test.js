@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 // ChatGPT 連携（版1）：mcp.js を本当に起動し、標準入出力の JSON-RPC で Hub の道具を呼ぶ
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -69,7 +71,7 @@ test('初期化・ping・知らない名前は JSON-RPC の決まりどおりに
 
 test('ChatGPT アプリ（Codex）の設定ファイルに Hub の道具を登録できる（2回目は足さない）', async () => {
   const home = process.env.HUB_AI_HOME, file = path.join(home, '.codex', 'config.toml');
-  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'model = "gpt-6.1-sol"\n');
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'model = "gpt-6.1-sol"\n# checkout: project-hub\n');
   const BASE = `http://127.0.0.1:${port}`;
   const j = async (u, b) => (await fetch(BASE + u, b ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub': '1' }, body: JSON.stringify(b) } : { headers: { 'X-Hub': '1' } })).json();
   assert.strictEqual((await j('/api/chatgpt')).registered, false);

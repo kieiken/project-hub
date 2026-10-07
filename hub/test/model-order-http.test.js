@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'model-order-http-'));
 process.env.HUB_ROOT=root;process.env.HUB_DRY_RUN='1';process.env.HUB_AI_HOME=path.join(root,'home');const port=49000+Math.floor(Math.random()*500);process.env.HUB_PORT=String(port);

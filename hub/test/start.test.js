@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -13,6 +15,20 @@ const port = 48000 + Math.floor(Math.random() * 1000), base = `http://127.0.0.1:
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
 let server, sessions;
 const post = (route, body) => fetch(base + route, { method: 'POST', headers: { 'X-Hub': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ project: 'サンプルアプリ', ...body }) });
+async function recordedArgs(pdir, task, captured, timeout = 3000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    // ChatRunnerは子のclose後にassistant行を保存する。存在だけでは書込完了を保証しない。
+    const rows = chat.read(pdir, task), sent = rows.findLastIndex(row => row.role === 'user');
+    const completed = sent < 0 ? undefined : rows.slice(sent + 1).find(row => row.role === 'assistant');
+    if (completed) {
+      assert.ok(!completed.error, `模擬CLIが失敗した：${completed.error}`);
+      return JSON.parse(fs.readFileSync(captured, 'utf8'));
+    }
+    assert.ok(Date.now() < deadline, '模擬CLIの完了通知が期限内に届かない');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
 test.before(async () => {
   fs.mkdirSync(path.join(root, '_hub'), { recursive: true });
   fs.cpSync(path.join(__dirname, '../seed/サンプルアプリ'), pdir, { recursive: true });
@@ -22,6 +38,29 @@ test.before(async () => {
   await new Promise(resolve => server.listen(port, '127.0.0.1', resolve));
 });
 test.after(async () => { sessions.stopAll(); await new Promise(resolve => server.close(resolve)); fs.rmSync(tmp, { recursive: true, force: true }); });
+
+test('模擬CLIの引数は空・書込済みでも対象会話の完了まで読まず、子失敗と期限切れを検出する', async () => {
+  const captured = path.join(tmp, 'sync-argv.json'), task = 'capture-sync';
+  fs.writeFileSync(captured, '');
+  chat.append(tmp, task, { role: 'assistant', text: '前回の完了' });
+  chat.append(tmp, task, { role: 'user', text: '今回' });
+  let settled = false;
+  const waiting = recordedArgs(tmp, task, captured);
+  waiting.then(() => { settled = true; }, () => { settled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false, '空ファイルや過去の完了では読み進まない');
+  const args = ['--model', 'gpt-6.1-sol'];
+  fs.writeFileSync(captured, JSON.stringify(args));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled, false, '書込完了だけで子の成功を扱わない');
+  chat.append(tmp, task, { role: 'assistant', error: '', text: '完了' });
+  assert.deepEqual(await waiting, args);
+  chat.append(tmp, task, { role: 'user', text: '失敗する子' });
+  chat.append(tmp, task, { role: 'assistant', error: '終了コード 7' });
+  await assert.rejects(recordedArgs(tmp, task, captured), /模擬CLIが失敗した：終了コード 7/);
+  chat.append(tmp, task, { role: 'user', text: '完了しない子' });
+  await assert.rejects(recordedArgs(tmp, task, captured, 30), /完了通知が期限内に届かない/);
+});
 
 test('画像を作業フォルダへコピーし、選択したCodexの-i・担当・モデル・思考・前回選択を保存する', async () => {
   const upload = await fetch(base + '/api/start/image?project=' + encodeURIComponent('サンプルアプリ') + '&name=test.png', { method: 'POST', headers: { 'X-Hub': '1' }, body: png });
@@ -104,9 +143,7 @@ test('子作業のSol・高は保存・再読込・会話とターミナルの�
     assert.equal(term.args[term.args.indexOf('--model') + 1], 'gpt-6.1-sol'); assert.ok(term.args.includes('model_reasoning_effort=high'));
     const chatRes = await post('/api/chat/send', { task: child.id, ai: 'codex', text: '子作業の確認' }), result = await chatRes.json();
     assert.equal(chatRes.status, 200, result.error); assert.equal(result.model, 'GPT-6.1-Sol'); assert.equal(result.effort, '高');
-    const deadline = Date.now() + 3000;
-    while (!fs.existsSync(captured)) { assert.ok(Date.now() < deadline, '模擬CLIが引数を記録しない'); await new Promise(r => setTimeout(r, 10)); }
-    const args = JSON.parse(fs.readFileSync(captured, 'utf8'));
+    const args = await recordedArgs(pdir, child.id, captured);
     assert.equal(args[args.indexOf('--model') + 1], 'gpt-6.1-sol'); assert.ok(args.includes('model_reasoning_effort=high'));
     check(new Store(root).readTask(fresh.taskFile('サンプルアプリ', child.id)));
     assert.equal(fs.readFileSync(rolesFile, 'utf8'), roleText);
@@ -183,9 +220,7 @@ test('設定したClaude Opus中の子/分岐は保存・再読込・模擬会�
       assert.equal(term.args[term.args.indexOf('--model') + 1], 'claude-opus-5-5'); assert.equal(term.args[term.args.indexOf('--effort') + 1], 'medium');
       if (kind === 'main') {
         const chatRes = await post('/api/chat/send', { task: made.id, ai: 'claude', text: '設定起動確認' }); assert.equal(chatRes.status, 200);
-        const deadline = Date.now() + 3000;
-        while (!fs.existsSync(captured)) { assert.ok(Date.now() < deadline); await new Promise(r => setTimeout(r, 10)); }
-        const args = JSON.parse(fs.readFileSync(captured));
+        const args = await recordedArgs(pdir, made.id, captured);
         assert.equal(args[args.indexOf('--model') + 1], 'claude-opus-5-5'); assert.equal(args[args.indexOf('--effort') + 1], 'medium');
       }
     }
@@ -193,4 +228,69 @@ test('設定したClaude Opus中の子/分岐は保存・再読込・模擬会�
     for (const old of p.tasks) assert.deepEqual(after.tasks.find(x => x.id === old.id), old);
     assert.deepEqual(after.startSpec, p.startSpec);
   } finally { fs.writeFileSync(rolesFile, oldRoles); process.env.PATH = oldPath; }
+});
+
+test('問題解決APIは最新構造を再確認して親なし作業を初期AIで始め、停止中の同じ作業を再利用する', async () => {
+  const { Store } = require('../lib/store'), { MARKER } = require('../lib/problem-resolution');
+  const pid = '修復API確認', dir = path.join(root, 'Product', pid), fresh = new Store(root);
+  fs.cpSync(path.join(__dirname, '../seed/サンプルアプリ'), dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'PROJECT.md'), '---\nname: 修復API確認\nphases: []\nfolders: {}\nrelated: []\n---\n');
+  fresh.updateTask(pid, 'sample-app-01', { workdir: '' });
+  const settings = path.join(root, '_hub/model-view.json'), before = fs.existsSync(settings) ? fs.readFileSync(settings) : null;
+  const solve = body => post('/api/maintenance/solve', { project: pid, ...body });
+  try {
+    const beforeTasks = fresh.readProject(pid).tasks.length;
+    const clear = await solve({ checks: [{ ok: false, name: '画面の古い結果' }] });
+    assert.equal(clear.status, 200); assert.equal((await clear.json()).clear, true);
+    assert.equal(fresh.readProject(pid).tasks.length, beforeTasks);
+    const manual = fresh.createTask(pid, { title: '問題解決' });
+    fresh.updateTask(pid, manual.id, { workdir: path.join(tmp, 'missing-workdir') });
+    const pick = await post('/api/models/initial', { ai: 'claude', model: 'Opus 5.5', effort: '高' }); assert.equal(pick.status, 200);
+    const madeRes = await solve({ ai: 'codex', text: '信用しない画面の依頼' }), made = await madeRes.json();
+    assert.equal(madeRes.status, 200, made.error); assert.equal(made.reused, false);
+    let p = fresh.readProject(pid), t = p.tasks.find(t => t.id === made.task);
+    assert.notEqual(t.id, manual.id); assert.equal(t.title, '問題解決'); assert.equal(t.parent, ''); assert.equal(t.via, MARKER);
+    assert.equal(t.model, 'Opus 5.5'); assert.equal(t.owner, 'claude-code'); assert.equal(t.effort, '高');
+    assert.equal(made.turn.command, 'claude'); assert.equal(made.turn.args[made.turn.args.indexOf('--model') + 1], 'claude-opus-5-5');
+    assert.ok(made.turn.stdin.includes('× 作業場所：問題解決'));
+    assert.ok(made.turn.stdin.includes('Gitへ保存'));
+    assert.ok(!made.turn.stdin.includes('信用しない画面の依頼')); assert.ok(!made.turn.stdin.includes('画面の古い結果'));
+    const receipt = JSON.parse(fs.readFileSync(path.join(dir, '.ai/start-request.json')));
+    assert.equal(receipt.task, made.task); assert.match(receipt.request, /^maintenance-/);
+    const again = await (await solve()).json(); assert.equal(again.task, made.task); assert.equal(again.reused, true);
+    assert.equal(fresh.readProject(pid).tasks.length, p.tasks.length);
+    assert.notEqual(JSON.parse(fs.readFileSync(path.join(dir, '.ai/start-request.json'))).request, receipt.request);
+    // すでに動いている同じ解決作業へは移動だけ。別の作業の稼働中は拒否。
+    const running = { exited: false, started: Date.now(), lastOut: Date.now() }, key = sessions.key(pid, made.task, 'claude');
+    sessions.map.set(key, running);
+    try { const r = await solve(); assert.equal(r.status, 200); assert.equal((await r.json()).active, true); }
+    finally { sessions.map.delete(key); }
+    const otherKey = sessions.key(pid, manual.id, 'claude'); sessions.map.set(otherKey, running);
+    try { const r = await solve(); assert.equal(r.status, 409); assert.match((await r.json()).error, /AIまたは検証/); }
+    finally { sessions.map.delete(otherKey); }
+    fresh.updateTask(pid, manual.id, { workdir: '' });
+    assert.equal((await (await solve()).json()).clear, true);
+    const approval = await post('/api/task/completion', { project: pid, task: t.id, action: 'approve', confirm: true, expectedHash: fresh.readTask(fresh.taskFile(pid, t.id)).completionHash });
+    assert.equal(approval.status, 200);
+    fresh.updateTask(pid, manual.id, { workdir: path.join(tmp, 'missing-again') });
+    const next = await (await solve()).json(); assert.notEqual(next.task, t.id); assert.equal(next.reused, false);
+  } finally {
+    if (before) fs.writeFileSync(settings, before); else if (fs.existsSync(settings)) fs.unlinkSync(settings);
+  }
+});
+
+test('問題解決APIは多数の×を省略せず渡し、通常の開始APIは4000文字上限を維持する', async () => {
+  const { Store } = require('../lib/store');
+  const pid = '多数修復確認', dir = path.join(root, 'Product', pid), fresh = new Store(root);
+  fs.cpSync(path.join(__dirname, '../seed/サンプルアプリ'), dir, { recursive: true });
+  const file = path.join(dir, 'PROJECT.md');
+  // 不在の関連プロジェクトを長い名前で列挙し、構造の失敗だけで4000文字を越える。
+  const names = Array.from({ length: 80 }, (_, i) => '欠落' + i + '長い関連名'.repeat(15));
+  fs.writeFileSync(file, '---\nname: 多数修復確認\nphases: []\nfolders: {}\nrelated: ' + JSON.stringify(names) + '\n---\n');
+  const res = await post('/api/maintenance/solve', { project: pid }), r = await res.json();
+  assert.equal(res.status, 200, r.error);
+  for (const name of names) assert.ok(r.turn.stdin.includes('× 関連プロジェクト：' + name), name);
+  const count = fresh.readProject(pid).tasks.length;
+  const normal = await post('/api/start', { project: pid, ai: 'codex', model: 'GPT-6.1-Sol', images: [], text: 'x'.repeat(4001) });
+  assert.equal(normal.status, 400); assert.equal(fresh.readProject(pid).tasks.length, count);
 });

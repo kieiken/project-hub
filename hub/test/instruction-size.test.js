@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -141,4 +143,11 @@ test('統合した保持は未知値や低い値で解除しない', () => {
   state.observe(usage([general(100), fable(100)], now + 3)); assert.ok(state.active());
   state.observe(usage([general(50), fable(50)], now + 1)); assert.ok(state.active());
   state.observe(usage([general(50), { ...fable(50), id: 'model:2' }], now + 4)); assert.ok(state.active()); state.clear(); assert.equal(state.active(), null);
+});
+
+test('成果と保管ルールは全PJの全文・固定1行と新規ひな形・設計に同文で届く',()=>{
+ const { ARTIFACT_POLICY }=require('../lib/artifact-policy');
+ const text=prompt(),full=fs.readFileSync(path.join(dir,'.ai/chat/existing.rules.md'),'utf8');
+ assert.ok(full.includes(ARTIFACT_POLICY));assert.match(full,/内部で必要な同内容ファイルは間引かない/);assert.match(full,/未受領の内容があるフォルダは残す/);assert.match(text,/成果は作業ファイルの ## 成果 に書く。ZIPは配布時だけ/);
+ for(const file of ['../../docs/project-hub/templates/project/.ai/rules.md','../../docs/project-hub/DESIGN.md'])assert.ok(fs.readFileSync(path.join(__dirname,file),'utf8').includes(ARTIFACT_POLICY));
 });

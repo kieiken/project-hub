@@ -5,9 +5,11 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 const UPSTREAM = 'kieiken/project-hub';
+const TRANSLATION_MODEL = 'gpt-6.1-sol';
 const PUBLIC = /^(?:(?:README(?:\.zh-TW)?\.md|CONTRIBUTING(?:\.zh-TW)?\.md|THIRD_PARTY_NOTICES(?:\.zh-TW)?\.md|LICENSE|\.gitignore)$|hub\/|docs\/project-hub\/templates\/|docs\/screenshots\/[^/]+-redacted\.png$|scripts\/|\.github\/)/;
 const PRIVATE = /(?:^|\/)(?:node_modules|\.git|public-release|Inbox|\.env(?:\.[^/]*)?|\.npmrc|\.dev\.vars(?:\.[^/]*)?|\.claude|\.codex)(?:\/|$)|(?:^|\/)\.ai\/(?:chat|handoff|work)(?:\/|$)|\.(?:pem|key|log)$/;
-const safe = file => PUBLIC.test(file) && !PRIVATE.test(file) && !file.split('/').includes('..');
+const safe = file => PUBLIC.test(file) && !PRIVATE.test(file) && !file.split('/').includes('..') &&
+  (!file.split('/').includes('.ai') || /^docs\/project-hub\/templates\/(?:zh-TW\/)?project\/\.ai\//.test(file) || /^hub\/seed(?:-zh-TW)?\//.test(file));
 const redact = text => String(text || '').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,})\b/g, '[redacted]');
 
 function run(file, args, options = {}) {
@@ -64,8 +66,27 @@ function createAutomation(options = {}) {
     if (!enabled) throw Error('Automatic Traditional Chinese translation is not enabled');
     await guard();
     const stage = checkStage(source);
+    // B ports the workflow only. C supplies the catalogs and locale boundaries.
+    if (!fs.existsSync(path.join(stage, 'hub/locales/zh-TW.json')) || !fs.existsSync(path.join(stage, 'hub/lib/locale.js'))) throw Error('Traditional Chinese support is not installed yet (C)');
+    if (env.HUB_TRANSLATION_MODEL && env.HUB_TRANSLATION_MODEL !== TRANSLATION_MODEL) throw Error('Translation requires gpt-6.1-sol');
     const work = path.join(path.dirname(stage), 'translation');
     fs.mkdirSync(work, { recursive: true });
+    // The local repository also contains private ledgers/history. Give Codex a
+    // public-only copy with a fresh history, then copy reviewed changes back.
+    const checkout = path.join(work, 'source');
+    fs.mkdirSync(checkout);
+    const files = (await gitAt(stage, ['ls-files', '-z'])).stdout.split('\0').filter(safe);
+    for (const file of files) {
+      const input = path.join(stage, file);
+      if (!fs.existsSync(input)) continue;
+      if (fs.lstatSync(input).isSymbolicLink() || fs.realpathSync(input) !== input) throw Error('Public translation source cannot contain symbolic links');
+      fs.mkdirSync(path.dirname(path.join(checkout, file)), { recursive: true });
+      fs.copyFileSync(input, path.join(checkout, file));
+      fs.chmodSync(path.join(checkout, file), fs.statSync(input).mode & 0o777);
+    }
+    await gitAt(checkout, ['init', '-q']);
+    await gitAt(checkout, ['add', '--all']);
+    await gitAt(checkout, ['-c', 'user.name=Project Hub', '-c', 'user.email=hub@localhost', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', 'commit', '--no-verify', '-qm', 'Public translation input']);
     const schema = path.join(work, 'result.schema.json');
     const result = path.join(work, 'result.json');
     fs.writeFileSync(schema, JSON.stringify({ type: 'object', additionalProperties: false, properties: { completed: { type: 'boolean' }, summary: { type: 'string' }, unresolved: { type: 'array', items: { type: 'string' } } }, required: ['completed', 'summary', 'unresolved'] }));
@@ -82,15 +103,25 @@ function createAutomation(options = {}) {
       'Do not install tools, change agent configuration, bypass approvals/sandbox, or change unrelated code. Do not run network commands. You may read/edit source and run local syntax checks. The parent will install dependencies, run the complete tests, verify the app, commit public files and publish the PR.',
       'Leave the final response in the required schema. completed=true only after translation and all merge conflict markers are resolved. Describe any actual unresolved item; do not invent success.',
     ].join('\n\n');
-    const args = ['-a', 'never', 'exec', '--ignore-user-config', '--ephemeral', '-s', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=false', '-C', stage, '--output-schema', schema, '-o', result, '--json', '-'];
-    if (env.HUB_TRANSLATION_MODEL) args.splice(args.length - 1, 0, '--model', env.HUB_TRANSLATION_MODEL);
-    await exec(code, args, { cwd: stage, env: translationEnv(), input: prompt, timeout: 30 * 60 * 1000 });
+    const args = ['-a', 'never', 'exec', '--ignore-user-config', '--ephemeral', '-s', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=false', '-C', checkout, '--output-schema', schema, '-o', result, '--json', '-'];
+    args.splice(args.length - 1, 0, '--model', TRANSLATION_MODEL);
+    await exec(code, args, { cwd: checkout, env: translationEnv(), input: prompt, timeout: 30 * 60 * 1000 });
     const report = JSON.parse(fs.readFileSync(result, 'utf8'));
     if (report.completed !== true || !Array.isArray(report.unresolved) || report.unresolved.length) throw Error('Traditional Chinese translation is incomplete');
-    const changes = [...new Set((await gitAt(stage, ['diff', '--name-only', '-z'])).stdout.split('\0').concat(
-      (await gitAt(stage, ['diff', '--cached', '--name-only', '-z'])).stdout.split('\0'),
-      (await gitAt(stage, ['ls-files', '--others', '--exclude-standard', '-z'])).stdout.split('\0')).filter(Boolean))];
+    const changes = [...new Set((await gitAt(checkout, ['diff', '--name-only', '-z'])).stdout.split('\0').concat(
+      (await gitAt(checkout, ['diff', '--cached', '--name-only', '-z'])).stdout.split('\0'),
+      (await gitAt(checkout, ['ls-files', '--others', '--exclude-standard', '-z'])).stdout.split('\0')).filter(Boolean))];
     if (changes.some(file => !safe(file))) throw Error('Translation changes include non-public files');
+    // Validate every result before copying any of them to the installation source.
+    for (const file of changes) {
+      const input = path.join(checkout, file);
+      if (fs.existsSync(input) && (fs.lstatSync(input).isSymbolicLink() || fs.realpathSync(input) !== input)) throw Error('Translation changes cannot contain symbolic links');
+    }
+    for (const file of changes) {
+      const input = path.join(checkout, file), output = path.join(stage, file);
+      if (!fs.existsSync(input)) fs.rmSync(output, { force: true });
+      else { fs.mkdirSync(path.dirname(output), { recursive: true }); fs.copyFileSync(input, output); fs.chmodSync(output, fs.statSync(input).mode & 0o777); }
+    }
     if (changes.length) await gitAt(stage, ['add', '--', ...changes]);
     await gitAt(stage, ['diff', '--check']);
     return { translated: true, summary: report.summary };
@@ -110,7 +141,7 @@ function createAutomation(options = {}) {
     await guard();
     const stage = checkStage(source);
     if (!/^[A-Za-z0-9_-]+\/project-hub$/.test(fork) || fork === UPSTREAM) throw Error('A reviewed writable project-hub fork is required');
-    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch) || branch.includes('..')) throw Error('Translation branch is invalid');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(branch) || branch.includes('..') || branch === 'main') throw Error('Translation branch is invalid');
     if ((await gitAt(stage, ['status', '--porcelain'])).stdout.trim()) throw Error('Only tested committed source can be published');
     await exec(process.execPath, ['scripts/export-public.js'], { cwd: stage, env, timeout: 120000 });
     const metadata = JSON.parse((await exec(gh, ['api', `repos/${fork}`], { cwd: stage, env })).stdout);
@@ -118,7 +149,19 @@ function createAutomation(options = {}) {
     const listArgs = ['pr', 'list', '--repo', UPSTREAM, '--head', `${fork.split('/')[0]}:${branch}`, '--state', 'open', '--json', 'number,url,baseRefName,headRefOid'];
     const list = JSON.parse((await exec(gh, listArgs, { cwd: stage, env })).stdout);
     if (list.some(pr => pr.baseRefName !== 'main')) throw Error('The existing translation PR has a different target branch');
-    await gitAt(stage, ['push', `https://github.com/${fork}.git`, `HEAD:refs/heads/${branch}`]);
+    if (list.length > 1) throw Error('Multiple translation PRs need manual resolution');
+    // Never push the installation repository: it can contain private Git history.
+    const exported = path.join(stage, 'public-release', 'ProjectHub');
+    const publication = fs.mkdtempSync(path.join(path.dirname(stage), 'publication-'));
+    const checkout = path.join(publication, 'source');
+    await exec(git, ['clone', '--single-branch', '--branch', list.length ? branch : metadata.default_branch || 'main', `https://github.com/${fork}.git`, checkout], { env });
+    for (const name of fs.readdirSync(checkout)) if (name !== '.git') fs.rmSync(path.join(checkout, name), { recursive: true, force: true });
+    for (const name of fs.readdirSync(exported)) fs.cpSync(path.join(exported, name), path.join(checkout, name), { recursive: true });
+    await gitAt(checkout, ['add', '--all']);
+    await gitAt(checkout, ['diff', '--check']);
+    if ((await gitAt(checkout, ['diff', '--cached', '--name-only'])).stdout.trim()) await gitAt(checkout, ['-c', 'user.name=Project Hub', '-c', 'user.email=hub@localhost', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', 'commit', '--no-verify', '-m', 'Synchronize reviewed public source']);
+    const head = (await gitAt(checkout, ['rev-parse', 'HEAD'])).stdout.trim();
+    await gitAt(checkout, ['push', 'origin', `HEAD:refs/heads/${branch}`]);
     const bodyFile = path.join(path.dirname(stage), 'translation-pr.md');
     fs.writeFileSync(bodyFile, [
       'This update keeps the opt-in Traditional Chinese edition synchronized with the original Project Hub source.',
@@ -132,7 +175,6 @@ function createAutomation(options = {}) {
     if (list.length) await exec(gh, ['pr', 'edit', String(list[0].number), '--repo', UPSTREAM, '--title', title, '--body-file', bodyFile], { cwd: stage, env });
     else await exec(gh, ['pr', 'create', '--repo', UPSTREAM, '--base', 'main', '--head', `${fork.split('/')[0]}:${branch}`, '--title', title, '--body-file', bodyFile], { cwd: stage, env });
     const readback = JSON.parse((await exec(gh, listArgs, { cwd: stage, env })).stdout);
-    const head = (await gitAt(stage, ['rev-parse', 'HEAD'])).stdout.trim();
     if (readback.length !== 1 || readback[0].baseRefName !== 'main' || readback[0].headRefOid !== head || !readback[0].url?.startsWith(`https://github.com/${UPSTREAM}/pull/`)) throw Error('Translation PR readback did not match the tested source and authorized upstream');
     return { prUrl: readback[0].url };
   }

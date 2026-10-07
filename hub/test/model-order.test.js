@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const order = require('../public/model-order'), { ModelView } = require('../lib/model-view');
@@ -24,7 +26,7 @@ test('新候補は同AIの最後へ、消失・非表示・復帰で既存の位
 test('並びと非表示を相互保持、未知の設定も保持、再生成後も同じ。リセットは非表示を保持',t=>{
   const {file,view}=fixture(t);fs.writeFileSync(file,JSON.stringify({hidden:{codex:['Sol']},future:{keep:true}}));
   assert.equal(view.setOrder(mixed,defaults,models).error,undefined);view.setHidden('claude-code','Fable',true);
-  const again=new ModelView(file);assert.deepEqual(again.saved(),mixed);assert.deepEqual(again.hidden(),{'claude-code':['Fable'],codex:['Sol'],agy:[]});assert.deepEqual(JSON.parse(fs.readFileSync(file)).future,{keep:true});
+  const again=new ModelView(file);assert.deepEqual(again.saved(),mixed);assert.deepEqual(again.hidden(),{'claude-code':['Fable'],codex:['Sol'],agy:[],grok:[]});assert.deepEqual(JSON.parse(fs.readFileSync(file)).future,{keep:true});
   again.setHidden('codex','Sol',false);assert.deepEqual(again.saved(),mixed);
   assert.equal(again.setOrder([],mixed,models).error,undefined);assert.deepEqual(again.hidden()['claude-code'],['Fable']);assert.deepEqual(order.ordered(models,again.saved()),defaults);
 });

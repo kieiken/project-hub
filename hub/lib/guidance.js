@@ -1,6 +1,6 @@
 'use strict';
+const { lt } = require('./locale');
 
-const { lt, label } = require('./locale');
 // 画面を見たという主張をせず、public/app.js と同じ表示条件を伝える。
 const name = value => String(value || '').replace(/[\r\n]+/g, ' ');
 function guidance(p, t, { where = 'chat', copy = false, copyMissing = false, mergeExcluded = t.mergeExcluded, projects = [p] } = {}) {
@@ -19,10 +19,11 @@ function guidance(p, t, { where = 'chat', copy = false, copyMissing = false, mer
     lt('作業1つの完了に全体完了を勧めない。AI稼働中は完了承認を断られるので「この返事が終わってから」と案内する。フェーズ・全体の完了も、そのプロジェクトのAI終了後に行う。'),
     lt('ボタン名の無い停止や終了の操作を頼まない。人に止めてもらう必要がある時は、理由・場所（作業画面の［ターミナル］の、その AI の欄）・ボタン（［停止］）を書く。画面を切り替えただけでは止まらない。'),
     lt`【操作情報（${where === 'terminal' ? lt('ターミナル') : lt('会話画面')}からの依頼を受け取った時点。順番待ち・作業中に変わるため現在の画面と一致する時だけ案内）】`,
-    lt`プロジェクト「${name(p.name)}」／作業「${name(t.title)}」／状態：${name(label(t.state))}／手順 ${stepCount}/${(t.steps || []).length}`,
+    lt`プロジェクト「${name(p.name)}」／作業「${name(t.title)}」／状態：${name(t.state)}／手順 ${stepCount}/${(t.steps || []).length}`,
     where === 'terminal' ? lt('人はターミナルか別の画面を見ている可能性がある。作業画面を開いているとは断定しない。') : lt('この作業の会話画面なら、以下の作業操作はその画面の上部でできる。'),
   ];
   if (t.question && t.state !== '完了') lines.push(lt('作業の完了：質問への返事が先。完了の操作はまだ出ない。まず質問に答える。'));
+  else if (t.resultsPending) lines.push(t.resultsPending.auto === 'running' ? lt('作業の完了：AIが成果の記録を整えています。整ってから完了確認が出ます。') : lt('作業の完了：成果の記録が整っていません。上部の帯の［成果の整理を頼む］でAIへ依頼できます。'));
   else if (t.completionPending) lines.push(lt('作業の完了：作業画面の上部に黄色い帯「AI が手順をすべて済にしました。完了に移しますか？」と［完了に移す］［まだ続ける］がある。作業一覧の行の下、［あなたの番］の［完了確認］にも同じ操作がある。'));
   else if (t.state === '完了') lines.push(lt('作業の完了：完了済み。続ける時は作業画面の上部に［再開する］がある。'));
   else lines.push(lt('作業の完了：作業画面の上部に［完了に移す］がある（今は確認の黄色い帯なし）。'));
@@ -36,8 +37,8 @@ function guidance(p, t, { where = 'chat', copy = false, copyMissing = false, mer
   else if (copy) lines.push(mergeExcluded ? lt('取り込み：対象から外してある。作業画面の名前の右に［取り込み対象に戻す］がある。') : lt('取り込み：作業画面の名前の右に［本体に取り込む］がある。AI終了後、確認結果を見て行う。'));
   else lines.push(lt('取り込み：この時点では作業用コピーが無く、取り込みは不要。'));
   const target = require('../public/project-order').taskTarget(p,t,projects);
-  if (target) lines.push(graph.finished(t)&&!t.question?lt`引渡し：作業画面の名前の右に［成果を渡す］がある。渡す先は「${name((integrators[0]||target).task.title)}」。AI終了後に成果ファイルを選ぶ。渡す操作は通知だけでコピーと会話は残し、祖先の［統合…］が成功した後に片付ける。`:lt('引渡し：完了条件を満たすと作業画面の名前の右に［成果を渡す］が出る。今は手順・質問を済ませる。祖先は引渡し操作なしでも完了子の成果を拾える。'));
-  if(projects.some(q=>q.tasks?.some(x=>graph.canIntegrate({project:p,task:t},q,x,projects)&&graph.finished(x))))lines.push(lt('子作業の統合：作業画面の上部「子作業の成果」に［統合…］がある。AI終了後に成果・順番・片付けを確認し、成功した子だけゴミ箱へ移す。'));
+  if (target) lines.push(graph.finished(t)&&!t.question&&!t.resultsPending?lt`引渡し：作業画面の名前の右に［成果を渡す］がある。渡す先は「${name((integrators[0]||target).task.title)}」。AIが成果を整理する。人は内容説明を確認して渡す。渡す操作は通知だけでコピーと会話は残し、祖先の［統合…］が成功した後に片付ける。`:lt('引渡し：完了条件を満たすと作業画面の名前の右に［成果を渡す］が出る。今は手順・質問を済ませる。祖先は引渡し操作なしでも完了子の成果を拾える。'));
+  if(projects.some(q=>q.tasks?.some(x=>graph.canIntegrate({project:p,task:t},q,x,projects)&&graph.finished(x))))lines.push(lt('子作業の統合：上部「子作業の成果」［統合…］。AI終了後、内容説明を見て［統合して片付ける］。記録なしは［この子のAIに成果の整理を頼む］。'));
   lines.push(lt('本作業で成果を受け取ったら、必要に応じGitHubへの更新・ソフトやホームページの本番適用の対象と変更内容・検証結果を確認し、人へ最終確認する。引渡し・作業完了だけでpushや公開を実行しない。'));
   return lines.join('\n');
 }

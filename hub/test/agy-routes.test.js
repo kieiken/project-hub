@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -8,7 +10,7 @@ const { execFileSync } = require('node:child_process');
 const chat = require('../lib/chat');
 const { AGY_MODEL } = require('../lib/launch');
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-agy-api-'));
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'hub-agy-api-')));
 const root = path.join(tmp, 'workspace');
 const bin = path.join(tmp, 'bin');
 const port = 47000 + Math.floor(Math.random() * 1000);
@@ -64,7 +66,8 @@ test('Agy manual routes pin High while keeping the existing role assignment', as
   assert.equal(state.agyAvailable, true);
   assert.deepEqual(state.roles.models.agy, [AGY_MODEL.label]);
   assert.equal(state.roles.roles.find(x => x.name === 'コーディング').main.ai, 'codex');
-  const started = await (await post('/api/term/start', { ai: 'agy' })).json();
+  const response = await post('/api/term/start', { ai: 'agy' });
+  const started = await response.json(); assert.equal(response.status, 200, started.error);
   assert.equal(started.command, 'agy');
   assert.equal(started.model, AGY_MODEL.label);
   assert.equal(started.effort, '高');
@@ -125,4 +128,31 @@ test('Agy PTY can run beside both existing providers and hand off its own screen
     assert.equal(result.ok, true);
     assert.ok(!sessions.list().some(x => x.ai === 'agy' && x.running));
   } finally { sessions.stopAll(); }
+});
+
+test('saved Gemini roles generate policy, delegation examples and both integration delegates', async () => {
+  const roleFile = path.join(root, '_hub/roles.yaml'), original = fs.readFileSync(roleFile, 'utf8');
+  const {TaskIntegrate} = require('../lib/task-integrate'), savedResults = TaskIntegrate.prototype.resultsRequest, savedConflict = TaskIntegrate.prototype.conflictRequest;
+  try {
+    const {roles:data} = await (await fetch(base+'/api/state')).json();
+    for (const r of data.roles) if (['調査','コーディング','チェック','文章','デザイン'].includes(r.name)) r.main = {ai:'agy',model:AGY_MODEL.label,effort:'高'};
+    const response = await post('/api/roles',{roles:data.roles}); assert.equal(response.status,200);
+    const {Store}=require('../lib/store'), store=new Store(root), p=store.readProject(key.project), t=p.tasks.find(t=>t.id===key.task);
+    const {taskPrompt}=require('../server'), prompt=taskPrompt(p,t,store.taskFile(p.id,t.id),taskDir);
+    assert.match(prompt,/役割分担で Agy CLI が担当の役割/);
+    assert.match(prompt,/"ai":"agy","model":"gemini-3.1-pro-high"/);
+    const full=fs.readFileSync(path.join(taskDir,'.ai/chat',key.task+'.rules.md'),'utf8');
+    assert.match(full,/チェックは ai: agy・model: gemini-3.1-pro-high/);
+    assert.match(full,/同じ作業のagy・gemini-3.1-pro-highへ独立チェック/);
+    assert.match(full,/要修正は同じ作業のagy・gemini-3.1-pro-highへ戻す/);
+    // The integration request validation itself is covered by task-integrate tests.
+    // Stub only its request builder to verify each HTTP route uses the saved primary role.
+    for(const [route,method] of [['results','resultsRequest'],['resolve','conflictRequest']]) {
+      TaskIntegrate.prototype[method]=()=>({...key,text:'Gemini integration fixture',title:'fixture'});
+      const before=rows().filter(r=>r.role==='assistant').length;
+      const res=await post('/api/task/integrate/'+route);const result=await res.json();assert.equal(res.status,200,result.error);
+      assert.equal(result.model,AGY_MODEL.label);const replyRow=await reply(before+1);
+      assert.equal(replyRow.ai,'agy');assert.equal(replyRow.effort,'高');assert.ok(JSON.parse(replyRow.text).includes(AGY_MODEL.id));
+    }
+  } finally {fs.writeFileSync(roleFile,original); TaskIntegrate.prototype.resultsRequest=savedResults;TaskIntegrate.prototype.conflictRequest=savedConflict;}
 });

@@ -3,38 +3,56 @@ on:
   pull_request:
   workflow_dispatch:
   push:
-    branches: [main, feat/traditional-chinese-macos]
+    branches: [main]
 permissions:
   contents: read
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       HUB_SKIP_NPM: "1"
       HUB_SKIP_APP: "1"
+      TMPDIR: /private/tmp
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: "24"
       - name: Install locked dependencies
         run: npm --prefix hub ci --ignore-scripts
       - name: Verify terminal prebuild
-        run: node hub/node_modules/node-pty/scripts/prebuild.js
+        run: |
+          node hub/node_modules/node-pty/scripts/prebuild.js
+          node -e "require('./hub/node_modules/node-pty')"
       - name: Japanese and Traditional Chinese regressions
-        run: TMPDIR="$(cd "$RUNNER_TEMP" && pwd -P)" npm --prefix hub test
+        run: |
+          test "$(cd "$TMPDIR" && pwd -P)" = /private/tmp
+          env -u HUB_LANG npm --prefix hub test
+          env -u HUB_LANG node hub/test/task-integrate.test.js
+          HUB_LANG=zh-TW npm --prefix hub test
+          HUB_LANG=zh-TW node hub/test/task-integrate.test.js
+      - name: Inspect public sources for distribution
+        run: |
+          node scripts/export-public.js
+          cp -R hub/node_modules public-release/ProjectHub/hub/
       - name: Build portable Traditional Chinese App
         env:
           HUB_LANG: zh-TW
           HUB_BUNDLE_RUNTIME: "1"
           HUB_NO_DESKTOP_LINK: "1"
           HUB_APP_DIR: ${{ runner.temp }}/ProjectHub-build
-        run: bash hub/app/build-app.sh
+        run: |
+          test "$(uname -m)" = arm64
+          bash public-release/ProjectHub/hub/app/build-app.sh
       - name: Verify and package
         run: |
           APP="$RUNNER_TEMP/ProjectHub-build/Project Hub.app"
           codesign --verify --deep --strict "$APP"
+          test -f "$APP/Contents/Resources/runtime/hub/server.js"
+          /usr/libexec/PlistBuddy -c 'Print :HubDir' "$APP/Contents/Info.plist" | grep -Fx '@bundle/runtime/hub'
           ditto -c -k --sequesterRsrc --keepParent "$APP" Project-Hub-zh-TW-macOS-arm64.zip
           shasum -a 256 Project-Hub-zh-TW-macOS-arm64.zip > SHA256SUMS
       - uses: actions/upload-artifact@v7.0.1
@@ -43,4 +61,5 @@ jobs:
           path: |
             Project-Hub-zh-TW-macOS-arm64.zip
             SHA256SUMS
+          if-no-files-found: error
           retention-days: 30

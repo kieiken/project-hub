@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -128,4 +130,22 @@ setInterval(()=>{},1000);
     assert.equal(chat.readMeta(root, 't').sessions.agy, undefined);
     assert.equal(runner.busy('p', 't'), null);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Gemini role validation pins model and high effort, saves only roles and templates follow assignments', () => {
+  roles.setModelCatalog({agy:{models:[model]}}); const root = fixture();
+  try {
+    const file = path.join(root, 'roles.yaml'), before = 'models:\n  codex: [GPT-6.1-Sol]\nroles:\n  チェック: { main: [codex, GPT-6.1-Sol, 高], backup: [人] }\nswitch:\n  auto: true\n';
+    fs.writeFileSync(file,before); const data = roles.read(file).data;
+    data.roles[0].main = {ai:'agy',model:model.label,effort:'高'};
+    assert.equal(roles.write(file,data.roles).ok,true);
+    assert.equal(roles.read(file).data.roles[0].main.ai,'agy'); assert.ok(fs.readFileSync(file,'utf8').endsWith('switch:\n  auto: true\n'));
+    for (const slot of [{ai:'agy',model:model.label,effort:'MAX'},{ai:'agy',model:'other',effort:'高'},{ai:'chatgpt',model:model.label,effort:'高'}]) {
+      assert.ok(roles.validate({...data.models,agy:[model.label,'other']},[{...data.roles[0],main:slot}]).length);
+    }
+    const instructions = require('../lib/instructions');
+    assert.match(instructions.templates({roles:[...data.roles,{name:'コーディング',main:{ai:'agy',model:model.label,effort:'高'}}]}), /agy・gemini-3.1-pro-high/);
+    const defaults={roles:[{name:'チェック',main:{ai:'claude-code',model:'Fable 5.1'}},{name:'コーディング',main:{ai:'codex',model:'GPT-6.1-Sol'}}]};
+    assert.equal(instructions.templates(defaults),instructions.TEMPLATES);
+  } finally { roles.setModelCatalog({}); fs.rmSync(root,{recursive:true,force:true}); }
 });

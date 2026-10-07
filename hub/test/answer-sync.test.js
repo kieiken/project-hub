@@ -1,5 +1,6 @@
 'use strict';
-const uiLocale = require('./ui-locale-fixture');
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
 const chat = require('../lib/chat');
@@ -72,7 +73,7 @@ function ui() {
  const t={id:'answer',question,state:'返事待ち'},p={id:'p',tasks:[t]},slot={dataset:{question},innerHTML:'question'},badge={className:'pill',textContent:'返事待ち'},select={value:'返事待ち'},msgs={scrollTop:173};
  const retained={draft:'書きかけ',image:'見本画像',model:'GPT-6.1-Sol',effort:'極高'};
  const input={disabled:false},upper={querySelectorAll:()=>[input]},ask={dataset:{askKey:'old'},classList:{add:()=>{ask.done=true}},querySelector:()=>status},status={textContent:''};
- const c={UI:uiLocale(),view:{kind:'work',project:'p',task:'answer'},proj:()=>p,taskOf:()=>t,esc:x=>x,richText:x=>x,chatSending:new Set(),chatAttachmentKey:()=> 'p/answer',document:{querySelectorAll:()=>[ask]},updateAskControls:()=>{},refreshAsks:()=>{},askDrafts:new Map([['old','選択A']]),window:{HubMobile:{badges:()=>{c.badges++}}},stateLoadEpoch:0,badges:0,loads:0,tree:0,counts:0,toast:()=>{},updateTurnCounts:()=>{c.counts++},renderTree:()=>{c.tree++},load:async()=>{c.loads++},$:s=>({'#work-question':slot,'#msgs':msgs,'.whead .pill':badge,'.wfoot [data-act="state"]':select,'#ask-form':upper}[s])};vm.createContext(c);vm.runInContext(helper,c);return {c,t,p,slot,badge,select,msgs,retained,ask,status,input};
+ const c={UI:require('./ui-locale-fixture')(),view:{kind:'work',project:'p',task:'answer'},proj:()=>p,taskOf:()=>t,esc:x=>x,richText:x=>x,chatSending:new Set(),chatAttachmentKey:()=> 'p/answer',document:{querySelectorAll:()=>[ask]},updateAskControls:()=>{},refreshAsks:()=>{},askDrafts:new Map([['old','選択A']]),window:{HubMobile:{badges:()=>{c.badges++}}},stateLoadEpoch:0,badges:0,loads:0,tree:0,counts:0,toast:()=>{},updateTurnCounts:()=>{c.counts++},renderTree:()=>{c.tree++},load:async()=>{c.loads++},$:s=>({'#work-question':slot,'#msgs':msgs,'.whead .pill':badge,'.wfoot [data-act="state"]':select,'#ask-form':upper}[s])};vm.createContext(c);vm.runInContext(helper,c);return {c,t,p,slot,badge,select,msgs,retained,ask,status,input};
 }
 test('受付成功で上部と件数を即時更新し、下書きと読書位置は保持する',async()=>{
  const f=ui();await f.c.acceptedWorkAnswer(f.p,f.t,question,{answeredQuestion:question},'old');assert.equal(f.slot.innerHTML,'');assert.equal(f.badge.textContent,'実行中');assert.equal(f.select.value,'実行中');assert.equal(f.c.counts,1);assert.equal(f.c.badges,1);assert.equal(f.c.loads,1);assert.equal(f.c.stateLoadEpoch,1);assert.equal(f.msgs.scrollTop,173);assert.equal(f.ask.done,true);assert.deepEqual(f.retained,{draft:'書きかけ',image:'見本画像',model:'GPT-6.1-Sol',effort:'極高'});

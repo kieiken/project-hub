@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 function fixture(saved){
  const c={window:{}};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/chat-scroll.js'),'utf8'),c);

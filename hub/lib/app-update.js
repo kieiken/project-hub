@@ -1,33 +1,34 @@
 'use strict';
+const { lt } = require('./locale');
 
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { readPublic } = require('./update-check');
-const { locale } = require('./locale');
 const UPSTREAM = 'https://github.com/kieiken/project-hub';
 const DAY = 24 * 60 * 60 * 1000;
 const VERSION = /^\d+\.\d+\.\d+(?:[-+][\w.]+)?$/;
 const messages = {
-  unsupported: ['自動更新には Mac のアプリ・Git のソース・Storage Guard の設定が必要です', '自動更新需要設定 Mac App、含 Git 的原始碼與 Storage Guard'],
-  guard: ['Storage Guard が更新を止めました。今のアプリは変更していません', 'Storage Guard 已停止更新，原本的 App 保持不變'],
-  dirty: ['ソースに未保存の変更があります。保存するまで更新を待ちます', '原始碼有尚未提交的變更，提交前暫停更新'],
-  busy: ['AI・順番待ち・整理が終わるまで更新を待ちます', '等待 AI、排隊指示及整理結束後更新'],
-  changed: ['準備中にソースが変わりました。更新を準備し直します', '準備期間原始碼已變更，將重新準備更新'],
-  conflict: ['翻訳と上流の変更を安全に合わせられません。今のアプリは保持しています', '無法安全合併翻譯與上游變更，已保留原本的 App'],
-  invalid: ['上流の版・コミットを確認できません', '無法確認上游版本或 commit'],
-  download: ['上流を取得できませんでした。次の確認は24時間後です', '無法取得上游內容，24 小時後才會再次確認'],
-  prepare: ['更新の準備・翻訳・試験・組み立てに失敗しました。今のアプリは保持しています', '更新準備、翻譯、測試或編譯失敗，已保留原本的 App'],
-  install: ['アプリの入れ替えに失敗しました。前のアプリとバックアップを保持しています', 'App 替換失敗，已保留舊 App 與備份'],
-  publish: ['アプリは更新できましたが、元のプロジェクトへの PR を送れませんでした', 'App 已更新，但無法提交 PR 回原專案'],
-  state: ['アプリは更新できましたが、更新状態を保存できませんでした。前のアプリのバックアップは保持しています', 'App 已更新，但無法儲存更新狀態；已保留舊 App 備份'],
-  interrupted: ['前の更新は途中で止まりました。保存した版から続けます', '先前更新途中停止，將從已儲存的版本繼續'],
-  disabled: ['自動更新はオフです', '自動更新已關閉'],
-  restarting: ['アプリの更新を適用中です。少し待ってください', '正在套用 App 更新，請稍候'],
-  format: ['enabled は true または false にしてください', 'enabled 必須為 true 或 false'],
+  unsupported: '自動更新には Mac のアプリ・Git のソース・Storage Guard の設定が必要です',
+  guard: 'Storage Guard が更新を止めました。今のアプリは変更していません',
+  dirty: 'ソースに未保存の変更があります。保存するまで更新を待ちます',
+  busy: 'AI・順番待ち・整理が終わるまで更新を待ちます',
+  changed: '準備中にソースが変わりました。更新を準備し直します',
+  conflict: '翻訳と上流の変更を安全に合わせられません。今のアプリは保持しています',
+  invalid: '上流の版・コミットを確認できません',
+  download: '上流を取得できませんでした。次の確認は24時間後です',
+  prepare: '更新の準備・翻訳・試験・組み立てに失敗しました。今のアプリは保持しています',
+  install: 'アプリの入れ替えに失敗しました。前のアプリとバックアップを保持しています',
+  publish: 'アプリは更新できましたが、元のプロジェクトへの PR を送れませんでした',
+  state: 'アプリは更新できましたが、更新状態を保存できませんでした。前のアプリのバックアップは保持しています',
+  interrupted: '前の更新は途中で止まりました。保存した版から続けます',
+  disabled: '自動更新はオフです',
+  restarting: 'アプリの更新を適用中です。少し待ってください',
+  format: 'enabled は true または false にしてください',
+  retry: '翻訳の次の試行は24時間後です。今のアプリは保持しています',
 };
-const message = key => (messages[key] || messages.prepare)[locale() === 'zh-TW' ? 1 : 0];
+const message = key => lt(messages[key] || messages.prepare);
 const readJSON = file => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return {}; } };
 function writeJSON(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -92,7 +93,7 @@ class AppUpdate {
   supported() {
     try {
       return this.platform === 'darwin' && path.isAbsolute(this.source || '') && fs.existsSync(path.join(this.source, '.git')) &&
-        path.isAbsolute(this.appPath) && path.basename(this.appPath) === 'Project Hub.app' && fs.existsSync(path.dirname(this.appPath)) && Boolean(this.env.HUB_STORAGE_GUARD || this.build);
+        path.isAbsolute(this.appPath) && path.basename(this.appPath) === 'Project Hub.app' && fs.existsSync(path.dirname(this.appPath)) && Boolean(this.env.HUB_STORAGE_GUARD);
     } catch { return false; }
   }
   version(source = this.source) { const version = String(readJSON(path.join(source || '', 'hub', 'package.json')).version || ''); return VERSION.test(version) ? version : ''; }
@@ -120,6 +121,7 @@ class AppUpdate {
   }
   due() { const last = Date.parse(this.data.lastCheck || this.data.lastAttempt || ''); return !Number.isFinite(last) || this.now() - last >= DAY; }
   publishDue() { const last = Date.parse(this.data.lastPublishAttempt || ''); return !Number.isFinite(last) || this.now() - last >= DAY; }
+  translationDue() { const last = Date.parse(this.data.lastTranslationAttempt || ''); return !Number.isFinite(last) || this.now() - last >= DAY; }
   start() {
     if (this.dry || this.timer) return;
     void this.lock(() => this.recover()).then(() => this.tick()).catch(() => {});
@@ -182,6 +184,8 @@ class AppUpdate {
     if (await this.dirty()) return this.defer('dirty');
     await this.persist();
     if (this.data.job && this.data.job.context?.upstreamSha !== this.data.latestCommit) this.data.job = null;
+    // A restarted translation job uses the same durable daily gate as a failed one.
+    if (!this.data.job && this.translate && !this.translationDue()) return this.defer('retry');
     if (!this.data.job) await this.prepare();
     if (!this.enabled) return this.defer('disabled');
     if (this.busy()) return this.defer('busy');
@@ -205,11 +209,14 @@ class AppUpdate {
     catch { conflicted = Boolean(await this.git(['ls-files', '-u'], stage)); if (!conflicted) throw Error(message('prepare')); }
     const context = { upstreamSha: this.data.latestCommit, sourceHead, conflicted, root: this.root, appPath: this.appPath, version: this.data.latestVersion };
     if (conflicted && !this.translate) throw Object.assign(Error(message('conflict')), { kind: 'conflict' });
-    if (this.translate) { await this.phase('translating'); await this.translate(stage, context); }
+    if (this.translate) {
+      await this.phase('translating', { lastTranslationAttempt: new Date(this.now()).toISOString() });
+      await this.translate(stage, context);
+    }
     if (await this.git(['ls-files', '-u'], stage)) throw Object.assign(Error(message('conflict')), { kind: 'conflict' });
     await this.git(['diff', '--check'], stage);
     const version = this.version(stage); if (!version) throw Object.assign(Error(message('invalid')), { kind: 'invalid' });
-    const env = { ...this.env, HUB_ROOT: path.join(folder, 'test-workspace'), HUB_AI_HOME: path.join(folder, 'test-ai-home'), HUB_DRY_RUN: '1', HUB_LANG: 'ja', HUB_SKIP_APP: '1', HUB_SKIP_NPM: '1', TMPDIR: path.join(folder, 'temp') };
+    const env = { ...this.env, HUB_ROOT: path.join(folder, 'test-workspace'), HUB_AI_HOME: path.join(folder, 'test-ai-home'), HUB_DRY_RUN: '1', HUB_SKIP_APP: '1', HUB_SKIP_NPM: '1', TMPDIR: path.join(folder, 'temp') };
     fs.mkdirSync(env.TMPDIR, { recursive: true });
     await this.phase('testing');
     await this.run('npm', ['ci', '--no-audit', '--no-fund'], { cwd: path.join(stage, 'hub'), env, timeout: 600000 });
@@ -248,6 +255,11 @@ class AppUpdate {
       if (this.busy()) { await this.defer('busy'); return; }
       if (await this.dirty()) { await this.defer('dirty'); return; }
       if (await this.git(['rev-parse', 'HEAD']) !== job.sourceHead) { this.data.job = null; await this.defer('changed'); return; }
+      // A candidate waiting for AI must still point at exactly the tested source.
+      noLinks(job.stage);
+      if (await this.git(['status', '--porcelain', '--untracked-files=normal'], job.stage) ||
+          await this.git(['rev-parse', 'HEAD'], job.stage) !== job.head) throw Error(message('prepare'));
+      if (!(await this.guard())) throw Error(message('guard'));
       if (fs.existsSync(this.appPath)) { fs.mkdirSync(path.dirname(backup), { recursive: true }); fs.cpSync(this.appPath, backup, { recursive: true }); }
       this.data.install = { target: this.appPath, old, fresh, backup };
       await this.persist();

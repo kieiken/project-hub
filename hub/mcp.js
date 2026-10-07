@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-const { lt } = require("./lib/locale");
+const { lt } = require('./lib/locale');
 // Project Hub の MCP（ChatGPT などの AI が Hub の作業を読み、結果を書き戻すための道具）
 // 使い方: node mcp.js（標準入出力で JSON-RPC 2.0。1行に1つ）。tunnel-client などから起動する
 // 中身は動いている Hub（http://127.0.0.1:<HUB_PORT||4545>）に聞くだけ。書くのは Hub だけ。記録は標準エラーへ

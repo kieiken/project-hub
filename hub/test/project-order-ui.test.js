@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('fs'),path=require('path'),vm=require('vm');
 function app() {
   const events={},elements=new Map(),messages=[],calls=[];
@@ -69,7 +71,7 @@ test('一覧で子だけ下階層、分岐の元名を文字表示、子/派生�
 });
 
 test('過去の受領通知でも実際の子の所属を照合し、他プロジェクトの同じIDを片付けない',()=>{
- const a=app();a.run(`state.projects=[{id:'p',name:'親',tasks:[{id:'base',title:'本作業'},{id:'same',title:'無関係'}]},{id:'q',name:'別',tasks:[{id:'same',title:'派生',kind:'derived',derivedFrom:'p/base'}]}];view={kind:'work',project:'p',task:'base'};`);
+ const a=app();a.run(`state.projects=[{id:'p',name:'親',tasks:[{id:'base',title:'本作業'},{id:'same',title:'無関係'}]},{id:'q',name:'別',tasks:[{id:'same',title:'派生',state:'完了',kind:'derived',derivedFrom:'p/base'}]}];view={kind:'work',project:'p',task:'base'};`);
  const row=`{role:'user',from:'subtask',child:'same',childProject:'q',text:'過去の結果'}`;
  const html=a.run(`msgHtml(${row})`);assert.match(html,/data-p="q" data-t="same"/);assert.match(html,/成果を受け取る/);assert.doesNotMatch(a.run('msgHtml({role:"user",from:"subtask",child:"same",text:"旧結果"})'),/data-act="absorb"/);
 });

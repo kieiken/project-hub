@@ -775,7 +775,7 @@
   "GitHub で開く": "在 GitHub 開啟",
   "名前の変更": "更改名稱",
   "さらに子": "建立下一層子",
-  "を作る": "",
+  "を作る": "建立",
   "削除…": "刪除…",
   "固定を解除": "取消釘選",
   "上部に固定": "釘選到上方",
@@ -1016,6 +1016,7 @@
   Object.assign(messages, { "更新の状態を表示しました": "已顯示更新狀態" });
   Object.assign(messages, {"移動できませんでした。":"無法移動。","もう一度削除内容を確認":"重新確認刪除內容","削除する対象が変わりました。もう一度開いてください。":"刪除目標已變更，請重新開啟。","削除内容を更新しました。内容を確認してから、もう一度移してください。":"已更新刪除內容，請確認後再移動。"});
   Object.assign(messages, { "移動したものはありません": "沒有移動任何項目" });
+  Object.assign(messages, config.messages || {});
   const marker = /\uE000(\d+)\uE001/g;
   const has = key => Object.prototype.hasOwnProperty.call(messages, key);
   function text(value) {
@@ -1030,7 +1031,12 @@
     if (locale === 'zh-TW' && /^参考\d+$/.test(source)) return source.replace(/^参考/, '參考');
     return labels.has(source) ? text(source) : source;
   }
-  function pieces(value) { return value.split(/(\uE000\d+\uE001)/).map(part => /^\uE000\d+\uE001$/.test(part) ? part : text(part)).join(''); }
+  function pieces(value) {
+    const key = value.replace(marker, (_, i) => '${' + i + '}');
+    if (has(key)) return messages[key].replace(/\$\{(\d+)\}/g, (_, i) => '\uE000' + i + '\uE001');
+    const trimmed = key.trim();
+    if (has(trimmed)) return value.match(/^\s*/)[0] + messages[trimmed].replace(/\$\{(\d+)\}/g, (_, i) => '\uE000' + i + '\uE001') + value.match(/\s*$/)[0];
+    return value.split(/(\uE000\d+\uE001)/).map(part => /^\uE000\d+\uE001$/.test(part) ? part : text(part)).join(''); }
   function html(value) {
     const source = String(value ?? '');
     if (locale === 'ja') return source;

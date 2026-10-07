@@ -1,9 +1,6 @@
-
-// Japanese remains the default when this module is loaded on its own.
-var UI = globalThis.HubI18n || { text: value => value, html: value => value, label: value => value, message: value => value, valueAttribute: () => '', dateLocale: 'ja-JP',
-  template: (strings, ...values) => strings.reduce((out, part, i) => out + part + (i < values.length ? values[i] : ''), '') };
 /* スマホの収納欄。開閉では入力欄を作り直さない。 */
 (() => {
+  var UI = globalThis.HubI18n || {text: x=>x, html:x=>x, label:x=>x, message:x=>x, valueAttribute:()=>'', dateLocale:'ja-JP', template:(strings,...values)=>strings.reduce((s,x,i)=>s+x+(i<values.length?values[i]:''),'')};
   const $ = s => document.querySelector(s), media = matchMedia('(max-width:720px)');
   let infoOpen = false, composerOpen = false, workKey = '';
   try { infoOpen = localStorage.getItem('hub-mobile-info') === 'open'; } catch (_) {}

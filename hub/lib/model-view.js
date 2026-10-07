@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 const fs = require('node:fs'), path = require('node:path');
 const order = require('../public/model-order');
 const launch = require('./launch'), { EFFORTS } = require('./roles');

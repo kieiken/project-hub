@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
@@ -22,8 +22,8 @@ function buildHandoffCard({ original, user, rows, dir, pdir, task, queue = [], d
   const sent = delegates.filter(r => r.action === 'delegate' && outgoing(r));
   const unique = [...new Map([...pending, ...sent].map(r => [r.id || `${r.ai}:${r.model}:${r.title}`, r])).values()];
   let taskText = null; try { taskText = fs.readFileSync(path.join(pdir, '.ai', 'tasks', `${task}.md`), 'utf8'); } catch { /* 要確認 */ }
-  const steps = taskText?.match(/^## (?:手順|步驟)[^\n]*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1]?.trim();
-  const memo = taskText?.match(/^## (?:メモ|備註)[^\n]*\n+([^\n]+)/m)?.[1]?.slice(0, 200);
+  const steps = taskText?.match(/^## (?:手順|步驟)\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1]?.trim();
+  const memo = taskText?.match(/^## (?:メモ|備註)\n+([^\n]+)/m)?.[1]?.slice(0, 200);
   const statusLines = now.status?.split('\n').filter(Boolean) || [];
   const unchanged = tools?.length === 0 && safeHead && now.head === user.head && now.status === '' && user.status === '' && unique.length === 0;
   const gitInfo = !safeHead || !now.head || now.status === null ? lt('Git：確認できない：実物を確かめる') : lt`Git：開始 ${user.head} → 今 ${now.head}

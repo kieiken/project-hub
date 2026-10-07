@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test'); const assert = require('node:assert/strict'); const fs = require('node:fs'); const path = require('node:path');
 const tmp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'hub-github-api-'));
 const root = path.join(tmp, 'root'), projectDir = path.join(root, 'Product/P'); fs.mkdirSync(projectDir, { recursive: true });

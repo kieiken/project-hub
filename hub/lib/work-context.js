@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 function parentId(p, all) { return all.find(x=>x.id===p.parent)?.id || (all.filter(x=>x.name===p.parent).length===1 ? all.find(x=>x.name===p.parent).id : ''); }
 function familyRoot(p, all) {
  const seen=new Set(); let cur=p;

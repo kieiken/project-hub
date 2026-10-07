@@ -1,5 +1,5 @@
 'use strict';
-const { lt, label } = require('./locale');
+const { lt } = require('./locale');
 // ChatGPT との連携（版1）：ChatGPT が MCP（hub/mcp.js）を通って Hub の作業を読み、結果を書き戻す
 // 道具の中身はここ（Hub 本体の中）で動かす。mcp.js は Hub に聞くだけ（書くのは Hub だけ）
 // 設定は <ROOT>/_hub/chatgpt.json：{ work }（true＝ファイルの書き換え・コマンドの実行も許す。最初は false）
@@ -31,7 +31,7 @@ const TOOLS = [
   { name: 'hub_run_command', description: lt('【実作業】プロジェクトの本体フォルダ（または作業の場所）でコマンドを実行する（120秒・出力 64KB まで）'), inputSchema: S({ project: P, command: str(lt('実行するコマンド（zsh）')), cwd: str(lt('実行する場所（本体フォルダからの相対。省略で本体）')), timeoutSec: { type: 'integer', minimum: 1, maximum: CMD_MAX_SEC, description: lt('待つ秒数（既定 60）') }, task: str(lt('作業の ID（作業の場所で実行する時）')) }, ['project', 'command']), work: true },
 ];
 
-const fail = (status, msg) => { const e = Error(msg); e.status = status; throw e; };
+const fail = (status, msg, unknown = false) => { const e = Error(msg); e.status = status; e.unknown = unknown; throw e; };
 const stamp = () => { const d = new Date(), z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
 const real = x => { try { return fs.realpathSync(x); } catch (e) { return path.resolve(x); } };
 const within = (x, roots) => roots.some(r => x === r || x.startsWith(r.endsWith(path.sep) ? r : r + path.sep));
@@ -73,7 +73,7 @@ class Chatgpt {
 
   async call(name, a = {}) {
     const def = TOOLS.find(t => t.name === name);
-    if (!def) fail(404, lt`その道具はありません：${name}`);
+    if (!def) fail(404, lt`その道具はありません：${name}`, true);
     if (def.work && !this.settings().work) fail(403, WORK_OFF);
     const log = extra => this.record('chatgpt', { project: a.project, task: a.task, ai: 'chatgpt' }, { tool: name, ...extra });
     if (name === 'hub_list_projects') return this.store.listProjects().map(p => {
@@ -82,11 +82,12 @@ class Chatgpt {
       return { id: p.id, name: p.name, status: p.status, description: p.description, phases: p.phases.map(ph => ({ name: ph.name, state: ph.state })), counts };
     });
     const p = this.project(a.project);
+    if (p.kind === 'freetalk' && (['hub_mark_step', 'hub_propose_task'].includes(name) || name === 'hub_report' && a.done === true)) fail(409, require('./freetalk').PROTECTED);
     if (name === 'hub_list_tasks') return p.tasks.map(t => ({ id: t.id, title: t.title, state: t.state, owner: t.owner, question: t.question, steps: t.steps }));
     if (name === 'hub_get_task') {
       const { file, t } = this.task(p, a.task);
       const pf = path.join(p.dir, 'PROJECT.md');
-      return lt`# 作業ファイル（${file}）\n状態：${label(t.state)}\n\n${fs.readFileSync(file, 'utf8')}\n\n# 台帳（${pf}）\n\n${fs.readFileSync(pf, 'utf8')}`;
+      return lt`# 作業ファイル（${file}）\n状態：${t.state}\n\n${fs.readFileSync(file, 'utf8')}\n\n# 台帳（${pf}）\n\n${fs.readFileSync(pf, 'utf8')}`;
     }
     if (name === 'hub_get_chat') {
       this.task(p, a.task);
@@ -151,7 +152,7 @@ class Chatgpt {
       log({ command: command.slice(0, 300), cwd, code: r.code, timedOut: r.timedOut });
       return { cwd, ...r };
     }
-    return fail(404, lt`その道具はありません：${name}`);
+    return fail(404, lt`その道具はありません：${name}`, true);
   }
 }
 

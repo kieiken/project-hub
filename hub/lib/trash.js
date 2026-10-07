@@ -1,10 +1,10 @@
 'use strict';
+const { lt } = require('./locale');
 // Finder aggregates each volume's own Trash. Keep trash moves atomic on that
 // volume so inode fingerprints and interruption/restore receipts remain valid.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { lt } = require('./locale');
 
 const homeTrash = () => path.join(os.homedir(), '.Trash');
 function existingParent(file, stat = fs.statSync) {

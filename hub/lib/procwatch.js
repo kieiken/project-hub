@@ -1,13 +1,13 @@
 'use strict';
-const { lt } = require("./locale");
-// 裏で動いている AI（codex / claude / agy）の見張り。チャットの AI が nohup や & で別の CLI を起動して
+const { lt } = require('./locale');
+// 裏で動いている AI（codex / claude / agy / grok）の見張り。チャットの AI が nohup や & で別の CLI を起動して
 // 自分の番を終えると、Hub では終わったように見えるため、ps で探して「裏で作業中」として出す
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { expandHome } = require('./store');
 
-const AIS = ['codex', 'claude', 'agy'];
+const AIS = ['codex', 'claude', 'agy', 'grok'];
 const INTERVAL = 10000, TIMEOUT = 5000, WARN_EVERY = 5 * 60 * 1000;
 const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
 
@@ -44,8 +44,8 @@ function parsePs(text) {
   return rows;
 }
 
-// コマンドから AI の種類を見分ける（実行する物の名前が codex / claude / agy の時だけ。引数に出てくるだけの物は除く）
-const NAME = '(codex|claude|agy)(?:\\.[cm]?js)?(?=\\s|$)';
+// コマンドから AI の種類を見分ける（実行する物の名前が codex / claude / agy / grok の時だけ。引数に出てくるだけの物は除く）
+const NAME = '(codex|claude|agy|grok)(?:\\.[cm]?js)?(?=\\s|$)';
 const RE_FIRST = new RegExp(`^(?:\\S*/)?${NAME}`);
 const RE_APP = new RegExp(`^/.*?\\.app/\\S*?/${NAME}`); // 空白のあるアプリの中の場所
 const RE_INTERP = new RegExp(`^(?:\\S*/)?(?:node|nodejs|bun|deno)\\s+(?:-\\S+\\s+)*(?:\\S*/)?${NAME}`);

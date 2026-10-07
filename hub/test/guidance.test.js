@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { guidance } = require('../lib/guidance');
@@ -102,4 +104,12 @@ test('対象外の子を戻す案内も表示し、直接取り込みは案内�
  const parent={id:'parent',title:'親作業',steps:[],state:'実行中'},child={id:'child',parent:'parent',title:'対象外',steps:[],state:'完了',mergeExcluded:true};
  const p={id:'p',name:'親',tasks:[parent,child],phases:[]};const text=guidance(p,child,{copy:true});
  assert.match(text,/［取り込み対象に戻す］がある/);assert.match(text,/戻してから祖先で統合/);assert.doesNotMatch(text,/［本体に取り込む］がある/);
+});
+
+test('成果整理中・不備ありは完了確認や引渡しを案内しない',()=>{
+ for(const auto of ['running','failed']) {
+  const text=info({completionPending:false,resultsPending:{auto,reason:'書式不正'}});
+  assert.doesNotMatch(operation(text,'作業の完了'),/［完了に移す］|黄色い帯/);
+  assert.match(operation(text,'作業の完了'),auto==='running'?/成果の記録を整えています/:/［成果の整理を頼む］/);
+ }
 });

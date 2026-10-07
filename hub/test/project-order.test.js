@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('fs'), path = require('path'), os = require('os'), vm = require('vm');
 const { Store } = require('../lib/store');

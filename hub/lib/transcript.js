@@ -1,5 +1,5 @@
 'use strict';
-const { lt, label } = require('./locale');
+const { lt } = require('./locale');
 // 交代のための「引き継ぎ資料」を作る：前の AI の会話（人と AI の文字だけ）を集める
 // 参考: arumwu/goose-acp-handoff（MIT）の考え方。道具の結果・添付・隠れた推論は渡さない
 // 読み方: Claude Code は ~/.claude/projects/*/*.jsonl、Codex は ~/.codex/sessions/**/rollout-*.jsonl。
@@ -46,8 +46,8 @@ function textOf(c) {
 
 const same = (a, b) => { try { return fs.realpathSync(a) === fs.realpathSync(b); } catch (e) { return path.resolve(a) === path.resolve(b); } };
 
-function fromClaude(dir, since) {
-  for (const f of recentJsonl(path.join(home(), '.claude', 'projects'), since, 1)) {
+function fromClaude(dir, since, accountDir) {
+  for (const f of recentJsonl(path.join(accountDir || process.env.CLAUDE_CONFIG_DIR || path.join(home(), '.claude'), 'projects'), since, 1)) {
     const rows = lines(f);
     if (!rows.some(r => r.cwd && same(r.cwd, dir))) continue;
     const msgs = [];
@@ -63,8 +63,8 @@ function fromClaude(dir, since) {
   return null;
 }
 
-function fromCodex(dir, since) {
-  for (const f of recentJsonl(path.join(home(), '.codex', 'sessions'), since, 4)) {
+function fromCodex(dir, since, accountDir) {
+  for (const f of recentJsonl(path.join(accountDir || process.env.CODEX_HOME || path.join(home(), '.codex'), 'sessions'), since, 4)) {
     const rows = lines(f);
     const meta = rows.find(r => r.type === 'session_meta');
     const cwd = meta && meta.payload && meta.payload.cwd;
@@ -102,10 +102,10 @@ function fromTerminal(buf) {
 }
 
 // 会話を集める。ai: 'claude' | 'codex'、dir: 作業の場所、since: 始めた時刻（ms）
-function collect({ ai, dir, since, buf }) {
+function collect({ ai, dir, since, buf, accountDir }) {
   const from = since ? since - 60000 : 0;
   let r = null;
-  try { r = ai === 'codex' ? fromCodex(dir, from) : ai === 'claude' ? fromClaude(dir, from) : null; } catch (e) { r = null; }
+  try { r = ai === 'codex' ? fromCodex(dir, from, accountDir) : ai === 'claude' ? fromClaude(dir, from, accountDir) : null; } catch (e) { r = null; }
   if (r) return { kind: 'log', source: r.source, msgs: r.msgs };
   return { kind: 'screen', text: fromTerminal(buf || '') };
 }
@@ -127,7 +127,7 @@ function packet({ fromLabel, toLabel, taskFile, board, convo, extra }) {
   ].filter(x => x !== '');
   let body;
   if (convo.kind === 'log') {
-    body = convo.msgs.map(m => `### ${m.role === 'user' ? label('人') : fromLabel}\n${m.text}`).join('\n\n');
+    body = convo.msgs.map(m => `### ${m.role === 'user' ? '人' : fromLabel}\n${m.text}`).join('\n\n');
   } else {
     body = lt('（会話の記録が読めなかったため、作業画面に出ていた文字を載せる。崩れている所がある）\n\n```\n') + convo.text + '\n```';
   }

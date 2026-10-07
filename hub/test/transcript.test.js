@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 // lib/transcript.js：交代の引き継ぎ資料（前の会話の文字だけを集める）
 const test = require('node:test');
 const assert = require('node:assert');

@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 // 子プロジェクトの結果を親が受け取る：完了の承認・作業の完了・［親に結果を渡す］、子の一覧、一覧の子の数
 const test = require('node:test');
 const assert = require('node:assert/strict');

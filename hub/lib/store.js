@@ -1,5 +1,5 @@
 'use strict';
-const { lt, sectionNames, sectionName, label } = require('./locale');
+const { lt, sectionNames, sectionName } = require('./locale');
 // 台帳（Product/<プロジェクト>/PROJECT.md）と作業ファイル（.ai/tasks/<作業ID>.md）の読み書き
 const fs = require('fs');
 const path = require('path');
@@ -127,7 +127,7 @@ function setPhaseLine(text, name, state) {
 }
 
 function pick(secs, word) {
-  const k = Object.keys(secs).find(s => sectionNames(word).some(name => s.includes(name)));
+  const k = Object.keys(secs).find(s => sectionNames(word).some(name=>s.includes(name)));
   return k ? secs[k] : '';
 }
 
@@ -152,6 +152,8 @@ class Store {
 
   projectDir(id) {
     if (!SAFE_NAME.test(id || '') || id === '.' || id === '..') return null;
+    // 常設枠は大小文字で別の会話・再開キーを作らない。
+    if (require('./freetalk').hasTarget(id, true)) return null;
     const dir = path.join(this.product, id);
     return fs.existsSync(path.join(dir, 'PROJECT.md')) ? dir : null;
   }
@@ -175,9 +177,11 @@ class Store {
     return {
       id,
       title: data.title || id,
+      ...(data.freetalk === true ? { freetalk: true } : {}),
       role: data.role || '',
       owner: data.owner || '',
       ...this.completion.task(`${path.basename(path.dirname(path.dirname(path.dirname(file))))}/${id}`, data.state, text, steps, c),
+      ...(data.freetalk === true ? { state: data.state === '返事待ち' ? '返事待ち' : data.state === '未着手' ? '未着手' : '実行中', completionPending: false } : {}),
       question: data.question || '',
       workdir: data.workdir || '',
       mergeExcluded: data.mergeExcluded === true,
@@ -219,7 +223,9 @@ class Store {
       id,
       dir,
       name: data.name || id,
+      ...(data.kind === 'freetalk' ? { kind: 'freetalk' } : {}),
       ...this.completion.project(id, data),
+      ...(data.kind === 'freetalk' ? { status: '進行中', phases: [] } : {}),
       completionHash: c.textHash,
       phaseContinueKey: this.completion.data.projects[id]?.continued || '',
       phaseOfferKey: hash(JSON.stringify(tasks.map(t => [t.id,t.state,t.phase,t.steps]))),
@@ -240,6 +246,8 @@ class Store {
   createProject({ name, description, body, phases, parent, derivedFrom, related, refs }, templateDir) {
     const nm = oneLine(name).replace(/[\/\\\0]/g, '・').slice(0, 60);
     if (!nm || nm === '.' || nm === '..' || nm.startsWith('.') || nm.startsWith('_')) return { error: lt('プロジェクト名を入れてください') };
+    if (require('./freetalk').hasTarget((Array.isArray(related) ? related : String(related || '').split(/[,、\n]/)).map(oneLine))) return { error: require('./freetalk').PROTECTED };
+    if (nm.toLowerCase() === 'freetalk') return { error: require('./freetalk').PROTECTED };
     const projects = this.listProjects();
     const { Hierarchy } = require('./hierarchy');
     const h = new Hierarchy(this);
@@ -264,7 +272,7 @@ class Store {
       `parent: ${q(parent)}`,
       `derivedFrom: ${q(derivedFrom)}`,
       'phases:',
-      ...(list.length ? list : [lt('計画'), lt('作る'), label('チェック'), lt('仕上げ')]).map((ph, i) => `  - { name: ${ph.replace(/[,{}]/g, '・')}, state: ${i === 0 ? '進行中' : '未着手'} }`),
+      ...(list.length ? list : [lt('計画'), lt('作る'), lt('チェック'), lt('仕上げ')]).map((ph, i) => `  - { name: ${ph.replace(/[,{}]/g, '・')}, state: ${i === 0 ? '進行中' : '未着手'} }`),
       'folders:',
       ...(oneLine(body) ? [`  本体: ${q(oneLine(body))}`] : []),
       ...(Array.isArray(refs) ? refs : []).map(oneLine).filter(Boolean).slice(0, 30).map((r, i) => `  参考${i + 1}: ${q(r)}`),
@@ -400,7 +408,7 @@ class Store {
     const file = this.taskFile(projectId, taskId), add = String(block || '').replace(/\s+$/, '');
     if (!file || !add) return null;
     const lines = read(file).replace(/\s*$/, '\n').split('\n');
-    const h = lines.findIndex(l => sectionNames(heading).some(name => { const title = l.replace(/^##\s+/, '').trim(); return title === name || title.startsWith(name + '（') || title.startsWith(name + '('); }) && /^##\s/.test(l));
+    const h = lines.findIndex(l => sectionNames(heading).some(name => l.replace(/^##\s+/, '').trim() === name || l.replace(/^##\s+/, '').trim().startsWith(name+'（')) && /^##\s/.test(l));
     if (h < 0) lines.splice(lines.length - 1, 0, '', `## ${sectionName(heading)}`, add);
     else {
       let end = h + 1;

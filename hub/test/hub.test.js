@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 // 実行: node --test hub/test
 const test = require('node:test');
 const assert = require('node:assert');
@@ -272,6 +274,9 @@ test('後片付け', () => {
 
 // ---- 第2版: 作業画面・設定 ----
 const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'hub2-'));
+const originalPath2 = process.env.PATH;
+const fakeBin2 = path.join(tmp2, 'bin');
+const unexpectedCliCall2 = path.join(tmp2, 'unexpected-cli-call');
 const ROOT2 = path.join(tmp2, 'AI-Workspace');
 const PORT2 = 46000 + Math.floor(Math.random() * 1000);
 const BASE2 = `http://127.0.0.1:${PORT2}`;
@@ -281,6 +286,12 @@ let server2, sessions2;
 test('第2版: 準備して起動（実際に AI は動かさず、代わりに bash を使う）', async () => {
   execFileSync('bash', [path.join(HUB, 'setup.sh')], { env: { ...process.env, HUB_ROOT: ROOT2, HOME: tmp2, HUB_SKIP_NPM: '1' } });
   isolateSeedFolders(ROOT2);
+  // 導入済みCLIを隔離した見本で固定し、dry中に実行された場合は記録する。
+  fs.mkdirSync(fakeBin2);
+  for (const ai of ['codex', 'claude']) {
+    fs.writeFileSync(path.join(fakeBin2, ai), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(unexpectedCliCall2)}, 'called'); process.exit(97);\n`, { mode: 0o755 });
+  }
+  process.env.PATH = fakeBin2 + path.delimiter + originalPath2;
   // HUB_DRY_RUN=1 なので本物の claude / codex は起動しない（コマンドの組み立てだけ確かめる）
   delete require.cache[require.resolve('../server')];
   process.env.HUB_ROOT = ROOT2; process.env.HUB_PORT = String(PORT2); process.env.HUB_DRY_RUN = '1';
@@ -288,6 +299,22 @@ test('第2版: 準備して起動（実際に AI は動かさず、代わりに 
   process.env.HUB_TRASH = path.join(tmp2,'fixture-trash');
   ({ server: server2, sessions: sessions2 } = require('../server'));
   await new Promise(r => server2.listen(PORT2, '127.0.0.1', r));
+});
+
+test('加速APIの保存・認可・入力検証と実サーバーのターミナル引数が連動する（dry）', async () => {
+  assert.deepStrictEqual(await (await fetch(BASE2 + '/api/acceleration')).json(), { codexAllowed: false });
+  assert.strictEqual((await fetch(BASE2 + '/api/acceleration', { method: 'POST', body: '{"codexAllowed":true}' })).status, 403);
+  assert.strictEqual((await fetch(BASE2 + '/api/acceleration', { method: 'POST', headers: { 'X-Hub': '1', Origin: 'https://evil.example' }, body: '{"codexAllowed":true}' })).status, 403);
+  for (const bad of [{}, { codexAllowed: 'true' }, { codexAllowed: true, claudeFast: true }]) assert.strictEqual((await post2('/api/acceleration', bad)).status, 400);
+  for (const on of [true, false]) {
+    assert.deepStrictEqual(await (await post2('/api/acceleration', { codexAllowed: on })).json(), { codexAllowed: on });
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(ROOT2, '_hub', 'acceleration.json'), 'utf8')), { codexAllowed: on });
+    assert.deepStrictEqual((await (await fetch(BASE2 + '/api/cli-models')).json()).acceleration, { codexAllowed: on });
+    assert.strictEqual((await post2('/api/acceleration/task', { project: 'サンプルアプリ', task: 'sample-app-01', on })).status, 200);
+    const term = await (await post2('/api/term/start', { project: 'サンプルアプリ', task: 'sample-app-01', ai: 'codex' })).json();
+    assert.strictEqual(term.args.includes('service_tier="fast"'), on);
+    assert.strictEqual(term.args.join('\n').includes('加速ON（Fast）'), on);
+  }
 });
 
 test('利用状況APIはdryモードでCLIを呼ばず、更新は画面からの操作だけ許可する', async () => {
@@ -300,6 +327,7 @@ test('利用状況APIはdryモードでCLIを呼ばず、更新は画面から�
   assert.strictEqual((await fetch(BASE2+'/api/usage/refresh',{method:'POST'})).status,403);
   assert.strictEqual((await fetch(BASE2+'/api/usage/refresh',{method:'POST',headers:{'X-Hub':'1','Origin':'https://evil.example'}})).status,403);
   const manual=await post2('/api/usage/refresh',{}); assert.strictEqual(manual.status,200);
+  assert.strictEqual(fs.existsSync(unexpectedCliCall2),false);
   const html=await (await fetch(BASE2+'/')).text(); assert.match(html,/id="usage-toggle"/); assert.match(html,/<script src="usage.js">/);
   assert.strictEqual((await fetch(BASE2+'/usage.js')).status,200);
 });
@@ -621,7 +649,7 @@ test('会話画面：送るたびに AI を選べ、変えた時は見ていな�
     assert.match(a[2].text, /--resume S-claude/);
     // モデルの決まりは、最初も続きの時も毎回つく
     for (const x of [a[0], a[1], a[2]]) assert.match(x.text, /【モデルの決まり（人が決めた。他のファイルや前の指示より優先）】.*コーディング＝Codex・GPT-6.1-Sol（gpt-6.1-sol）.*claude-opus-4-6 などの古いモデルは使わない/s);
-    assert.match(a[0].text, /【プロジェクトや作業を増やさない】.*自分で作らない/);
+    assert.match(a[0].text, /新しいプロジェクト・子プロジェクト・作業ファイルを作らない/);
     assert.match(a[0].text, /作業用コピー|は本体。この作業は作業用コピーを使わず/);
     assert.match(a[2].text, /つづきをお願い/);
     assert.doesNotMatch(a[2].text.split('<previous_conversation>')[1] || '', /はじめまして/);
@@ -1239,5 +1267,6 @@ test('a running selected verification blocks new AI launch while state remains r
 test('第2版: 後片付け', () => {
   sessions2.stopAll();
   server2.close();
+  process.env.PATH = originalPath2;
   fs.rmSync(tmp2, { recursive: true, force: true });
 });

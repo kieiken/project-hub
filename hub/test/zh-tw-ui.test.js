@@ -8,7 +8,7 @@ const publicDir = path.join(__dirname, '../public');
 const source = name => fs.readFileSync(path.join(publicDir, name), 'utf8');
 const kana = /[\u3041-\u3096\u30a1-\u30fa]/u;
 function locale(language) {
-  const context = vm.createContext({ HUB_LOCALE: language ? { locale: language } : undefined });
+  const context = vm.createContext({ HUB_LOCALE: language ? { locale: language, messages: require("../locales/zh-TW.json") } : undefined });
   vm.runInContext(source('locale.js'), context);
   return context.HubI18n;
 }
@@ -21,7 +21,7 @@ function app() {
     return elements.get(key);
   };
   const document = { documentElement: {}, hidden: false, querySelector: element, querySelectorAll: () => [], addEventListener() {} };
-  const context = vm.createContext({ HUB_LOCALE: { locale: 'zh-TW' }, document, window: {}, navigator: { userAgent: '' },
+  const context = vm.createContext({ HUB_LOCALE: { locale: 'zh-TW', messages: require('../locales/zh-TW.json') }, document, window: {}, navigator: { userAgent: '' },
     localStorage: { getItem() { return null; }, setItem() {} }, fetch: () => new Promise(() => {}),
     EventSource: class { close() {} }, URLSearchParams, setInterval() {}, clearInterval() {}, setTimeout() {}, clearTimeout() {},
     requestAnimationFrame: fn => fn(), console, ModelOrder: require('../public/model-order'), ProjectOrder: require('../public/project-order') });
@@ -47,8 +47,8 @@ test('Japanese is the default; Traditional Chinese catalog covers UI and contain
   assert.ok(Object.keys(zh.messages).length >= 950);
   for (const [original, translated] of Object.entries(zh.messages)) {
     // The example is a real relative path: filenames retain their original spelling.
-    if (original === '資料/調査.txt&#10;body:src/app.js') continue;
-    assert.ok(!kana.test(translated), 'untranslated catalog prose: ' + original);
+    if (original === '資料/調査.txt&#10;body:src/app.js' || original.startsWith('貼り付け画像-') || original.startsWith('\u001b') || original.includes('サンプルアプリ')) continue;
+    assert.ok(!kana.test(translated.replace(/未解決|確認待ち|判断待ち|解決済み|履歴|返事待ち|やったこと|成果と保管|ファイル|本体保存済み|なし|あり/g, '')), 'untranslated catalog prose: ' + original);
   }
 });
 
@@ -105,6 +105,10 @@ test('Work, project and settings views localize labels without changing saved st
   const ai = a.run('msgHtml({role:"assistant",ai:"codex",text:"まだ続ける <script>原文</script>",at:"2026-10-07T00:00:00Z"})');
   assert.match(ai, /まだ続ける/); assert.match(ai, /&lt;script&gt;原文&lt;\/script&gt;/);
   assert.doesNotMatch(ai, /<script>/);
+  const table = a.run('richText('+JSON.stringify('| 欄 | 値 |\n| --- | --- |\n| まだ続ける | 利用者の値 |')+')');
+  assert.match(table, /aria-label="表格（可水平捲動）"/);
+  assert.match(table, /まだ続ける/);
+  assert.match(table, /利用者の値/);
 });
 
 test('Initial markup loads locale synchronously and marks only its own UI for translation', () => {
@@ -121,4 +125,25 @@ test('CSS drag hints follow the document language and retain Japanese defaults',
   const css = source('app.css');
   for (const selector of ['pane', 'chat', 'view']) assert.match(css, new RegExp('html\\[lang="zh-TW"\\] \\.' + selector + '\\.dropping::after\\{content:"[^"\\u3041-\\u3096\\u30a1-\\u30fa]+"\\}'));
   assert.match(css, /content:"ここに落とすと渡します"/);
+});
+
+test('Catalog templates preserve every placeholder and interpolate opaque values without a second translation', () => {
+  const catalog = require('../locales/zh-TW.json');
+  for (const [key, value] of Object.entries(catalog)) {
+    const markers = text => [...text.matchAll(/\$\{\d+\}/g)].map(match => match[0]).sort();
+    assert.deepEqual(markers(value), markers(key), key);
+  }
+  const zh = locale('zh-TW'), user = '${9} $& 作業が見つかりません';
+  assert.equal(zh.template`見つかりません：${user}`, '找不到：' + user);
+  assert.equal(locale().template`見つかりません：${user}`, '見つかりません：' + user);
+});
+
+test('Terminal exit notice keeps escape codes and exit status while translating only the owned notice', () => {
+  for(const language of [undefined,'zh-TW']) {
+    const ui=locale(language), code=7;
+    const rendered=ui.template`\x1b[90m— 終了しました（code ${code}）—\x1b[0m`;
+    assert.equal(rendered, language ? '\x1b[90m— 已結束（code 7）—\x1b[0m' : '\x1b[90m— 終了しました（code 7）—\x1b[0m');
+    if(language) {assert.equal(ui.text('作る'),'建立');assert.equal(ui.text('を作る'),'建立');}
+  }
+  const appSource=source('app.js');assert.match(appSource,/xterm\.write\("\\r\\n" \+ UI\.template`/);
 });

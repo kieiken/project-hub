@@ -1,11 +1,8 @@
 'use strict';
-// Japanese remains the default when this module is loaded on its own.
-var UI = globalThis.HubI18n || { text: value => value, html: value => value, label: value => value, message: value => value, valueAttribute: () => '', dateLocale: 'ja-JP',
-  template: (strings, ...values) => strings.reduce((out, part, i) => out + part + (i < values.length ? values[i] : ''), '') };
-
+var UI = globalThis.HubI18n || {text: x=>x, html:x=>x, label:x=>x, message:x=>x, valueAttribute:()=>'', dateLocale:'ja-JP', template:(strings,...values)=>strings.reduce((s,x,i)=>s+x+(i<values.length?values[i]:''),'')};
 // 設定と非公開リポジトリ作成。送信は確認画面の明示選択のみ。
 let githubDraft = null, githubPending = false, githubEpoch = 0, githubSettingsEpoch = 0;
-const githubOptions = (list, selected) => list.map(v => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(v)}</option>`).join('');
+const githubOptions = (list, selected) => list.map(v => UI.template`<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(v)}</option>`).join('');
 async function loadGithub(fresh = false) {
   const box = $('#github-box'); if (!box) return;
   const epoch = ++githubSettingsEpoch;
@@ -14,7 +11,7 @@ async function loadGithub(fresh = false) {
     if ($('#github-box') !== box || epoch !== githubSettingsEpoch) return;
     const account = r.accounts.some(a => a.login === r.settings.account) ? r.settings.account : r.accounts.find(a => a.active)?.login || r.accounts[0]?.login || '';
     const command = r.gh ? 'gh auth login --hostname github.com --web --git-protocol https' : 'brew install gh';
-    box.innerHTML = UI.template`${r.error ? `<p>${esc(r.error)}</p>` : ''}${r.accounts.length ? UI.template`<label>ふだん使うアカウント<select id="github-account">${githubOptions(r.accounts.map(a => a.login), account)}</select></label>
+    box.innerHTML = UI.template`${r.error ? UI.template`<p>${esc(r.error)}</p>` : ''}${r.accounts.length ? UI.template`<label>ふだん使うアカウント<select id="github-account">${githubOptions(r.accounts.map(a => a.login), account)}</select></label>
       <label>作る場所（既定）<select id="github-owner">${githubOptions([...new Set([account, ...(account === r.settings.account && r.settings.owner ? [r.settings.owner] : [])])], account === r.settings.account ? r.settings.owner || account : account)}</select></label>
       <div class="acts"><button class="btn plain" data-github-setting="owners" type="button">組織を読み込む</button><button class="btn" data-github-setting="save" type="button">GitHubの設定を保存</button></div>` : ''}
       <p>${r.gh ? UI.text('新しくログインする時は、Macのターミナルで次を実行してください。') : UI.text('MacのターミナルでGitHubの道具を入れてください。')}</p>
@@ -39,7 +36,7 @@ function githubValidate() {
 function drawGithubCreate(d) {
   $('#github-sheet').innerHTML = UI.template`<div class="remove-box github-box"><h2 id="github-title">GitHub に非公開のリポジトリを作る</h2>
     <p>送る元：<span class="path">${esc(d.folder)}</span></p>${d.ledger ? UI.html('<p>台帳のフォルダです。.ai などAIの記録も含まれます。</p>') : ''}
-    ${d.blockers.map(b => `<p class="danger">${esc(b)}</p>`).join('')}
+    ${d.blockers.map(b => UI.template`<p class="danger">${esc(b)}</p>`).join('')}
     <label>アカウント<select id="github-create-account">${githubOptions(d.accounts.map(a => a.login), d.defaultAccount)}</select></label>
     <label>作る場所<select id="github-create-owner">${githubOptions([...new Set([d.defaultAccount, d.defaultOwner].filter(Boolean))], d.defaultOwner)}</select></label>
     <button class="btn plain" data-github-action="owners" type="button">組織を読み込む</button>
@@ -47,7 +44,7 @@ function drawGithubCreate(d) {
     <label>説明（任意）<input id="github-description" maxlength="1000"></label>
     <p>公開範囲：<b>非公開（自分と招待した人だけ）</b></p><p class="small">公開にする時は別途相談してください。</p>
     <label class="chk"><input id="github-push" type="checkbox" ${d.canPush ? '' : 'disabled'}> 作った後、今の保存（${esc(d.branch || UI.text('まだ送れる保存がありません'))}・${d.commits}件）を送る</label>
-    <div id="github-push-notice" hidden>${d.dirty ? UI.html('<p>未保存の変更は送られません（保存済みの分だけ送ります）。</p>') : ''}${d.risky.map(r => `<p class="danger">${esc(r.file)}：${esc(r.reason)}</p>`).join('')}</div>
+    <div id="github-push-notice" hidden>${d.dirty ? UI.html('<p>未保存の変更は送られません（保存済みの分だけ送ります）。</p>') : ''}${d.risky.map(r => UI.template`<p class="danger">${esc(r.file)}：${esc(r.reason)}</p>`).join('')}</div>
     ${d.git === 'none' ? UI.html('<p>このフォルダで Git の保存を始めます。初回送信は行いません。</p>') : ''}
     ${d.remotes.length ? UI.template`<p class="small">登録済みの送り先：${d.remotes.map(esc).join('、')}</p>` : ''}
     <p id="github-result" role="status"></p><div class="acts"><button class="btn plain" data-github-action="close" type="button">やめる</button><button class="btn" id="github-create" data-github-action="create" type="button">作る</button></div></div>`;

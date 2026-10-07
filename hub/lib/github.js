@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 // gh の認証を操作の間だけ借りる。秘密を設定・応答・コマンド引数に残さない。
 const fs = require('node:fs');
 const path = require('node:path');

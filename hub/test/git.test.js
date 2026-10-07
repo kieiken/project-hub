@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 // lib/git.js：作業用コピーを作る・本体に取り込む・Git の無いフォルダで保存を始める
 const test = require('node:test');
 const assert = require('node:assert');
@@ -222,4 +224,43 @@ test('取り込み証跡はその作業の変更だけを示し、別本体・�
   assert.strictEqual(g.integrationReceipt(repo('other-receipt'),m),null);
   assert.strictEqual(g.integrationReceipt(main,{...m,commit:'f'.repeat(40)}),null);
   assert.strictEqual(g.integrationReceipt(main,{main,files:['child.txt']}),null);
+});
+
+test('1MiBを超える未追跡一覧と保存待ちを照合し、秘密設定を除いて保存する', () => {
+  const main = repo('large-pending'), folder = 'records-' + 'x'.repeat(220);
+  const dir = path.join(main, folder), count = 4600;
+  fs.mkdirSync(dir);
+  for (let i = 0; i < count; i++) fs.writeFileSync(path.join(dir, `file-${String(i).padStart(5, '0')}.txt`), `pending ${i}\n`);
+  fs.writeFileSync(path.join(main, '.env'), 'FAKE_LOCAL_ONLY=placeholder\n');
+  fs.writeFileSync(path.join(main, '.env.example'), 'EXAMPLE=\n');
+  const read = (...args) => execFileSync('git', ['-C', main, ...args], { encoding:'utf8', maxBuffer:16*1024*1024 });
+  const untracked = read('ls-files', '--others', '--exclude-standard', '-z');
+  assert.ok(Buffer.byteLength(untracked) > 1024*1024);
+  const before = read('rev-parse', 'HEAD'), initial = g.inspect(main);
+  assert.ok(initial.content);
+  assert.strictEqual(read('rev-parse', 'HEAD'), before);
+  sh(main, 'add', '-A');
+  const pending = read('status', '--porcelain').trim();
+  assert.ok(Buffer.byteLength(pending) > 1024*1024);
+  assert.ok(Buffer.byteLength(read('diff', '--cached', '--name-only', '-z')) > 1024*1024);
+  const staged = g.inspect(main);
+  assert.strictEqual(staged.status, pending);
+  assert.strictEqual(g.dirty(main), true);
+  const first = path.join(dir, 'file-00000.txt');
+  fs.writeFileSync(first, 'reviewed change\n'); sh(main, 'add', '--', first);
+  const changed = g.inspect(main);
+  assert.strictEqual(changed.status, staged.status);
+  assert.notStrictEqual(changed.content, staged.content);
+  assert.strictEqual(g.save(main, 'large pending save'), true);
+  const tracked = read('ls-tree', '-r', '--name-only', '-z', 'HEAD').split('\0').filter(Boolean);
+  assert.strictEqual(tracked.length, count + 2); // base file and example
+  assert.ok(tracked.includes('.env.example'));
+  assert.ok(!tracked.includes('.env'));
+  assert.strictEqual(fs.readFileSync(path.join(main, '.env'), 'utf8'), 'FAKE_LOCAL_ONLY=placeholder\n');
+  assert.strictEqual(fs.readFileSync(first, 'utf8'), 'reviewed change\n');
+  assert.strictEqual(read('diff', '--cached', '--name-only'), '');
+  const saved = read('rev-parse', 'HEAD');
+  assert.notStrictEqual(saved, before);
+  assert.strictEqual(g.save(main, 'secret-only change'), false);
+  assert.strictEqual(read('rev-parse', 'HEAD'), saved);
 });

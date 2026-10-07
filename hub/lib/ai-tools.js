@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 // インストール済み CLI の版・更新・モデル一覧。CLI の実行は固定した引数だけを execFile に渡す。
 const fs = require('fs');
 const os = require('os');
@@ -7,6 +7,7 @@ const path = require('path');
 const { execFile, spawn } = require('child_process');
 
 const { AIS, AI_LABEL, AGY_MODEL, childEnv, agyAccountError } = require('./launch');
+const { models: grokModels } = require('./grok');
 const { latestVersion, newer } = require('./update-check');
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/;
 const MAX_OUTPUT = 5 * 1024 * 1024;
@@ -21,7 +22,7 @@ function toolError(status, stage, reason) {
 
 function runFile(file, args, opts = {}) {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { timeout: opts.timeout || 30000, maxBuffer: MAX_OUTPUT, env: childEnv(path.basename(file) === 'agy' ? 'agy' : '', process.env) }, (err, stdout, stderr) => {
+    execFile(file, args, { timeout: opts.timeout || 30000, maxBuffer: MAX_OUTPUT, env: childEnv(['agy', 'grok'].includes(path.basename(file)) ? path.basename(file) : '', process.env) }, (err, stdout, stderr) => {
       if (err) return reject(err); // stdout/stderr には認証情報が入り得るので外へ出さない
       resolve(String(stdout || ''));
     });
@@ -39,7 +40,7 @@ function executable(name) {
   const hit = foundAt.get(name);
   if (hit && Date.now() - hit.at < 30000) return hit.file;
   let file = '';
-  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
+  for (const dir of [...String(process.env.PATH || '').split(path.delimiter), ...(name === 'grok' ? [path.join(process.env.HUB_AI_HOME || os.homedir(), '.grok', 'bin')] : [])]) {
     if (!dir) continue;
     const f = path.join(dir, name);
     try { fs.accessSync(f, fs.constants.X_OK); file = f; break; } catch (e) { /* 次へ */ }
@@ -53,6 +54,7 @@ function methodFor(ai, file) {
   let real;
   try { real = fs.realpathSync(file); } catch (e) { return 'unknown'; }
   if (ai === 'agy') return path.basename(real) === 'agy' ? 'native' : 'unknown';
+  if (ai === 'grok') return /[/\\]\.grok[/\\]bin[/\\]/.test(real) ? 'native' : 'unknown';
   if (ai === 'codex') return /[/\\]\.codex[/\\]packages[/\\]standalone[/\\]/.test(real) ? 'standalone' : 'unknown';
   if (/[/\\]Caskroom[/\\]claude-code@latest[/\\]/.test(real)) return 'homebrew-cask';
   if (/[/\\]\.claude[/\\]local[/\\]|[/\\]\.local[/\\]share[/\\]claude[/\\]/.test(real)) return 'native';
@@ -311,6 +313,7 @@ class AiTools {
       try { return { models: agyModels(text), source: 'agy-cli' }; }
       catch (e) { if (!e.unavailable) throw e; return { models: [], source: 'agy-cli', unavailable: true }; }
     }
+    if (ai === 'grok') return { models: grokModels(await this.run(file, ['models'])), source: 'grok-cli' };
     if (ai === 'codex') return { models: codexModels(await this.run(file, ['debug', 'models'], { timeout: 120000 })), source: 'codex-cli' };
     const before = latestClaudeCache(this.home);
     const liveIds = await this.refreshClaude(file); // 応答の main/overflow は混在するので、モデル名は cache の main から取る
@@ -356,7 +359,7 @@ class AiTools {
     if (ai === 'codex' && method === 'standalone') { updater = file; args = ['update']; }
     else if (ai === 'claude' && method === 'homebrew-cask') { updater = this.find('brew'); args = ['upgrade', '--cask', 'claude-code@latest']; }
     else if (ai === 'claude' && method === 'native') { updater = file; args = ['update']; }
-    else if (ai === 'agy' && method === 'native') { updater = file; args = ['update']; }
+    else if (['agy', 'grok'].includes(ai) && method === 'native') { updater = file; args = ['update']; }
     else throw toolError(400, 'detect', lt('この導入方法の更新手順を確認できませんでした'));
     if (!updater) throw toolError(400, 'detect', lt('Homebrew が見つかりません'));
     if (this.dry) return { ok: true, dry: true, ai, beforeVersion: '', afterVersion: '', changed: false, models: { ok: true, models: this.catalogs[ai].models, added: 0 } };
@@ -387,4 +390,4 @@ class AiTools {
   isOperating() { return Boolean(this.operation); }
 }
 
-module.exports = { AiTools, agyModels, codexModels, claudeModels, claudeInitialize, methodFor, toolError, executable };
+module.exports = { grokModels, AiTools, agyModels, codexModels, claudeModels, claudeInitialize, methodFor, toolError, executable };

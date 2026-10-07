@@ -1,11 +1,12 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 // 選択式の整理、ゴミ箱への退避・復元、ローカル検証。
 const fs=require('node:fs'), path=require('node:path'), os=require('node:os');
 const {createHash,randomUUID}=require('node:crypto');
 const {execFileSync,spawn}=require('node:child_process');
+const {StringDecoder}=require('node:string_decoder');
+const {performance}=require('node:perf_hooks');
 const {parseDoc}=require('./frontmatter');
-const {trashRootFor,isTrashDestination}=require('./trash');
 const digest=x=>createHash('sha256').update(x).digest('hex');
 const inside=(base,file)=>{base=base.normalize('NFC');file=file.normalize('NFC');return file===base || file.startsWith(base+path.sep);};
 const DAY=86400000;
@@ -29,14 +30,15 @@ function inventory(file) {
 function scriptsAt(base) {
  const file=path.join(base,'package.json');let pkg;try {noLinks(file);pkg=JSON.parse(fs.readFileSync(file,'utf8'));} catch(e) {return [];}
  return ['test','lint','check','build'].filter(k=>typeof pkg.scripts?.[k]==='string').map(name=>{
-  const command=pkg.scripts[name], allowed=/^(?:node|vitest|jest|eslint|tsc|biome|vite)(?:\s|$)/.test(command.trim()) && !/[;&|`\r\n]|\$\(|\b(?:claude|codex|agy|gemini|curl|wget|fetch|install|deploy|publish|delete|rm)\b/i.test(command);
+  const command=pkg.scripts[name], allowed=/^(?:node|vitest|jest|eslint|tsc|biome|vite)(?:\s|$)/.test(command.trim()) && !/[;&|`\r\n]|\$\(|\b(?:claude|codex|agy|grok|gemini|curl|wget|fetch|install|deploy|publish|delete|rm)\b/i.test(command);
   return {name,command,allowed,hash:digest(fs.readFileSync(file))};
  });
 }
 class Maintenance {
- constructor({store,baseOf,busy=()=>false,trash=process.env.HUB_TRASH || path.join(os.homedir(),'.Trash'),timeout=60000}) {
+ constructor({store,baseOf,busy=()=>false,trash=process.env.HUB_TRASH || path.join(os.homedir(),'.Trash'),timeout=60000,referenceLimits={}}) {
   Object.assign(this,{store,baseOf,busy,trash,timeout});this.previews=new Map();this.running=new Map();
   this.records=path.join(store.root,'_hub/cleanup');
+  this.referenceLimits={items:50000,bytes:128*1024*1024,ms:15000,depth:64,chunk:64*1024,carry:1024*1024,gitBytes:16*1024*1024,...referenceLimits};
  }
  project(id) {const p=this.store.readProject(id);if(!p)throw Error(lt('プロジェクトがありません'));return p;}
  bases(p) {return [...new Set([p.dir,this.baseOf(p)].map(d=>path.resolve(d)))];}
@@ -50,36 +52,56 @@ class Maintenance {
  preview(id) {
   const p=this.project(id), candidates=[], excluded=[], ownBases=this.bases(p),all=this.store.listProjects();
   const shared=all.filter(q=>this.bases(q).some(b=>ownBases.some(d=>b.normalize('NFC')===d.normalize('NFC'))) || require('./work-context').family(p,all).some(x=>x.id===q.id)).map(q=>q.dir);
-  const roots=[...new Set([...ownBases,...shared])], refs=[], tracked=[];
-  let scanned=0, scanPath="", scanSize=0;
-  // 参照元を読み切れない場合は候補を出さない。原資料・成果物は走査対象にも整理対象にもしない。
+  const roots=[...new Set([...ownBases,...shared])], refs=[], tracked=[], prepared=[];
+  const limits=this.referenceLimits,started=performance.now(),visited=new Set(),gitRoots=new Set(),snapshots=[];
+  let scanned=0,readBytes=0,scanPath='',scanSize=0;
+  const budget=()=>{if(performance.now()-started>limits.ms)throw Error(lt('参照確認の時間上限を超えたため、整理候補を出していません'));};
+  const signature=st=>[st.dev,st.ino,st.mode,st.size,st.mtimeMs,st.ctimeMs].join(':');
+  const remember=(file,st)=>{snapshots.push([file,st?signature(st):null]);};
+  const maybeStat=file=>{try{return fs.lstatSync(file);}catch(e){if(e.code==='ENOENT')return null;throw e;}};
+  const stopped=e=>({token:'',candidates:[],excluded:[{reason:e.message}],stopped:{reason:e.message,path:scanPath,size:scanSize},busy:this.busy(id)||this.locked(id),scripts:scriptsAt(this.baseOf(p)),history:this.history(id)});
+  // 除外範囲は維持。参照の本文は保持せず、候補を棚卸ししてから分割照合する。
   try {
    for(const base of roots) {
-    noLinks(base);
-    let top='';try {top=execFileSync('git',['-C',base,'rev-parse','--show-toplevel'],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch(e){/* Gitなし */}
-    if(top) {const names=execFileSync('git',['-C',top,'ls-files','-z'],{encoding:'utf8',maxBuffer:2*1024*1024});tracked.push(...names.split('\0').filter(Boolean).map(n=>path.join(top,n)));}
-    const walk=(d,depth)=>{scanPath=d;scanSize=0;
-     if(depth>6)throw Error(lt('参照の走査範囲を超えました'));
-     for(const ent of fs.readdirSync(d,{withFileTypes:true})) {
-      if(++scanned>5000)throw Error(lt('参照が多すぎるため、整理候補を出していません'));
+    scanPath=base;scanSize=0;noLinks(base);budget();
+    let top='';try {top=execFileSync('git',['-C',base,'rev-parse','--show-toplevel'],{encoding:'utf8',timeout:Math.max(1,Math.ceil(limits.ms-(performance.now()-started))),stdio:['ignore','pipe','pipe']}).trim();}catch(e){if(e.status!==128 || !/not a git repository/i.test(String(e.stderr)))throw Error(lt('Gitの参照確認ができません：')+(e.code||e.message));}
+    if(top && !gitRoots.has(top)) {
+     gitRoots.add(top);scanPath=top;scanSize=0;budget();
+     const index=execFileSync('git',['-C',top,'rev-parse','--git-path','index'],{encoding:'utf8',timeout:Math.max(1,Math.ceil(limits.ms-(performance.now()-started)))}).trim();
+     const indexPath=path.resolve(top,index);noLinks(indexPath);remember(indexPath,maybeStat(indexPath));
+     const names=execFileSync('git',['-C',top,'ls-files','-z'],{encoding:'utf8',maxBuffer:limits.gitBytes,timeout:Math.max(1,Math.ceil(limits.ms-(performance.now()-started)))});
+     for(const n of names.split('\0').filter(Boolean)) {budget();if(tracked.length>=limits.items)throw Error(lt('Gitの追跡一覧が多すぎるため、整理候補を出していません'));tracked.push(path.join(top,n));}
+    }
+    const pending=[[base,0]];
+    while(pending.length) {
+     const [d,depth]=pending.pop();scanPath=d;scanSize=0;budget();
+     const st=fs.lstatSync(d);if(!st.isDirectory() || st.isSymbolicLink())throw Error(lt('参照の場所が変わりました'));remember(d,st);
+     const key=st.dev+':'+st.ino;if(visited.has(key))continue;visited.add(key);
+     if(depth>limits.depth)throw Error(lt('参照の深さ上限を超えたため、整理候補を出していません'));
+     const entries=fs.opendirSync(d);
+     try {let ent;while((ent=entries.readSync())) {
+      const f=path.join(d,ent.name);scanPath=f;scanSize=0;budget();
+      if(++scanned>limits.items)throw Error(lt('参照が多すぎるため、整理候補を出していません'));
       if(['.git','node_modules','資料','成果物','.ai/work','vendor','dist','build'].includes(ent.name) || ent.isSymbolicLink())continue;
-      const f=path.join(d,ent.name);scanPath=f;scanSize=0;
       if(this.targets(p).some(x=>inside(x.dir,f)) || f===path.join(p.dir,'.ai/chat'))continue;
-      if(ent.isDirectory())walk(f,depth+1);
-      else if(/\.(md|json|ya?ml|[cm]?js|tsx?|py|html|css|sh|txt)$/i.test(ent.name)) {const st=fs.statSync(f);scanSize=st.size;if(st.size>1024*1024)throw Error(lt('大きい参照ファイルがあるため、整理候補を出していません'));refs.push(fs.readFileSync(f,'utf8').normalize('NFC'));}
-     }
-    };walk(base,0);
+      if(ent.isDirectory())pending.push([f,depth+1]);
+      else if(/\.(md|json|ya?ml|[cm]?js|tsx?|py|html|css|sh|txt)$/i.test(ent.name)) {
+       const st=fs.lstatSync(f);scanSize=st.size;if(!st.isFile() || st.isSymbolicLink())throw Error(lt('参照のファイルが変わりました'));
+       if(st.size>limits.bytes-readBytes)throw Error(lt('参照の総読量上限を超えたため、整理候補を出していません'));
+       readBytes+=st.size;remember(f,st);refs.push([f,signature(st)]);
+      }
+     }} finally {entries.closeSync();}
+    }
    }
-  } catch(e) {return {token:'',candidates:[],excluded:[{reason:e.message}],stopped:{reason:e.message,path:scanPath,size:scanSize},busy:this.busy(id)||this.locked(id),scripts:scriptsAt(this.baseOf(p)),history:this.history(id)};}
+  } catch(e) {return stopped(e);}
   const add=(files,label,days,chatTask)=>{
    try {
-    const list=files.map(f=>({file:path.resolve(f),...inventory(f)}));
+    scanPath=files[0];scanSize=0;budget();const list=files.map(f=>({file:path.resolve(f),...inventory(f)}));
     if(list.some(x=>Date.now()-x.newest<days*DAY))throw Error(lt`${days}日以内に更新されました`);
     for(const x of list) {
      if(tracked.some(f=>inside(x.file,f)))throw Error(lt('Gitで追跡されています'));
-     if(x.files.some(f=>refs.some(text=>text.includes(f.normalize('NFC')) || text.includes(path.relative(p.dir,f).normalize('NFC')) || (!chatTask && text.includes(path.basename(f).normalize('NFC'))))))throw Error(lt('台帳・コード・記録から参照されています'));
     }
-    candidates.push({id:randomUUID(),label,paths:list.map(x=>x.file),bytes:list.reduce((n,x)=>n+x.bytes,0),fingerprint:digest(JSON.stringify(list.map(x=>[x.file,x.fingerprint]))),chatTask});
+    budget();prepared.push({files:list.flatMap(x=>x.files),candidate:{id:randomUUID(),label,paths:list.map(x=>x.file),bytes:list.reduce((n,x)=>n+x.bytes,0),fingerprint:digest(JSON.stringify(list.map(x=>[x.file,x.fingerprint]))),chatTask}});
    } catch(e) {excluded.push({path:files[0],reason:e.message});}
   };
   for(const target of this.targets(p)) {
@@ -94,6 +116,48 @@ class Maintenance {
    if(queued) {excluded.push({path:q,reason:lt('順番待ちの依頼があります')});continue;}
    add(files,lt`完了作業の会話履歴：${task.title}（再開は新しい会話）`,30,task.id);
   }
+  try {
+   budget();
+   const needles=new Map();let longest=0;
+   for(const item of prepared)for(const f of item.files)for(const raw of [f,path.relative(p.dir,f),...(!item.candidate.chatTask?[path.basename(f)]:[])]) {
+    budget();const needle=raw.normalize('NFC');longest=Math.max(longest,needle.length);
+    if(!needles.has(needle))needles.set(needle,new Set());needles.get(needle).add(item);
+   }
+   const referenced=new Set(),buffer=Buffer.alloc(limits.chunk);
+   for(const [file,expected] of refs) {
+    scanPath=file;scanSize=fs.lstatSync(file).size;budget();noLinks(file);
+    const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);
+    try {
+     if(signature(fs.fstatSync(fd))!==expected)throw Error(lt('確認中に参照が変わりました。取得し直してください'));
+     const decoder=new StringDecoder('utf8');let carry='',overlap='',bytes=0;
+     const match=text=>{const joined=overlap+text;for(const [needle,items] of needles) {budget();if(joined.includes(needle))for(const item of items)referenced.add(item);}overlap=longest>1?joined.slice(-(longest-1)):'';};
+     const consume=(text,last=false)=>{
+      const combined=carry+text;let cut=combined.length;
+      if(!last) {
+       // NFCの結合文字列と正規合成（Hangul/Tulu-Tigalari、最大3 starter）を残す。
+       const tail=[];for(const m of combined.matchAll(/[^\p{M}]/gu)) {tail.push(m.index);if(tail.length>3)tail.shift();}
+       cut=tail.length===3?tail[0]:0;
+       // NFD先頭がUnicode 17の合成後続文字/結合文字ならstarterまで戻り、サロゲート対も保つ。
+       while(cut>0 && /^[\p{M}\u1161-\u1175\u11a8-\u11c2\u{16D67}]/u.test(String.fromCodePoint(combined.codePointAt(cut)).normalize('NFD'))) {
+        cut-=cut>1 && /[\uDC00-\uDFFF]/u.test(combined[cut-1]) && /[\uD800-\uDBFF]/u.test(combined[cut-2])?2:1;
+       }
+      }
+      carry=combined.slice(cut);if(carry.length>limits.carry)throw Error(lt('Unicode参照の分割確認上限を超えたため、整理候補を出していません'));
+      match(combined.slice(0,cut).normalize('NFC'));
+     };
+     let n;while((n=fs.readSync(fd,buffer,0,buffer.length,null))) {
+      budget();bytes+=n;if(bytes>scanSize)throw Error(lt('確認中に参照が変わりました。取得し直してください'));consume(decoder.write(buffer.subarray(0,n)));
+     }
+     consume(decoder.end(),true);
+     if(bytes!==scanSize || signature(fs.fstatSync(fd))!==expected)throw Error(lt('確認中に参照が変わりました。取得し直してください'));
+    } finally {fs.closeSync(fd);}
+   }
+   for(const [file,expected] of snapshots) {scanPath=file;budget();const st=maybeStat(file);scanSize=st?.size||0;if((st?signature(st):null)!==expected)throw Error(lt('確認中に参照が変わりました。取得し直してください'));}
+   for(const item of prepared) {
+    if(referenced.has(item))excluded.push({path:item.candidate.paths[0],reason:lt('台帳・コード・記録から参照されています')});
+    else candidates.push(item.candidate);
+   }
+  } catch(e) {return stopped(e);}
   const token=randomUUID();this.previews.set(token,{id,at:Date.now(),candidates});
   for(const [k,v] of this.previews)if(Date.now()-v.at>10*60000)this.previews.delete(k);
   return {token,candidates,excluded,busy:this.busy(id)||this.locked(id),scripts:scriptsAt(this.baseOf(p)),history:this.history(id)};
@@ -104,10 +168,12 @@ class Maintenance {
   this.idle(id);const old=this.previews.get(token);
   if(confirm!==true || !old || old.id!==id || Date.now()-old.at>10*60000 || !Array.isArray(selected) || !selected.length || new Set(selected).size!==selected.length)throw Error(lt('候補を確認して選び直してください'));
   const picked=selected.map(key=>old.candidates.find(x=>x.id===key));if(picked.some(x=>!x))throw Error(lt('候補が見つかりません'));
-  const fresh=this.preview(id).candidates;
+  const checked=this.preview(id);
+  if(!checked.token)throw Error(lt('移動前の参照確認を止めました：')+checked.stopped.reason+'（'+checked.stopped.path+'）');
+  const fresh=checked.candidates;
   for(const c of picked)if(!fresh.some(x=>x.fingerprint===c.fingerprint && JSON.stringify(x.paths)===JSON.stringify(c.paths)))throw Error(lt('候補または参照が変わりました。取得し直してください'));
-  for(const c of picked)for(const src of c.paths){const bin=trashRootFor(src,this.trash);noLinks(bin);fs.mkdirSync(bin,{recursive:true,mode:0o700});}
-  const record={id:randomUUID(),project:id,at:new Date().toISOString(),entries:picked.flatMap(c=>c.paths.map(src=>({src,dest:path.join(trashRootFor(src,this.trash),`${id}-${randomUUID()}-${path.basename(src)}`),fingerprint:inventory(src).fingerprint,restored:false}))),error:''};
+  noLinks(this.trash);fs.mkdirSync(this.trash,{recursive:true});
+  const record={id:randomUUID(),project:id,at:new Date().toISOString(),entries:picked.flatMap(c=>c.paths.map(src=>({src,dest:path.join(this.trash,`${id}-${randomUUID()}-${path.basename(src)}`),fingerprint:inventory(src).fingerprint,restored:false}))),error:''};
   this.save(record);
   try {for(const e of record.entries) {fs.renameSync(e.src,e.dest);e.moved=true;this.save(record);}}
   catch(e) {record.error=lt('一部を移せませんでした。記録から復元できます（')+e.code+'）';this.save(record);}
@@ -122,7 +188,7 @@ class Maintenance {
   for(const e of entries) {
    if(typeof e.src!=='string' || path.resolve(e.src)!==e.src || typeof e.dest!=='string' || path.resolve(e.dest)!==e.dest)throw Error(lt('復元先のパスが不正です'));
    if(!targets.some(d=>inside(d,e.src) && d!==e.src) && !(path.dirname(e.src)===chatdir && p.tasks.some(t=>[t.id+'.jsonl',t.id+'.json',t.id+'.queue.json'].includes(path.basename(e.src)))))throw Error(lt('復元先は許可された場所ではありません'));
-   if(!isTrashDestination(e.src,e.dest,this.trash) || fs.existsSync(e.src))throw Error(lt('復元先が存在するか、ゴミ箱の場所が違います。上書きはしません'));
+   if(path.dirname(e.dest)!==path.resolve(this.trash) || fs.existsSync(e.src))throw Error(lt('復元先が存在するか、ゴミ箱の場所が違います。上書きはしません'));
    noLinks(e.src);if(inventory(e.dest).fingerprint!==e.fingerprint)throw Error(lt('ゴミ箱の中身が変わりました。自動で復元しません'));
   }
   for(const e of r.entries.filter(e=>!e.restored && !e.moved && !fs.existsSync(e.dest) && fs.existsSync(e.src)))e.restored=true;

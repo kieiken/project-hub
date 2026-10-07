@@ -1,5 +1,5 @@
 'use strict';
-const { lt } = require("./locale");
+const { lt } = require('./locale');
 // 公開配布の版だけを読む。インストーラやAIは実行しない。
 const https = require('node:https');
 const fs = require('node:fs');
@@ -32,9 +32,10 @@ async function latestVersion(ai, method, home, read = readPublic) {
     const os = process.platform === 'win32' ? 'windows' : process.platform;
     const arch = process.arch === 'x64' ? 'x86_64' : 'arm64';
     url = `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${os}_${arch}.json`; field = 'version';
-  } else throw Error(lt('未対応のAIです'));
+  } else if (ai === 'grok') url = 'https://x.ai/cli/stable';
+  else throw Error(lt('未対応のAIです'));
   const body = await read(url);
-  const version = String(field ? JSON.parse(body)[field] || '' : body.trim()).replace(/^rust-v/, '');
+  const version = String(field ? JSON.parse(body)[field] || '' : (ai === 'grok' ? body.split(/\r?\n/)[0].trim() : body.trim())).replace(/^rust-v/, '');
   if (!VERSION.test(version)) throw Error(lt('配布元の版を読めません'));
   return { version, source: url };
 }

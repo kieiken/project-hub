@@ -1,4 +1,6 @@
 'use strict';
+// Existing behavior and message assertions use the Japanese default contract.
+process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -7,9 +9,10 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
 
-function app() {
+function app(userAgent = '') {
   const elements = new Map();
   const events = new Map();
+  const documentListeners = [];
   const timers = new Map();
   const timeouts = new Map();
   const details = [];
@@ -21,7 +24,7 @@ function app() {
       scrollTop: 0, scrollHeight: 100, clientHeight: 100,
       dataset: {}, handlers: {}, attributes: {}, addEventListener(name, cb) { this.handlers[name] = cb; },
       setAttribute(name, value) { this.attributes[name] = String(value); },
-      querySelector() { return null; }, querySelectorAll() { return []; }, insertAdjacentHTML() {},
+      querySelector() { return null; }, querySelectorAll() { return []; }, insertAdjacentHTML() {}, focus() { document.activeElement = this; },
     });
     return elements.get(key);
   }
@@ -33,10 +36,10 @@ function app() {
     hidden: false, activeElement: null,
     querySelector: s => s.startsWith('details[open]') ? details.find(d => d.open && (!s.includes(':not(.project-notes)') || !d.classList.contains('project-notes'))) || null : s === '#msg-partial' ? elements.get(s) || null : element(s),
     querySelectorAll: () => [],
-    addEventListener(name, cb) { events.set(name, cb); },
+    addEventListener(name, cb, capture = false) { events.set(name, cb); documentListeners.push({ name, cb, capture }); },
   };
   const context = vm.createContext({
-    document, window: {}, navigator: { userAgent: '' },
+    document, window: {}, navigator: { userAgent }, location: { href: '' },
     localStorage: { getItem: () => null, setItem() {} },
     fetch: () => new Promise(() => {}), // 起動時の load() は試験用の状態を上書きしない
     EventSource, URLSearchParams,
@@ -49,7 +52,7 @@ function app() {
     confirm: () => true,
   });
   vm.runInContext(source, context);
-  return { context, document, elements, element, events, timers, timeouts, details, stream: () => stream };
+  return { context, document, elements, element, events, documentListeners, timers, timeouts, details, stream: () => stream };
 }
 
 const project = (state = '実行中') => ({
@@ -63,11 +66,281 @@ const snapshot = (taskState = '実行中', sessions = []) => ({
   sessions, chatting: [], terminal: true, efforts: [], cliFlags: {}, version: '1', latest: '1',
 });
 
+test('一覧の描き直し前に整理の所属を判定し、利用状況を閉じても実際の画面移動を続ける', () => {
+  for (const [go, pid, shouldClose] of [['project', 'other', true], ['work', 'other', true], ['work', 'p', false]]) {
+    const a = app(); a.context.api = () => new Promise(() => {});
+    const navigation = a.documentListeners.find(x => x.name === 'click' && x.cb.toString().includes('view = { kind: go.dataset.go'));
+    const before = a.documentListeners.length;
+    for (const file of ['maintenance.js', 'usage.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../public', file), 'utf8'), a.context);
+    const captures = a.documentListeners.slice(before).filter(x => x.name === 'click' && x.capture);
+    vm.runInContext('maintenanceProject="p";view={kind:"project",project:"p"};', a.context);
+    a.element('#maintenance-drawer').hidden = false; a.element('#usage-drawer').hidden = false;
+    a.element('#usage-toggle').focus = () => assert.fail('outside navigation must retain focus');
+    let attached = true, rendered = false;
+    const button = { dataset: { go, p: pid, t: go === 'work' ? 't' : undefined }, closest: s => s === '#list' && attached ? a.element('#list') : null };
+    const event = { target: { id: '', dataset: {}, closest: s => s === '[data-go]' || s === '#list [data-go][data-p]' && attached ? button : null },
+      preventDefault: () => assert.fail('navigation must continue'), stopPropagation: () => assert.fail('navigation must continue') };
+    a.context.closeDrawer = () => {}; a.context.markRead = () => {}; a.context.showInTree = () => {}; a.context.save = () => {};
+    a.context.render = () => {
+      assert.equal(a.element('#maintenance-drawer').hidden, shouldClose);
+      assert.equal(a.element('#usage-drawer').hidden, true);
+      attached = false; rendered = true;
+    };
+    for (const listener of captures) listener.cb(event);
+    navigation.cb(event);
+    assert.equal(rendered, true);
+    assert.equal(vm.runInContext('view.kind', a.context), go); assert.equal(vm.runInContext('view.project', a.context), pid);
+    assert.equal(a.element('#usage-toggle').attributes['aria-expanded'], 'false');
+  }
+});
+
 const notesToggle = (id, open, isConnected = true) => ({
   target: { id: '', dataset: { p: id }, open, isConnected,
     classList: { contains: c => c === 'project-notes' } },
 });
 const notesTag = a => a.element('#main').innerHTML.match(/<details class="more project-notes"[^>]*>/)?.[0];
+
+test('account picker hides the single default, escapes names and preserves deleted selection', () => {
+  const a = app(), data = snapshot();
+  data.accounts = [{ ai: 'codex', id: 'default', name: '既定' }];
+  vm.runInContext('state=' + JSON.stringify(data), a.context);
+  assert.match(a.context.taskAccountSelect(data.projects[0], data.projects[0].tasks[0], 'codex'), /hidden/);
+  data.accounts.push({ ai: 'codex', id: 'one', name: '<secret>' });
+  vm.runInContext('state=' + JSON.stringify(data), a.context);
+  const html = a.context.taskAccountSelect(data.projects[0], { ...data.projects[0].tasks[0], accounts: { codex: 'removed' } }, 'codex');
+  assert.match(html, /value="removed" selected disabled/); assert.match(html, /&lt;secret&gt;/); assert.doesNotMatch(html, /<secret>/);
+});
+test('account saving updates the latest task, retains drafts, and restores selection on failure', async () => {
+  const a = app(), data = snapshot(), select = { dataset: { p: 'p', t: 't', ai: 'codex' }, value: 'one', disabled: false };
+  vm.runInContext('state=' + JSON.stringify(data) + ';chatDraft.keep="入力中"', a.context);
+  let resolve; a.context.api = () => new Promise(r => { resolve = r; });
+  const pending = a.context.saveTaskAccount(select); assert.equal(select.disabled, true);
+  vm.runInContext('state.projects[0].tasks[0]={...state.projects[0].tasks[0]}', a.context);
+  resolve({ accounts: { codex: 'one' } }); await pending;
+  assert.equal(vm.runInContext('state.projects[0].tasks[0].accounts.codex', a.context), 'one');
+  assert.equal(vm.runInContext('chatDraft.keep', a.context), '入力中');
+  a.context.api = async () => { throw Error('failed'); }; select.value = 'two'; await a.context.saveTaskAccount(select);
+  assert.equal(select.value, 'one'); assert.equal(select.disabled, false);
+});
+
+function accountApp(terminal = true) {
+  const a = app(), data = snapshot('未着手'); data.terminal = terminal;
+  data.projects[0].tasks[0].accounts = { claude: 'old-c', codex: 'old-x' };
+  data.accounts = ['claude', 'codex'].flatMap(ai => ['default', 'old-' + (ai === 'claude' ? 'c' : 'x'), 'new-' + (ai === 'claude' ? 'c' : 'x')].map(id => ({ ai, id, name: id })));
+  vm.runInContext('state=' + JSON.stringify(data) + ';view={kind:"work",project:"p",task:"t"};chatDraft.keep="入力中"', a.context);
+  const select = a.element('#chat-account');
+  select.dataset = { p: 'p', t: 't', ai: 'codex' }; select.value = 'new-x'; select.tagName = 'SELECT';
+  a.document.querySelectorAll = q => q === '[data-task-account]' ? [select] : [];
+  a.document.activeElement = select;
+  a.context.toast = () => {};
+  return { ...a, data, select };
+}
+const selectedAccount = (a, ai = 'codex') => vm.runInContext(`state.projects[0].tasks[0].accounts.${ai}`, a.context);
+
+for (const method of ['refreshTree', 'pollState', 'load', 'refreshAiToolCatalog']) {
+  for (const arrival of ['during-save', 'after-save']) test(`account selection rejects old ${method} response ${arrival} and sends the shown account`, async () => {
+    const a = accountApp(); let saved, fetched;
+    a.context.api = route => new Promise(resolve => { if (route === '/api/accounts/select') saved = resolve; else { assert.equal(route, '/api/state'); fetched = resolve; } });
+    const saving = a.context.saveTaskAccount(a.select), fetching = a.context[method]();
+    if (arrival === 'during-save') { fetched(a.data); await fetching; }
+    saved({ accounts: { claude: 'old-c', codex: 'new-x' } }); await saving;
+    if (arrival === 'after-save') { fetched(a.data); await fetching; }
+    assert.equal(selectedAccount(a), 'new-x'); assert.equal(a.select.value, 'new-x');
+    assert.equal(vm.runInContext('chatDraft.keep', a.context), '入力中');
+    a.element('#chat-ai').value = 'codex|GPT-6.1-Sol'; a.element('#chat-in').value = 'send shown account';
+    let sent;
+    a.context.api = async (route, body) => {
+      if (route === '/api/chat/send') { sent = body.account; throw Error('request captured without CLI'); }
+      return [];
+    };
+    a.context.openChat(a.data.projects[0], a.data.projects[0].tasks[0]);
+    await a.element('#composer').handlers.submit({ preventDefault() {} });
+    assert.equal(sent, a.select.value);
+  });
+}
+// Keep the real api/fetchState: only HTTP is simulated, including conditional 304s.
+function accountHttp(a) {
+  let server = JSON.parse(JSON.stringify(a.data)), tag = '"initial"', held, saved;
+  const requests = [];
+  a.context.fetch = (route, opt = {}) => {
+    if (route === '/api/accounts/select') return new Promise(resolve => {
+      saved = () => resolve({ status: 200, ok: true, json: async () => ({ accounts: { codex: 'new-x' } }) });
+    });
+    assert.equal(route, '/api/state');
+    const sentTag = opt.headers?.['If-None-Match'];
+    const status = sentTag === tag ? 304 : 200;
+    const data = JSON.parse(JSON.stringify(server)), responseTag = tag;
+    requests.push({ sentTag, status });
+    const response = { status, ok: status === 200, headers: { get: key => key === 'etag' ? responseTag : null }, json: async () => data };
+    if (held === true) return new Promise(resolve => { held = () => resolve(response); });
+    return Promise.resolve(response);
+  };
+  return {
+    requests,
+    update(title, nextTag) {
+      server.projects[0].tasks[0].title = title;
+      server.projects[0].tasks[0].accounts = { claude: 'new-c', codex: 'new-x' };
+      tag = nextTag;
+    },
+    hold() { held = true; },
+    release() { const resolve = held; held = null; resolve(); },
+    save() { saved(); },
+  };
+}
+
+for (const method of ['load', 'refreshTree', 'pollState', 'refreshAiToolCatalog']) {
+  for (const start of ['before-save', 'during-save']) for (const arrival of ['during-save', 'after-save']) {
+    test(`discarded HTTP ${method} (${start}/${arrival}) leaves its ETag unacknowledged and retries the state`, async () => {
+      const a = accountApp(), http = accountHttp(a);
+      await a.context.refreshTree();
+      assert.equal(vm.runInContext('stateTag', a.context), '"initial"');
+      a.select.value = 'new-x';
+      http.update('shared updated title', '"shared"'); http.hold();
+      let saving, fetching;
+      if (start === 'before-save') { fetching = a.context[method](); saving = a.context.saveTaskAccount(a.select); }
+      else { saving = a.context.saveTaskAccount(a.select); fetching = a.context[method](); }
+      if (arrival === 'during-save') { http.release(); await fetching; }
+      http.save(); await saving;
+      if (arrival === 'after-save') { http.release(); await fetching; }
+      assert.equal(vm.runInContext('stateTag', a.context), '"initial"');
+      assert.equal(vm.runInContext('state.projects[0].tasks[0].title', a.context), 'Task');
+      assert.equal(selectedAccount(a), 'new-x'); assert.equal(a.select.value, 'new-x');
+      assert.equal(selectedAccount(a, 'claude'), 'old-c');
+      await a.context.refreshTree();
+      assert.equal(vm.runInContext('state.projects[0].tasks[0].title', a.context), 'shared updated title');
+      assert.equal(selectedAccount(a, 'claude'), 'new-c');
+      assert.equal(vm.runInContext('stateTag', a.context), '"shared"');
+      await a.context.refreshTree();
+      assert.deepEqual(http.requests.map(r => r.status), [200, 200, 200, 304]);
+      assert.equal(http.requests[2].sentTag, '"initial"');
+      assert.equal(http.requests[3].sentTag, '"shared"');
+      assert.equal(vm.runInContext('chatDraft.keep', a.context), '入力中');
+    });
+  }
+  for (const arrival of ['before-new-state', 'after-new-state']) {
+    test(`parallel HTTP ${method} discarded ${arrival} cannot replace the adopted state ETag`, async () => {
+      const a = accountApp(), http = accountHttp(a);
+      await a.context.refreshTree(); a.select.value = 'new-x';
+      const saving = a.context.saveTaskAccount(a.select);
+      http.update('discarded title', '"discarded"'); http.hold();
+      const fetching = a.context[method]();
+      http.save(); await saving;
+      if (arrival === 'before-new-state') { http.release(); await fetching; }
+      http.update('latest title', '"latest"');
+      await a.context.refreshTree();
+      if (arrival === 'after-new-state') { http.release(); await fetching; }
+      assert.equal(vm.runInContext('stateTag', a.context), '"latest"');
+      assert.equal(vm.runInContext('state.projects[0].tasks[0].title', a.context), 'latest title');
+      assert.equal(selectedAccount(a, 'claude'), 'new-c');
+      assert.equal(selectedAccount(a), 'new-x'); assert.equal(a.select.value, 'new-x');
+      await a.context.refreshTree();
+      assert.deepEqual(http.requests.map(r => r.status), [200, 200, 200, 304]);
+      assert.equal(http.requests[3].sentTag, '"latest"');
+      assert.equal(vm.runInContext('chatDraft.keep', a.context), '入力中');
+    });
+  }
+}
+
+for (const method of ['load', 'refreshTree', 'pollState', 'refreshAiToolCatalog']) {
+  test(`accepted HTTP ${method} acknowledges exactly its state, then conditional retrieval returns 304`, async () => {
+    const a = accountApp(), http = accountHttp(a);
+    a.context.render = () => {}; // Only rendering is stubbed; HTTP and adoption stay real.
+    http.update('accepted title', '"accepted"');
+    await a.context[method]();
+    assert.equal(vm.runInContext('stateTag', a.context), '"accepted"');
+    assert.equal(vm.runInContext('state.projects[0].tasks[0].title', a.context), 'accepted title');
+    await a.context.refreshTree();
+    assert.deepEqual(http.requests.map(r => r.status), [200, 304]);
+    assert.equal(http.requests[1].sentTag, '"accepted"');
+  });
+}
+
+test('parallel HTTP bodies retain their own ETags even when JSON decoding finishes out of order', async () => {
+  const a = accountApp(), http = accountHttp(a);
+  await a.context.refreshTree();
+  const normalFetch = a.context.fetch;
+  let finishBody;
+  http.update('older title', '"older"');
+  a.context.fetch = async (...args) => {
+    const r = await normalFetch(...args), data = await r.json();
+    return { ...r, json: () => new Promise(resolve => { finishBody = () => resolve(data); }) };
+  };
+  const older = a.context.refreshTree();
+  // Let the headers arrive while the older response body is still pending.
+  for (let n = 0; n < 10 && !finishBody; n++) await Promise.resolve();
+  assert.equal(typeof finishBody, 'function');
+  a.context.fetch = normalFetch;
+  http.update('latest title', '"latest"');
+  await a.context.refreshTree();
+  assert.equal(vm.runInContext('stateTag', a.context), '"latest"');
+  finishBody(); await older;
+  // Both notifications share an epoch: if the older body is adopted, its own tag
+  // must travel with it, so the next request can retrieve the latest state again.
+  assert.equal(vm.runInContext('state.projects[0].tasks[0].title', a.context), 'older title');
+  assert.equal(vm.runInContext('stateTag', a.context), '"older"');
+  await a.context.refreshTree(); await a.context.refreshTree();
+  assert.equal(vm.runInContext('state.projects[0].tasks[0].title', a.context), 'latest title');
+  assert.deepEqual(http.requests.map(r => r.status), [200, 200, 200, 200, 304]);
+});
+
+test('failed HTTP state requests preserve the accepted ETag and untagged adoption clears it', async () => {
+  const a = accountApp(), http = accountHttp(a);
+  await a.context.refreshTree();
+  a.context.fetch = async () => ({ status: 500, ok: false, headers: { get: () => '"error"' }, json: async () => ({ error: 'state unavailable' }) });
+  await assert.rejects(a.context.fetchState(), /state unavailable/);
+  assert.equal(vm.runInContext('stateTag', a.context), '"initial"');
+  const untagged = a.data;
+  a.context.fetch = async () => ({ status: 200, ok: true, json: async () => untagged });
+  await a.context.refreshTree();
+  assert.equal(vm.runInContext('stateTag', a.context), '');
+});
+
+for (const order of [['claude', 'codex'], ['codex', 'claude']]) test(`account save responses in ${order.join('/')} order retain both selections`, async () => {
+  const a = accountApp(), pending = {}, selects = {}, jobs = {};
+  a.context.api = (_route, b) => new Promise(resolve => { pending[b.ai] = resolve; });
+  for (const ai of ['claude', 'codex']) {
+    selects[ai] = { dataset: { p: 'p', t: 't', ai }, value: ai === 'claude' ? 'new-c' : 'new-x' };
+    jobs[ai] = a.context.saveTaskAccount(selects[ai]);
+  }
+  // Each response is allowed to contain the other AI's stale snapshot.
+  for (const ai of order) { pending[ai]({ accounts: { claude: ai === 'claude' ? 'new-c' : 'old-c', codex: ai === 'codex' ? 'new-x' : 'old-x' } }); await jobs[ai]; }
+  assert.equal(selectedAccount(a, 'claude'), 'new-c'); assert.equal(selectedAccount(a), 'new-x');
+});
+test('the same task/AI cannot save through a second picker until the first selection settles', async () => {
+  const a = accountApp(); let saved, calls = 0;
+  a.context.api = () => { calls++; return new Promise(resolve => { saved = resolve; }); };
+  const saving = a.context.saveTaskAccount(a.select);
+  const second = { dataset: { ...a.select.dataset }, value: 'default' };
+  await a.context.saveTaskAccount(second); assert.equal(calls, 1); assert.equal(second.value, 'old-x');
+  saved({ accounts: { codex: 'new-x' } }); await saving;
+  assert.equal(selectedAccount(a), 'new-x');
+});
+test('focused account picker follows a later authoritative state instead of displaying an unsent account', async () => {
+  const a = accountApp(); a.context.api = async () => a.data;
+  await a.context.refreshTree();
+  assert.equal(a.select.value, 'old-x'); assert.equal(selectedAccount(a), a.select.value);
+});
+for (const terminal of [true, false]) for (const outcome of ['success', 'failure']) test(`${terminal ? 'embedded' : 'external'} terminal waits for account save ${outcome} and pins the settled selection`, async () => {
+  const a = accountApp(terminal), calls = []; let resolve, reject, fetched;
+  a.context.api = (route, body) => {
+    if (route === '/api/accounts/select') return new Promise((yes, no) => { resolve = yes; reject = no; });
+    if (route === '/api/state') return new Promise(yes => { fetched = yes; });
+    calls.push({ route, body }); return Promise.resolve({ dir: '/fixture' });
+  };
+  const saving = a.context.saveTaskAccount(a.select), oldFetch = a.context.refreshTree();
+  await a.context.startAI('p', 't', 'codex'); assert.equal(calls.length, 0);
+  if (outcome === 'success') resolve({ accounts: { codex: 'new-x' } }); else reject(Error('save failed'));
+  await saving; fetched(a.data); await oldFetch;
+  a.context.load = async () => {};
+  const starting = a.context.startAI('p', 't', 'codex');
+  // A later selection cannot alter the already constructed request.
+  vm.runInContext('state.projects[0].tasks[0].accounts.codex="default"', a.context);
+  await starting;
+  assert.equal(calls.length, 1); assert.equal(calls[0].route, terminal ? '/api/term/start' : '/api/continue');
+  assert.equal(calls[0].body.account, outcome === 'success' ? 'new-x' : 'old-x');
+  assert.equal(a.select.value, calls[0].body.account);
+  assert.equal(vm.runInContext('chatDraft.keep', a.context), '入力中');
+});
 
 for (const action of ['child', 'branch']) test(`ツリーの${action === 'child' ? '子作業は共通の初期AIで作成' : '分岐も共通の初期AIで作成'}する`, async () => {
   const a = app(), data = snapshot(), calls = [];
@@ -418,6 +691,196 @@ test('AI更新後は新しいモデルを取り込み、保存前の役割編集
   assert.match(a.element('#ai-tools').innerHTML, /0\.157\.1 → 0\.159\.0/);
 });
 
+test('設定にAIアカウントとCodex加速の操作・注意を同時に表示する', () => {
+  const a = app();
+  vm.runInContext('state = ' + JSON.stringify(snapshot()) + '; view = {kind:"settings",project:"p"}', a.context);
+  a.context.renderSettings();
+  const html = a.element('#main').innerHTML;
+  assert.match(html, /<h2>AIアカウント<\/h2><div id="ai-accounts"/);
+  assert.match(html, /<h2>Codex の加速（Fast）<\/h2>/);
+  assert.match(html, /class="danger"><strong>速度約1\.5倍・利用枠の消耗2\.5倍/);
+  assert.match(a.element('#ai-accounts').innerHTML, /data-account-action="add"/);
+});
+
+test('加速の初期OFFと保存済ONを表示し、保存中は無効・二重送信しない', async () => {
+  const a = app(), input = a.element('#codex-fast');
+  vm.runInContext('state = ' + JSON.stringify(snapshot()), a.context);
+  a.context.renderAcceleration({ codexAllowed: false });
+  assert.match(a.element('#acceleration').innerHTML, />OFF</);
+  a.context.renderAcceleration({ codexAllowed: true });
+  assert.match(a.element('#acceleration').innerHTML, /checked/);
+  assert.match(a.element('#acceleration').innerHTML, />ON</);
+  input.dataset.saved = 'false'; input.checked = true;
+  let resolve, count = 0;
+  a.context.api = async (route, body) => {
+    assert.equal(route, '/api/acceleration'); assert.equal(body.codexAllowed, true); count++;
+    return new Promise(r => { resolve = r; });
+  };
+  const saving = a.context.saveCodexFast(input);
+  assert.equal(input.disabled, true);
+  await a.context.saveCodexFast(input);
+  assert.equal(count, 1);
+  resolve({ codexAllowed: true }); await saving;
+  assert.equal(input.disabled, false); assert.equal(input.dataset.saved, 'true');
+  assert.equal(a.element('#codex-fast-state').textContent, 'ON');
+});
+
+test('加速OFFへの保存失敗はONへ戻し、古い読込応答で切替を上書きしない', async () => {
+  const a = app(), input = a.element('#codex-fast');
+  vm.runInContext('state = ' + JSON.stringify(snapshot()), a.context);
+  input.dataset.saved = 'true'; input.checked = false;
+  a.context.api = async () => { throw Error('fixture failure'); };
+  await a.context.saveCodexFast(input);
+  assert.equal(input.checked, true); assert.equal(input.disabled, false);
+  assert.equal(a.element('#codex-fast-state').textContent, 'ON');
+  assert.match(a.element('#toast').textContent, /保存できませんでした/);
+  let resolveLoad;
+  a.context.api = route => route === '/api/cli-models' ? new Promise(r => { resolveLoad = r; }) : Promise.resolve({ codexAllowed: true });
+  const loading = a.context.loadCliModels();
+  input.checked = true; await a.context.saveCodexFast(input);
+  const before = a.element('#acceleration').innerHTML;
+  resolveLoad({ claude: [], codex: [], hints: { claude: [], codex: [] }, acceleration: { codexAllowed: false } });
+  await loading;
+  assert.equal(a.element('#acceleration').innerHTML, before);
+  assert.equal(a.element('#codex-fast-state').textContent, 'ON');
+});
+
+test('加速設定の読込失敗ではOFFに見せず、読み込めない理由を表示する', async () => {
+  const a = app();
+  a.context.api = async () => { throw Error('fixture failure'); };
+  await a.context.loadCliModels();
+  assert.match(a.element('#acceleration').textContent, /読み込めませんでした/);
+});
+
+for (const mode of ['chat', 'term']) for (const wanted of [true, false]) {
+  for (const failure of [false, true]) for (const taskOn of [true, false]) {
+    test(`permission save after navigating to ${mode} synchronizes Fast (${wanted}, failure=${failure}, task=${taskOn}) without losing drafts or ETags`, async () => {
+      const a = app(), data = snapshot('未着手'), input = a.element('#codex-fast');
+      data.acceleration = { codexAllowed: !wanted };
+      data.projects[0].tasks[0].codexFast = taskOn;
+      vm.runInContext('state=' + JSON.stringify(data) + ';view={kind:"settings",project:"p"};stateTag="initial";chatDraft.keep="入力中"', a.context);
+      input.dataset.saved = String(!wanted); input.checked = wanted;
+      const box = a.element(mode === 'chat' ? '#chat-fast-box' : '#term-fast-box');
+      box.dataset = { p: 'p', t: 't' };
+      let picker = null;
+      Object.defineProperty(box, 'innerHTML', {
+        get() { return this.html || ''; },
+        set(html) {
+          this.html = html; picker = null;
+          if (!html) return;
+          const classes = new Set(html.match(/class="([^"]+)"/)[1].split(' '));
+          const span = { textContent: taskOn ? '加速ON（Fast）' : '加速（Fast）' };
+          const label = { hidden: false, classList: {
+            toggle(name, on) { on ? classes.add(name) : classes.delete(name); },
+            contains(name) { return classes.has(name); },
+          }, querySelector: () => span };
+          picker = { dataset: { p: 'p', t: 't' }, checked: /\bchecked\b/.test(html),
+            disabled: /\bdisabled\b/.test(html), closest: () => label };
+        },
+      });
+      box.querySelector = () => picker;
+      const query = a.document.querySelector;
+      let navigated = false;
+      a.document.querySelector = sel => sel === '#codex-fast' && navigated ? null
+        : sel === '#chat-fast-box' ? (mode === 'chat' && navigated ? box : null) : query(sel);
+      a.document.querySelectorAll = sel => sel === '[data-task-fast]' ? (picker ? [picker] : [])
+        : sel === '[data-term-fast-box]' && mode === 'term' && navigated ? [box] : [];
+      a.element('#chat-ai').value = 'codex|GPT-6.1-Sol';
+      let finishSave;
+      const held = [], tags = [];
+      const response = (body, tag = 'discarded', ok = true) => ({ status: ok ? 200 : 500, ok,
+        json: async () => JSON.parse(JSON.stringify(body)), headers: { get: () => tag } });
+      a.context.fetch = (route, opt = {}) => {
+        if (route === '/api/acceleration') {
+          assert.equal(JSON.parse(opt.body).codexAllowed, wanted);
+          return new Promise(resolve => { finishSave = () => resolve(response(
+            failure ? { error: 'fixture failure' } : { codexAllowed: wanted }, '', !failure)); });
+        }
+        assert.equal(route, '/api/state'); tags.push(opt.headers?.['If-None-Match']);
+        return new Promise(resolve => held.push(() => resolve(response(data))));
+      };
+      a.context.render = () => { throw Error('must not redraw the work screen'); };
+      const saving = a.context.saveCodexFast(input);
+      navigated = true;
+      vm.runInContext('view={kind:"work",project:"p",task:"t"}', a.context);
+      box.innerHTML = a.context.taskFastSelect(data.projects[0], data.projects[0].tasks[0], 'codex');
+      const main = a.element('#main'), draft = a.element('#chat-in');
+      main.innerHTML = 'work DOM'; draft.value = 'まだ送っていない文章';
+      const during = a.context.refreshTree(); held.shift()(); await during;
+      const after = a.context.refreshTree();
+      await a.context.startAI('p', 't', 'codex'); // 保存中は起動要求を出さない
+      assert.equal(vm.runInContext('accelerationSaving', a.context), true);
+      finishSave(); await saving;
+      held.shift()(); await after;
+      const confirmed = failure ? !wanted : wanted;
+      assert.equal(vm.runInContext('state.acceleration.codexAllowed', a.context), confirmed);
+      assert.equal(!!picker && !picker.closest().hidden, confirmed);
+      if (picker) {
+        assert.equal(picker.checked, taskOn); assert.equal(picker.disabled, false);
+        assert.equal(picker.closest().classList.contains('danger'), taskOn);
+        assert.equal(picker.closest().querySelector().textContent, taskOn ? '加速ON（Fast）' : '加速（Fast）');
+      }
+      assert.equal(vm.runInContext('state.projects[0].tasks[0].codexFast', a.context), taskOn);
+      assert.equal(vm.runInContext('accelerationSaving', a.context), false);
+      assert.equal(input.disabled, false); assert.equal(input.checked, confirmed);
+      assert.equal(vm.runInContext('stateTag', a.context), 'initial');
+      assert.deepEqual(tags, ['initial', 'initial']);
+      assert.equal(a.element('#main'), main); assert.equal(main.innerHTML, 'work DOM');
+      assert.equal(a.element('#chat-in'), draft); assert.equal(draft.value, 'まだ送っていない文章');
+      assert.equal(vm.runInContext('chatDraft.keep', a.context), '入力中');
+      if (failure) assert.match(a.element('#toast').textContent, /fixture failure/);
+    });
+  }
+}
+
+test('設定タブは表示だけ切り替え、役割とCLI下書きを保持して選択を保存する', () => {
+  const a = app(), data = snapshot(), storage = new Map();
+  data.roles.roles = [{ name: 'test', main: { ai: 'codex', model: 'draft', effort: '高' }, backup: { ai: '人' } }];
+  vm.runInContext('state = ' + JSON.stringify(data) + '; rolesDraft = JSON.parse(JSON.stringify(state.roles.roles)); rolesDraft[0].main.model = "changed"', a.context);
+  a.context.localStorage.setItem = (k, v) => storage.set(k, v);
+  const tabs = ['basic', 'ai', 'connect', 'manage'].map(key => ({ ...a.element('#tab-' + key), dataset: { settingsTab: key } }));
+  const cards = ['basic', 'ai', 'connect', 'manage'].map(key => ({ dataset: { tab: key }, hidden: false }));
+  a.document.querySelectorAll = selector => selector === '[data-settings-tab]' ? tabs : selector === '.settings > [data-tab]' ? cards : [];
+  a.element('#main').innerHTML = 'same DOM'; a.element('#cli-draft').value = 'unfinished';
+  a.context.selectSettingsTab('ai');
+  assert.deepEqual(cards.map(c => c.hidden), [true, false, true, true]);
+  assert.equal(tabs[1].attributes['aria-label'], 'AI 未保存あり');
+  assert.equal(tabs[1].attributes['aria-selected'], 'true');
+  assert.equal(storage.get('hub.settingsTab'), 'ai');
+  a.context.selectSettingsTab('connect'); a.context.selectSettingsTab('ai');
+  assert.equal(a.element('#main').innerHTML, 'same DOM'); assert.equal(a.element('#cli-draft').value, 'unfinished');
+  assert.equal(vm.runInContext('rolesDraft[0].main.model', a.context), 'changed');
+  a.context.selectSettingsTab('invalid'); assert.equal(storage.get('hub.settingsTab'), 'basic');
+});
+test('作業別Fastは許可とCodex選択で表示し、保存の連打・古い一覧を防ぐ', async () => {
+  const a = app(), data = snapshot(); data.acceleration = { codexAllowed: true };
+  vm.runInContext('state = ' + JSON.stringify(data), a.context);
+  assert.match(a.context.taskFastSelect(data.projects[0], data.projects[0].tasks[0], 'codex'), /data-task-fast/);
+  assert.equal(a.context.taskFastSelect(data.projects[0], data.projects[0].tasks[0], 'claude'), '');
+  vm.runInContext('state.acceleration.codexAllowed = false', a.context);
+  assert.equal(a.context.taskFastSelect(data.projects[0], data.projects[0].tasks[0], 'codex'), '');
+  vm.runInContext('state.acceleration.codexAllowed = true', a.context);
+  const input = a.element('#task-fast'); input.dataset = { p: 'p', t: 't' }; input.checked = true;
+  let resolve, count = 0; a.context.api = (url, body) => {
+    assert.equal(url, '/api/acceleration/task'); assert.equal(body.on, true); count++;
+    return new Promise(r => { resolve = r; });
+  };
+  const saving = a.context.saveTaskFast(input);
+  assert.equal(input.disabled, true); await a.context.saveTaskFast(input); assert.equal(count, 1);
+  await a.context.startAI('p', 't', 'codex');
+  await a.context.act({ dataset: { act: 'handoff', p: 'p', t: 't', from: 'claude', to: 'codex' } });
+  assert.equal(count, 1, 'launches wait for the saved Fast choice');
+  let slowState; a.context.fetchState = () => new Promise(r => { slowState = r; });
+  const refreshing = a.context.refreshTree();
+  resolve({ codexFast: true }); await saving;
+  slowState(data); await refreshing;
+  assert.equal(vm.runInContext('state.projects[0].tasks[0].codexFast', a.context), true);
+  assert.equal(input.disabled, false);
+  input.checked = false; a.context.api = async () => { throw Error('fixture save failure'); };
+  await a.context.saveTaskFast(input);
+  assert.equal(input.checked, true); assert.equal(vm.runInContext('state.projects[0].tasks[0].codexFast', a.context), true);
+});
+
 test('CLI名の再読込中に書き足した下書きを保持する', async () => {
   const a = app();
   const box = a.element('#climodels');
@@ -727,12 +1190,115 @@ test('ターミナルの添付が全件失敗したら成功表示でエラー�
   assert.doesNotMatch(a.element('#toast').textContent, /0件/);
 });
 
+test('作業一覧は4点だけを表示し、AI情報・手順数・種別・作業場所を作業画面に残す', () => {
+  const a = app(), s = snapshot('未着手'), p = s.projects[0], t = p.tasks[0];
+  Object.assign(t, { title: '<本作業>', parent: 'parent', kind: 'derived', copy: true, via: 'Discord経由',
+    model: 'GPT-6.1-Sol', effort: '高', done: '検証の詳細', steps: [{ text: '確認済み', done: true }, { text: '<次の手順>', done: false }], next: '残りの整理' });
+  vm.runInContext('state = ' + JSON.stringify(s), a.context);
+  const html = a.context.taskRow(p, t, true);
+  assert.match(html, /class="trow child /);
+  assert.match(html, /<b>&lt;本作業&gt;<\/b>/);
+  assert.match(html, /Project・次：&lt;次の手順&gt;/);
+  assert.match(html, /data-act="taskcomplete"[^>]*>完了に移す<\/button>/);
+  assert.match(html, /data-go="work" data-p="p" data-t="t"[^>]*>作業画面へ<\/button>/);
+  assert.equal((html.match(/<button\b/g) || []).length, 2);
+  assert.doesNotMatch(html, /class="(?:tw|chip|via|prog|task-context|pend|wq)|task-status|Discord経由|GPT-6\.1-Sol|検証の詳細|作業用コピー|派生元|1 \/ 2/);
+  t.steps = []; assert.match(a.context.taskRow(p, t), /次：残りの整理/);
+  t.next = ''; assert.match(a.context.taskRow(p, t), /<span>未着手<\/span>/);
+  for (const phone of [false, true]) {
+    a.context.matchMedia = () => ({ matches: phone });
+    t.completionPending = true;
+    vm.runInContext('state = ' + JSON.stringify(s) + '; view = {kind:"work",project:"p",task:"t"}; renderWork()', a.context);
+    const work = a.element('#main').innerHTML;
+    assert.match(work, /class="task-context small"/);
+    assert.match(work, />派生<\/span>/);
+    assert.match(work, /作業用コピー/);
+    assert.match(work, /class="wq"><span>AI が手順をすべて済にしました/);
+    assert.match(work, /やったこと：/);
+    assert.match(work, /検証の詳細/);
+  }
+  assert.match(a.context.chip(p, t), /GPT-6\.1-Sol/);
+  assert.match(a.context.progressBar(t), /class="prog /);
+});
+
+test('状態札は質問・入力待ち・保存状態・完了確認・稼働の優先順で最大1つ出す', () => {
+  const a = app(), s = snapshot('未着手'), p = s.projects[0];
+  const cases = [
+    { extra: { question: '<質問>', state: '上限で停止', completionPending: true }, quiet: 61, expected: '返事待ち' },
+    { extra: { state: '上限で停止', completionPending: true }, quiet: 61, expected: '入力待ち' },
+    { extra: { state: '返事待ち', completionPending: true }, quiet: 0, expected: '返事待ち' },
+    { extra: { state: '上限で停止', completionPending: true }, quiet: 0, expected: '上限で停止' },
+    { extra: { completionPending: true }, quiet: 0, expected: '完了確認' },
+    { extra: {}, quiet: 59, expected: '作業中' },
+    { extra: {}, chat: true, expected: '作業中' },
+    { extra: { state: '実行中' }, expected: '' },
+    { extra: {}, quiet: 61, running: false, expected: '' },
+    { extra: {}, quiet: 61, task: 'other', expected: '' },
+  ];
+  for (const c of cases) {
+    const t = { ...p.tasks[0], ...c.extra };
+    s.sessions = c.quiet === undefined ? [] : [{ project: 'p', task: c.task || 't', ai: 'codex', running: c.running !== false, quiet: c.quiet }];
+    s.chatting = c.chat ? [{ project: 'p', task: 't', ai: 'claude' }] : [];
+    vm.runInContext('state = ' + JSON.stringify(s), a.context);
+    const html = a.context.taskRow(p, t);
+    const badges = [...html.matchAll(/class="pill task-status [^"]+">([^<]+)<\/span>/g)].map(x => x[1]);
+    assert.deepEqual(badges, c.expected ? [c.expected] : [], JSON.stringify(c));
+    if (t.question) assert.match(html, /あなたへの質問：&lt;質問&gt;/);
+    else if (c.expected === '入力待ち') assert.match(html, /Codex が入力を待っています（1分）/);
+  }
+});
+
+test('一覧の完了確認は行内操作だけで、質問とreplyタブの保護を維持する', () => {
+  const a = app(), s = snapshot(), p = s.projects[0], t = p.tasks[0];
+  t.completionPending = true; t.done = '一覧には出さない詳細';
+  vm.runInContext('state = ' + JSON.stringify(s), a.context);
+  for (const tab of [undefined, 'done']) {
+    const html = a.context.taskRow(p, t, false, tab);
+    assert.match(html, /<div class="tact"><button[^>]*data-act="taskcomplete"/);
+    assert.match(html, /data-act="taskcontinue"[^>]*>まだ続ける<\/button>/);
+    assert.match(html, /task-status needs">完了確認<\/span>/);
+    assert.equal((html.match(/<button\b/g) || []).length, 3);
+    assert.doesNotMatch(html, /class="pend|class="wq|やったこと|一覧には出さない詳細/);
+  }
+  for (const pending of [false, true]) {
+    t.question = '答えてください'; t.completionPending = pending;
+    const html = a.context.taskRow(p, t);
+    assert.doesNotMatch(html, /data-act="taskcomplete"|data-act="taskcontinue"/);
+    assert.match(html, /task-status needs">返事待ち<\/span>/);
+    const reply = a.context.taskRow(p, t, true, 'reply');
+    assert.match(reply, /data-act="answered"[^>]*>送らずに消す<\/button>/);
+    assert.equal((reply.match(/<button\b/g) || []).length, 2);
+    assert.doesNotMatch(reply, /data-act="taskcomplete"|data-act="taskcontinue"/);
+  }
+  t.question = ''; t.state = '完了'; t.completionPending = false;
+  const finished = a.context.taskRow(p, t);
+  assert.match(finished, /class="trow  fin"/);
+  assert.match(finished, /<span>完了<\/span>/);
+  assert.match(finished, /data-act="taskcontinue"[^>]*>再開する<\/button>/);
+  assert.doesNotMatch(finished, /data-act="taskcomplete"|task-status/);
+});
+
+test('子プロジェクトも名前と操作の2列に載せ、状態・件数・質問を保持する', () => {
+  const a = app(), s = snapshot('未着手'), p = s.projects[0];
+  const child = project('完了'); child.id = 'child'; child.parent = 'p'; child.name = '<子プロジェクト>';
+  child.tasks.push({ ...child.tasks[0], id: 'ask', state: '返事待ち', question: '<選択する>' });
+  s.projects.push(child);
+  vm.runInContext('state = ' + JSON.stringify(s), a.context);
+  a.context.renderOverview(p);
+  const html = a.element('#main').innerHTML.split('子プロジェクト（1）')[1];
+  assert.match(html, /class="task-title"><span class="sdot [^"]+"><\/span><b><button[^>]*>&lt;子プロジェクト&gt;/);
+  assert.match(html, /進行中・作業 1 \/ 2/);
+  assert.match(html, /質問あり：&lt;選択する&gt;/);
+  assert.match(html, /class="tact"><button[^>]*data-go="project" data-p="child"[^>]*>開く<\/button>/);
+  assert.doesNotMatch(html, /class="tw"|class="prog"/);
+});
+
 test('pending completion remains visible and a completed task does not stamp its phase automatically', () => {
   const a = app(), s = snapshot('完了確認待ち'), p = s.projects[0];
   p.tasks[0].completionPending = true; p.phases = [{name:'Build',state:'進行中'}];
   vm.runInContext('state = ' + JSON.stringify(s), a.context);
   a.context.renderOverview(p);
-  assert.match(a.element('#main').innerHTML, /完了に移しますか/);
+  assert.match(a.element('#main').innerHTML, /task-status needs">完了確認<\/span>/);
   assert.match(a.element('#main').innerHTML, /まだ続ける/);
   assert.doesNotMatch(a.element('#main').innerHTML, /完了した作業（1）/);
   p.tasks[0].state = '完了'; p.tasks[0].completionPending = false;
@@ -999,6 +1565,34 @@ test('settings contains GitHub card after remote and before ChatGPT', () => {
   assert.ok(html.indexOf('id="remote-box"') < html.indexOf('id="github-box"')); assert.ok(html.indexOf('id="github-box"') < html.indexOf('<h2>ChatGPT</h2>'));
 });
 
+test('ChatGPT login settings use the native app and update only status without replacing drafts', () => {
+  const a = app('ProjectHubApp/1');
+  vm.runInContext('state = ' + JSON.stringify(snapshot()) + '; view = {kind:"settings"}; rolesDraft = []', a.context);
+  a.context.renderSettings();
+  const html = a.element('#main').innerHTML;
+  assert.match(html, /href="hubapp:\/\/gpt\?login=1">ChatGPT にログイン/);
+  assert.equal(a.context.location.href, 'hubapp://gpt?status=1');
+  const status = a.element('#gpt-login-status');
+  a.context.window.hubGptLogin(true); assert.equal(status.textContent, 'ログイン済み');
+  a.context.window.hubGptLogin(false); assert.equal(status.textContent, 'まだ');
+  a.context.window.hubGptLogin('private-data'); assert.equal(status.textContent, 'まだ');
+  assert.equal(a.element('#main').innerHTML, html);
+  assert.equal(vm.runInContext('rolesDraft.length', a.context), 0);
+  a.document.querySelector = () => null;
+  assert.doesNotThrow(() => a.context.window.hubGptLogin(true));
+});
+
+test('ChatGPT login settings outside the app explain availability without native navigation', () => {
+  const a = app();
+  vm.runInContext('state = ' + JSON.stringify(snapshot()) + '; view = {kind:"settings"}', a.context);
+  a.context.renderSettings();
+  assert.match(a.element('#main').innerHTML, /事前ログインはアプリで使えます/);
+  assert.doesNotMatch(a.element('#main').innerHTML, /hubapp:\/\/gpt\?login=1|id="gpt-login-status"/);
+  assert.equal(a.context.location.href, '');
+  a.context.window.hubGptLogin(true);
+  assert.equal(a.element('#gpt-login-status').textContent, '');
+});
+
 for (const [before, after] of [
   [{ready:false,error:'GitHubのログインを確認中です'}, {ready:true,error:''}],
   [{ready:true,error:''}, {ready:false,error:'ログインしてください'}],
@@ -1052,7 +1646,8 @@ test('初期AI設定カードの即保存・失敗戻し・入力優先・利用
   a.context.api = async (route, body) => { calls.push({ route, body: JSON.parse(JSON.stringify(body)) }); return { initialPick: body }; };
   a.context.renderSettings();
   const html = a.element('#main').innerHTML;
-  assert.ok(html.indexOf('選ぶ欄に出すモデル') < html.indexOf('新しく始めるときのAI'));
+  assert.match(html, /data-tab="basic"><h2>新しく始めるときのAI/);
+  assert.match(html, /data-tab="ai"><h2>選ぶ欄に出すモデル/);
   const card = a.context.initialPickHtml();
   assert.doesNotMatch(card, /Agy|ChatGPT|discord/);
   const fresh = a.context.quickDraft(data.projects[0]); assert.equal(fresh.ai, 'codex');
@@ -1336,4 +1931,117 @@ test('通知refreshTree先行と304/null後も表示名を同期し、blur後も
   assert.equal(renders, 0); assert.equal(a.element('#chat-ai'), select); assert.equal(a.element('#chat-in'), input);
   assert.equal(input.value, '通知中も下書き'); assert.equal(select.value, option.value);
   a.context.matchMedia = () => ({ matches: false }); await a.context.pollState(); assert.equal(option.textContent, 'Codex・GPT-6.1-Sol');
+});
+
+test('役割AIは追加アカウントを含むログイン状態で制限し、Gemini固定とChatGPT行を表示する', () => {
+  const a = app(), data = snapshot(); data.agyAvailable = true;
+  data.roles.models = {codex:['GPT-6.1-Sol'], 'claude-code':['Opus 5.5'], agy:['Gemini 3.1 Pro (High)']};
+  data.roles.roles = [{name:'調査',main:{ai:'agy',model:'Gemini 3.1 Pro (High)',effort:'高'},backup:{ai:'codex',model:'GPT-6.1-Sol',effort:'MAX'}}];
+  data.accounts = [{ai:'claude',id:'default',status:'logged-out',name:'既定'}, {ai:'claude',id:'named',status:'logged-in',name:'追加'}, {ai:'codex',id:'default',status:'api',name:'既定'}, {ai:'agy',id:'default',status:'logged-in',name:'既定'}];
+  vm.runInContext('state='+JSON.stringify(data)+'; view={kind:"settings"}; accountAutoChecked=true',a.context);
+  const options = a.context.roleAiOptions('codex');
+  assert.match(options, /value="claude-code"\s+>Claude Code/);
+  assert.match(options, /value="agy"\s+>Gemini/);
+  assert.match(options, /value="codex" selected disabled/); assert.doesNotMatch(options, /ChatGPT/);
+  a.context.renderSettings();
+  const html = a.element('#main').innerHTML;
+  assert.match(html,/data-f="model" aria-label="モデル" disabled/); assert.match(html,/data-f="effort" aria-label="思考" disabled/);
+  const accounts = a.element('#ai-accounts').innerHTML; assert.match(accounts,/ChatGPT を開く/); assert.match(accounts,/キーチェーン/); assert.match(accounts,/value="agy" disabled/);
+  vm.runInContext('state.agyAvailable=false; state.accounts[3].status="not-installed"',a.context);
+  assert.match(a.context.roleAiOptions('agy'),/value="agy" selected disabled>Gemini（Agy CLI）（未導入）/);
+});
+test('役割状態の自動確認は1回・再確認は共通結果を使い、編集中の値とDOMを保持する', async () => {
+  const a = app(), data = snapshot(); data.agyAvailable = true;
+  data.roles.roles = [{name:'調査',main:{ai:'codex',model:'draft',effort:'MAX'},backup:{ai:'人'}}];
+  vm.runInContext('state='+JSON.stringify(data)+'; view={kind:"settings"}; rolesDraft=JSON.parse(JSON.stringify(state.roles.roles)); rolesDraft[0].main.model="unsaved"',a.context);
+  const select = a.element('#role-test'); select.dataset={r:'0',k:'main',f:'ai'};select.value='codex';
+  a.document.querySelectorAll = q => q === 'select[data-r][data-f="ai"]' ? [select] : [];
+  let finish, calls=0;
+  a.context.api = route => { assert.equal(route,'/api/accounts?status=1'); calls++; return new Promise(r=>finish=r); };
+  const draft = vm.runInContext('JSON.stringify(rolesDraft)',a.context), main=a.element('#main'); main.innerHTML='kept DOM';
+  a.context.selectSettingsTab('ai'); a.context.selectSettingsTab('basic'); a.context.selectSettingsTab('ai');
+  assert.equal(calls,1); assert.match(a.element('#role-account-status').textContent,/確認中/);
+  const pending = a.context.checkRoleAccounts(); assert.equal(calls,1);
+  finish({accounts:[{ai:'agy',id:'default',name:'既定',status:'logged-in'}]}); await pending;
+  assert.equal(vm.runInContext('JSON.stringify(rolesDraft)',a.context),draft); assert.equal(main.innerHTML,'kept DOM'); assert.equal(select.value,'codex');
+  assert.match(select.innerHTML,/value="agy"\s+>Gemini/); assert.match(select.innerHTML,/value="codex" selected disabled/);
+  assert.match(a.element('#role-account-status').textContent,/\d\d:\d\d に確認/);
+  a.context.selectSettingsTab('basic'); a.context.selectSettingsTab('ai'); assert.equal(calls,1);
+  a.context.api = async()=>{calls++;throw Error('fixture failure');};
+  await assert.rejects(a.context.checkRoleAccounts(), /fixture failure/); assert.equal(calls,2);
+  a.context.selectSettingsTab('ai'); assert.equal(calls,2); assert.match(a.element('#role-account-status').textContent,/fixture failure/);
+});
+test('Geminiへ役割を切り替えるとモデルと高を固定する', async () => {
+  const a=app(), data=snapshot();data.roles.models.agy=['Gemini 3.1 Pro (High)'];
+  data.roles.roles=[{name:'調査',main:{ai:'codex',model:'old',effort:'Ultra'},backup:{ai:'人'}}];
+  vm.runInContext('state='+JSON.stringify(data)+';rolesDraft=JSON.parse(JSON.stringify(state.roles.roles));render=()=>{}',a.context);
+  await a.events.get('change')({target:{dataset:{r:'0',k:'main',f:'ai'},value:'agy'}});
+  assert.equal(vm.runInContext('rolesDraft[0].main.model',a.context),'Gemini 3.1 Pro (High)'); assert.equal(vm.runInContext('rolesDraft[0].main.effort',a.context),'高');
+});
+
+for (const failure of ['HTTP 503', '通信拒否']) test(`アカウント確認の${failure}後も現DOMで再試行でき、busyと役割下書きを保持する`, async () => {
+  const a=app(), data=snapshot();
+  data.accounts=[{ai:'codex',id:'default',name:'既定',busy:true}];
+  data.roles.roles=[{name:'調査',main:{ai:'codex',model:'unsaved',effort:'高'},backup:{ai:'人'}}];
+  vm.runInContext('state='+JSON.stringify(data)+';view={kind:"settings"};rolesDraft=JSON.parse(JSON.stringify(state.roles.roles))',a.context);
+  a.element('#account-new-ai').value='codex';
+  const button={disabled:false,dataset:{accountAction:'status'},closest:()=>null};
+  let reject; a.context.api=()=>new Promise((_,r)=>reject=r);
+  const pending=a.context.operateAccount(button);
+  a.context.drawAccountSettings(); // 操作中の画面交換
+  assert.match(a.element('#ai-accounts').innerHTML,/data-account-action="status" disabled/);
+  reject(Error(failure)); await pending;
+  assert.doesNotMatch(a.element('#ai-accounts').innerHTML,/data-account-action="status" disabled/);
+  assert.match(a.element('#ai-accounts').innerHTML,/data-account-action="login" disabled/); // busyは保持
+  assert.equal(a.element('#account-message').textContent,failure);
+  a.context.api=async()=>({accounts:data.accounts});
+  await a.context.operateAccount(button);
+  assert.equal(a.element('#account-message').textContent,'完了しました');
+  assert.equal(vm.runInContext('rolesDraft[0].main.model',a.context),'unsaved');
+});
+
+test('Grok availability requires installed catalogue and a logged-in account; selections stay intact', () => {
+ const a=app(), data=snapshot();data.grokAvailable=true;data.efforts=['中','高','極高','MAX','Ultra'];
+ data.roles.models.grok=['grok-code-1'];data.accounts=[{ai:'grok',id:'default',name:'既定',status:'logged-out'},{ai:'grok',id:'one',name:'仕事',status:'logged-in'}];
+ vm.runInContext('state='+JSON.stringify(data)+';view={kind:"settings"};accountAutoChecked=true',a.context);
+ assert.match(a.context.roleAiOptions('grok'),/value="grok" selected\s+>Grok/);assert.doesNotMatch(a.context.roleAiOptions('grok'),/ChatGPT/);
+ assert.deepEqual(Array.from(vm.runInContext("effortsFor('grok')",a.context)),['中','高','極高','MAX']);
+ vm.runInContext('state.grokAvailable=false',a.context);assert.match(a.context.roleAiOptions('grok'),/value="grok" selected disabled/);
+ vm.runInContext('state.accounts.forEach(r=>r.status="not-installed")',a.context);
+ const html=a.context.accountSettingsHtml();assert.match(html,/value="grok">Grok/);assert.match(html,/curl -fsSL https:\/\/x.ai\/cli\/install.sh/);
+ assert.equal(a.context.ownerOf('grok').kind,'grok');
+});
+
+test('Grok role switch replaces unsupported Ultra and preserves other roles',async()=>{
+ const a=app(),data=snapshot();data.efforts=['中','高','極高','MAX','Ultra'];data.roles.models.grok=['grok-code-1'];
+ data.roles.roles=[{name:'調査',main:{ai:'codex',model:'old',effort:'Ultra'},backup:{ai:'人'}}];
+ vm.runInContext('state='+JSON.stringify(data)+';rolesDraft=JSON.parse(JSON.stringify(state.roles.roles));render=()=>{}',a.context);
+ await a.events.get('change')({target:{dataset:{r:'0',k:'main',f:'ai'},value:'grok'}});
+ assert.equal(vm.runInContext('rolesDraft[0].main.model',a.context),'grok-code-1');assert.equal(vm.runInContext('rolesDraft[0].main.effort',a.context),'高');
+ assert.equal(vm.runInContext('rolesDraft[0].backup.ai',a.context),'人');
+});
+
+test('Grok task chat/terminal account choices and buttons use Grok without changing initial AI',()=>{
+ const a=app(),data=snapshot();data.grokAvailable=true;data.efforts=['高','Ultra'];data.roles.models.grok=['grok-code-1'];data.cliFlags.grok={'grok-code-1':'grok-code-1'};
+ const p=data.projects[0],t=p.tasks[0];t.owner='grok';t.model='grok-code-1';t.effort='高';t.accounts={grok:'one'};
+ data.accounts=[{ai:'grok',id:'default',name:'既定'},{ai:'grok',id:'one',name:'仕事'}];
+ vm.runInContext('state='+JSON.stringify(data)+';view={kind:"work",project:"p",task:"t"}',a.context);
+ const html=a.context.chatHtml(p,t);assert.match(html,/value="grok\|grok-code-1"/);assert.match(html,/data-task-account[^>]*data-ai="grok"/);
+ assert.doesNotMatch(html.match(/id="chat-effort"[\s\S]*?<\/select>/)[0],/Ultra/);
+ a.element('#chat-ai').value='grok|grok-code-1';a.context.drawChatAccount(p,t);assert.match(a.element('#chat-account-box').innerHTML,/selected[^>]*>仕事/);
+ assert.doesNotMatch(a.context.initialPickHtml(),/Grok/);
+});
+
+test('成果整理は完了確認・完了ボタンを出さず、稼働中はあなたの番に数えない',()=>{
+ const a=app();vm.runInContext(`state={projects:[],sessions:[],chatting:[],waiting:[]};`,a.context);
+ for(const auto of ['running','failed','blocked','none']) {
+  const t={id:'kid',title:'子',state:'実行中',steps:[{done:true,text:'完成'}],question:'',completionPending:false,resultsPending:{auto,reason:'書式を確認してください',detail:'理由'}};
+  a.context.gateTask=t;a.context.gateProject={id:'P',name:'親',tasks:[t]};
+  const html=vm.runInContext('completionButtons(gateProject,gateTask)',a.context);
+  assert.doesNotMatch(html,/data-act="taskcomplete"|完了に移しますか/);
+  if(auto==='running')assert.doesNotMatch(html,/成果の整理を頼む/);else assert.match(html,/成果の整理を頼む/);
+  assert.equal(vm.runInContext('Boolean(NEEDS(gateTask))',a.context),auto!=='running');
+  assert.equal(vm.runInContext('Boolean(REPLY(gateProject,gateTask))',a.context),auto!=='running');
+  const row=vm.runInContext('taskRow(gateProject,gateTask,false,"reply")',a.context);assert.match(row,/成果整理/);assert.doesNotMatch(row,/完了確認|送らずに消す/);
+ }
 });
