@@ -25,7 +25,7 @@ function usageRemaining(value, now = Date.now()) {
   const mins = Math.ceil((Date.parse(value) - now) / 60000);
   if (mins <= 0) return UI.text('予定時刻を過ぎました（再確認待ち）');
   const d = Math.floor(mins / 1440), h = Math.floor(mins % 1440 / 60), m = mins % 60;
-  return UI.template`あと${d ? d + '日' : ''}${h ? h + '時間' : ''}${m || !d && !h ? m + '分' : ''}`;
+  return UI.template`あと${d ? d + UI.text('日') : ''}${h ? h + UI.text('時間') : ''}${m || !d && !h ? m + UI.text('分') : ''}`;
 }
 function usagePercentClass(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '';
@@ -75,7 +75,7 @@ function usageExtras(ai, provider) {
 function usageHtml(data, now = Date.now()) {
   const state = data?.fableLimit;
   const held = state?.hold && (state.until === null || Date.parse(state.until) > now);
-  const limitNote = held ? UI.template`<p class="note">Fable 5.1 上限中・${state.until === null ? UI.text('解除日時不明・手動で解除するまで Astra') : esc(usageDate(state.until)) + 'まで（自動で Astra へ）'} <button id="usage-fable-clear" type="button"${usageClearing ? ' disabled' : ''}>Fableに戻す</button></p>` : '';
+  const limitNote = held ? UI.template`<p class="note">Fable 5.1 上限中・${state.until === null ? UI.text('解除日時不明・手動で解除するまで Astra') : esc(usageDate(state.until)) + UI.text('まで（自動で Astra へ）')} <button id="usage-fable-clear" type="button"${usageClearing ? ' disabled' : ''}>Fableに戻す</button></p>` : '';
   const providers = Array.isArray(data?.accountProviders) ? data.accountProviders : Object.entries(data?.providers || {}).map(([ai,p]) => ({ ai, ...p }));
   if (!providers.length) return limitNote + UI.template`<p class="note">${data ? UI.text('表示できるログイン中のアカウントはありません。') : UI.text('確認中…')}</p>`;
   return limitNote + providers.map(p => {
@@ -87,7 +87,7 @@ function usageHtml(data, now = Date.now()) {
     return UI.template`<section class="card usage-card">${heading}${old ? UI.html('<p class="note">前回取得した情報です。現在の状況を確認してください。</p>') : ''}${p.windows.map(w => {
       const expired = w.resetsAt && Date.parse(w.resetsAt) <= now;
       const pct = w.usedPercent === null ? UI.text('未提供') : `${Math.round(w.usedPercent)}%`;
-      const bar = w.usedPercent === null ? '' : UI.template`<progress class="usage-progress" max="100" value="${Math.min(100,Math.max(0,w.usedPercent))}" aria-label="${esc(name + ' ' + w.label + ' 使用率')}" aria-valuetext="${esc(pct)}"></progress>`;
+      const bar = w.usedPercent === null ? '' : UI.template`<progress class="usage-progress" max="100" value="${Math.min(100,Math.max(0,w.usedPercent))}" aria-label="${esc(name + ' ' + w.label + UI.text(' 使用率'))}" aria-valuetext="${esc(pct)}"></progress>`;
       return UI.template`<div class="usage-window${expired ? ' usage-expired' : ''}"><div class="row"><b>${esc(UI.label(w.label))}</b><span class="usage-pct">${expired ? UI.text('前回の使用') : UI.text('使用')} <span class="usage-value${usagePercentClass(w.usedPercent)}">${esc(pct)}</span></span></div>${bar}<div class="small">リセット：${esc(usageDate(w.resetsAt))}<br>${esc(usageRemaining(w.resetsAt,now))}</div></div>`;
     }).join('')}${usageExtras(ai,p)}<p class="small">取得：${esc(usageDate(p.fetchedAt))}</p></section>`;
   }).join('');

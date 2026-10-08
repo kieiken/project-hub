@@ -9,7 +9,7 @@ models:                      # 各 AI 可選的模型
   claude-code: [Opus 5.5, Fable 5.1]
   codex:       [GPT-6.1-Sol]
 
-agents: [サンプル担当]        # 虛構 Discord 負責人識別碼，請改成實際負責人。
+agents: [範例負責人]        # 虛構 Discord 負責人識別碼，請改成實際負責人。
 
 roles:
   司令塔:       { main: [claude-code, Fable 5.1, 極高], backup: [codex, GPT-6.1-Sol, 高], job: 規劃、分工與進度管理 }

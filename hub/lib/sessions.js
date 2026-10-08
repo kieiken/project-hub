@@ -5,7 +5,7 @@ const { lt } = require('./locale');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
-const { childEnv, accountEnv, agyAccountError } = require('./launch');
+const { childEnv, accountEnv, agyAccountError, findExe, exeArgv } = require('./launch');
 
 let pty = null;
 try { pty = require('node-pty'); } catch (e) { pty = null; }
@@ -26,16 +26,8 @@ function fixHelper() {
 }
 if (pty) fixHelper();
 
-// コマンドが PATH のどこにあるか探す（見つからなければ null）
-function which(cmd, envPath) {
-  if (cmd.includes('/')) return fs.existsSync(cmd) ? cmd : null;
-  for (const d of String(envPath || '').split(':')) {
-    if (!d) continue;
-    const f = path.join(d, cmd);
-    try { fs.accessSync(f, fs.constants.X_OK); return f; } catch (e) { /* 次へ */ }
-  }
-  return null;
-}
+// コマンドが PATH のどこにあるか探す（見つからなければ null）。Windows は .exe / .cmd も探す
+function which(cmd, envPath) { return findExe(cmd, envPath) || null; }
 
 const MAX_SCROLLBACK = 200000; // 画面を開き直した時に見せる分（文字数）
 
@@ -75,7 +67,8 @@ class Sessions {
     if (!exe) throw new Error(lt`「${command}」が見つかりません。ターミナルで ${command} が動くか確かめてください`);
     let proc;
     try {
-      proc = this.pty.spawn(exe, args, { name: 'xterm-256color', cols: cols || 100, rows: rows || 30, cwd: dir, env: fullEnv });
+      const argv = exeArgv(exe, args); // Windows の npm シム（.cmd）は本体に展開する
+      proc = this.pty.spawn(argv.file, argv.args, { name: 'xterm-256color', cols: cols || 100, rows: rows || 30, cwd: dir, env: fullEnv });
     } catch (e) {
       throw new Error(lt`作業画面を開けませんでした（${e.message}）`);
     }

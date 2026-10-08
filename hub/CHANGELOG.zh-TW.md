@@ -5,6 +5,14 @@
 較新的版本在上方。每次更新都要讓 `package.json` 的 `version` 與本紀錄最上方版本一致，並由測試確認。
 版本規則：大幅改寫提高第一碼，新增功能提高第二碼，修正問題提高第三碼。以下完整翻譯公開版自4.20.0起的歷史；歷史中的功能描述以當時版本為準。
 
+## 4.91.0（2026-10-08）
+- 支援在 Windows 10／11 原生執行（不需 WSL）。Claude Code、Codex、npm 的 `.cmd` 啟動殼會先展開成實際執行檔（claude.exe，或 node 加主程式 JS）再啟動，不經過 cmd.exe。作業畫面（node-pty 的 ConPTY）、對話、使用額度、CLI 版本確認、帳號、初次設定與驗證指令都改用這個方式。
+- Windows 上的外部終端機改開 Git for Windows bash 的新視窗；資料夾、檔案與網址改用檔案總管和預設瀏覽器開啟；選擇資料夾改用 PowerShell 的選擇視窗。背景 AI 監看（ps、lsof）在 Windows 不執行。
+- 新增 Windows 用的 `hub/setup.bat`（以 Git for Windows 的 bash 執行 setup.sh）與 `hub/start.bat`（啟動並開啟瀏覽器）。
+- 以 `.gitattributes` 將文字檔換行固定為 LF（.bat 為 CRLF），避免 Windows 的換行轉換讓多行翻譯鍵對不上而顯示日文，或讓 setup.sh 無法以 bash 執行；公開版也一併包含。
+- 繁體中文：把直接寫在畫面裡、沒有經過翻譯的文字（新專案表單、左欄等待回覆、階段狀態、帳號名稱、額度剩餘時間、初次設定、整理紀錄、啟動訊息等）改為經過翻譯，並補上缺少的譯文。
+- 測試中放置假 CLI 的 PATH 改用 `path.delimiter` 串接（Windows 上原本會呼叫到真正的 CLI）。
+
 ## 4.90.0（2026-10-08）
 
 - 新增 macOS App CI；明確設定時將 Hub 程式同梱至 App。公開匯出包含繁中說明文件、範例、範本與 CI，並保留隱私檢查。

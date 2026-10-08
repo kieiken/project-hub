@@ -8,7 +8,7 @@ const output = path.join(root, 'public-release', 'ProjectHub');
 const publicFiles = new Set([
   'README.md', 'CONTRIBUTING.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
   'README.zh-TW.md', 'CONTRIBUTING.zh-TW.md', 'THIRD_PARTY_NOTICES.zh-TW.md',
-  'scripts/export-public.js', 'scripts/public.gitignore',
+  'scripts/export-public.js', 'scripts/public.gitignore', '.gitattributes',
 ]);
 const required = [...publicFiles, '.github/ISSUE_TEMPLATE/feedback.md',
   '.github/ISSUE_TEMPLATE/bug_report.md', '.github/ISSUE_TEMPLATE/config.yml',

@@ -138,7 +138,7 @@ function create(opts = {}) {
   }
 
   async function scan() {
-    if (busy) return current;
+    if (busy || platform === 'win32') return current; // Windows は ps・/proc が無いので見張らない
     busy = true;
     try {
       let text;
@@ -164,7 +164,7 @@ function create(opts = {}) {
     scan,
     list: () => current.slice(),
     onChange: fn => { listeners.push(fn); },
-    start(ms = INTERVAL) { if (timer) return; scan().catch(() => {}); timer = setInterval(() => { scan().catch(() => {}); }, ms); timer.unref?.(); },
+    start(ms = INTERVAL) { if (timer) return; if (platform === 'win32') { log(lt('[裏の作業の見張り] Windows では裏で動く AI の見張りを行いません')); return; } scan().catch(() => {}); timer = setInterval(() => { scan().catch(() => {}); }, ms); timer.unref?.(); },
     stop() { if (timer) clearInterval(timer); timer = null; },
   };
 }

@@ -26,7 +26,7 @@ function drawTaskIntegration(){
     ${transferSkippedHint(i.skipped, true)}
     ${i.blockers.map(x=>UI.template`<p class="danger">${esc(x)}</p>`).join('')}
     <div class="acts"><button class="btn plain sm" data-integrate-action="up" data-index="${n}" type="button" ${n===0?'disabled':''}>↑</button><button class="btn plain sm" data-integrate-action="down" data-index="${n}" type="button" ${n===d.items.length-1?'disabled':''}>↓</button></div>
-    <p><b>本作業に入るもの：</b>${i.copy?'作業用コピーの変更'+(i.files.length?'、':''):''}${i.files.length?i.files.map(f=>esc(f.description || f.relative || f.id)+( /\.(zip|tgz|gz|tar|7z)$/i.test(f.relative || f.id)?UI.text('（配布用の圧縮物）'):'')).join('、'):i.copy?'':i.resultReady||i.integrated?UI.text('入れる物なし（記録を受領）'):UI.text('成果の記録をAIが確認します')}</p>
+    <p><b>本作業に入るもの：</b>${i.copy?UI.text('作業用コピーの変更')+(i.files.length?'、':''):''}${i.files.length?i.files.map(f=>esc(f.description || f.relative || f.id)+( /\.(zip|tgz|gz|tar|7z)$/i.test(f.relative || f.id)?UI.text('（配布用の圧縮物）'):'')).join('、'):i.copy?'':i.resultReady||i.integrated?UI.text('入れる物なし（記録を受領）'):UI.text('成果の記録をAIが確認します')}</p>
     <p><b>すでに反映済み：</b>${(i.results||[]).filter(r=>r.kind==='本体保存済み').map(r=>esc(r.description || r.value)).join('、') || (i.integrated?UI.text('取り込み済みのコード'):UI.text('なし'))}</p>
     <p><b>片付けるもの：</b>${i.copy?UI.text('作業用コピー、'):''}子の管理記録・会話・照合できた専用一時フォルダ${i.optional.length?UI.text('、受領後の専用作業・添付フォルダ'):''}（ゴミ箱へ。正本や参照中の物は残します）</p>
     ${i.needsResults?UI.template`<button class="btn plain" data-integrate-action="results" data-index="${n}" type="button">この子のAIに成果の整理を頼む</button>`:''}

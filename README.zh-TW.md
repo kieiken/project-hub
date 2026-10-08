@@ -2,7 +2,7 @@
 
 [日本語](README.md) | 繁體中文
 
-**公開 Beta 版。目前是開發中的版本（v4.90.0）。** 功能、畫面與儲存格式仍可能改變。請先在可以試用的範圍內使用，避免直接套用到重要資料。歡迎分享使用心得、回報問題或提交 Pull Request；參與方式見 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
+**公開 Beta 版。目前是開發中的版本（v4.91.0）。** 功能、畫面與儲存格式仍可能改變。請先在可以試用的範圍內使用，避免直接套用到重要資料。歡迎分享使用心得、回報問題或提交 Pull Request；參與方式見 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
 
 Project Hub 將專案與任務集中管理，並在同一個畫面中執行 Claude Code / Codex。主要供單一使用者在自己的 Mac 上使用。服務只監聽 `127.0.0.1`；本機操作沒有使用者登入驗證。可自行啟用 Tailscale 與通關密語，從自己的 iPhone 遠端操作，但不適合作為公開網站或多人共用伺服器。
 
@@ -10,7 +10,7 @@ Project Hub 將專案與任務集中管理，並在同一個畫面中執行 Clau
 
 ## 畫面範例
 
-以下是過去版本的實際畫面，個人資料、業務內容與真實對話已遮蔽。畫面仍是拍攝時的日文版本，可能與目前版本（4.90.0）不同。
+以下是過去版本的實際畫面，個人資料、業務內容與真實對話已遮蔽。畫面仍是拍攝時的日文版本，可能與目前版本（4.91.0）不同。
 
 ### 對話畫面與執行中的指示（取消／補充說明／下一個指示）
 
@@ -26,7 +26,7 @@ Project Hub 將專案與任務集中管理，並在同一個畫面中執行 Clau
 
 ## 必要條件
 
-- macOS。
+- macOS（也可在 Windows 10／11 執行，見下方「Windows」）。
 - Node.js 22 以上、Git。
 - 安裝要使用的 AI CLI（Claude Code / Codex），並先完成登入。
 - 編譯終端機元件 node-pty 與 Project Hub.app 需要 Apple 開發工具。
@@ -47,6 +47,10 @@ HUB_LANG=zh-TW HUB_APP_DIR=/Applications HUB_ROOT="/Volumes/External/AI-Workspac
 - 透過 npm 安裝 node-pty，並建立 Project Hub.app 與桌面入口。`HUB_APP_DIR` 可指定應用程式安裝位置。
 
 操作方式與更新步驟見 [hub/README.zh-TW.md](hub/README.zh-TW.md)。
+
+### Windows
+
+在 Windows 10／11 上，先在下載的資料夾執行一次 `hub\setup.bat`，之後用 `hub\start.bat` 啟動（會在瀏覽器開啟 http://127.0.0.1:4545）。需要 Git for Windows（bash）、Node.js 22 以上，以及要使用的 AI CLI。node-pty 已附 Windows 用的預先編譯檔，不需要安裝 Visual Studio。Mac App、自動更新與背景 AI 監看在 Windows 上無法使用。
 
 ## 每日自動更新
 
@@ -105,7 +109,7 @@ xterm.js、透過 npm 安裝的 node-pty 等第三方軟體資訊，見 [THIRD_P
 - **Pull Request**：歡迎提交；大幅變更請先透過 Issue 討論。
 - 分享對話、台帳或截圖前，請先移除姓名、路徑、通關密語、token 等個人或機密資訊。
 
-## 最新介面與相容性（4.90.0）
+## 最新介面與相容性（4.91.0）
 
 繁中包含 AI 帳號、模型別使用量與票券、freetalk 話題與整理、外部共用刪除保護、自動更新與對話表格。未設定 `HUB_LANG` 時使用日文；`HUB_LANG=zh-TW` 只翻譯程式自身文言，使用者文章、路徑、終端輸出、狀態與角色的儲存值保留原文。既有日文台帳與繁中標題都可讀取，不覆寫既有專案。
 

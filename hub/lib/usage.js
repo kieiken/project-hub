@@ -39,7 +39,7 @@ function codexExtras(data) {
     const count = Number.isSafeInteger(reset.availableCount) && reset.availableCount >= 0 ? reset.availableCount : available.length;
     if (count > 0 && available.length) result.resetCredits = {
       count: Math.min(count, 1000),
-      items: available.slice(0, 20).map(item => ({ title: label(item.title, 'リセット'), expiresAt: resetTime(item.expiresAt) })),
+      items: available.slice(0, 20).map(item => ({ title: label(item.title, lt('リセット')), expiresAt: resetTime(item.expiresAt) })),
     };
   }
   const credits = data.rateLimits?.credits ?? data.credits;
@@ -92,7 +92,7 @@ function readCli(ai, file, options = {}) {
     ['app-server','--listen','stdio://','-c','analytics.enabled=false', ...require('./launch').accountArgs(ai, options.account || 'default')];
   return new Promise((resolve, reject) => {
     let child;
-    try { child = start(file, args, { stdio:['pipe','pipe','pipe'], cwd: os.tmpdir(), env: require('./launch').accountEnv(ai, options.account || 'default', options.env || process.env) }); }
+    try { const x = require('./launch').exeArgv(file, args); child = start(x.file, x.args, { stdio:['pipe','pipe','pipe'], cwd: os.tmpdir(), env: require('./launch').accountEnv(ai, options.account || 'default', options.env || process.env) }); }
     catch { reject(error('start')); return; }
     let bytes = 0, buf = '', stopped = false, settled = false, value, failure, killTimer;
     const finish = () => {

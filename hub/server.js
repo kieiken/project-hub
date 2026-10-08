@@ -262,7 +262,7 @@ function fableBackup(data, role) {
 }
 // ChatGPT アプリ・Codex の設定ファイル（~/.codex/config.toml）に、Hub の MCP が登録されているか
 const CODEX_CONFIG = () => path.join(process.env.HUB_AI_HOME || os.homedir(), '.codex', 'config.toml');
-const MCP_BLOCK = () => lt`\n# Project Hub の道具（作業を読む・結果を書き戻す）。Hub を起動しておくこと\n[mcp_servers.project-hub]\ncommand = "node"\nargs = ["${path.join(__dirname, 'mcp.js')}"]\n`;
+const MCP_BLOCK = () => lt`\n# Project Hub の道具（作業を読む・結果を書き戻す）。Hub を起動しておくこと\n[mcp_servers.project-hub]\ncommand = "node"\nargs = ["${path.join(__dirname, 'mcp.js').split(path.sep).join('/')}"]\n`;
 function codexMcpStatus() {
   let text = '';
   try { text = fs.readFileSync(CODEX_CONFIG(), 'utf8'); } catch (e) { return { registered: false, configFile: CODEX_CONFIG(), configExists: false }; }
@@ -319,7 +319,7 @@ sessions.onExit = (project, task, ai, s) => { if (!s?.stopped && !(s?.watchers.s
 const handoff = require('./lib/handoff');
 function reportChild(child, kind, text) {
   try { return handoff.reportToParent(store, child, { kind, text }, { record, unread: chatEnded, emitRow: (project, task, row) => chats.emit(project, task, { type: 'row', row }) }); }
-  catch (e) { console.log(`[親への報告] ${e.message}`); return false; }
+  catch (e) { console.log(lt`[親への報告] ${e.message}`); return false; }
 }
 // 裏で動いている AI（チャットの AI が nohup などで起動した codex / claude / agy / grok）。終わったら、その作業を未読にする
 const procwatch = require('./lib/procwatch').create({ projects: () => store.listProjects(), baseOf });
@@ -486,7 +486,7 @@ let tsCache = { at: 0, url: '' };
 function tailscaleUrl() {
   if (Date.now() - tsCache.at < 60000) return Promise.resolve(tsCache.url);
   const { execFile } = require('child_process');
-  const bins = ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale'];
+  const bins = ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale', path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe')];
   const tryAt = i => new Promise(done => {
     if (i >= bins.length) return done('');
     execFile(bins[i], ['status', '--json'], { timeout: 3000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
@@ -705,7 +705,7 @@ async function api(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/ping') return send(res, 200, { ok: true, version: VERSION, pid: process.pid });
   if (req.method === 'GET' && url.pathname === '/api/state') {
     const t0 = Date.now();
-    res.on('finish', () => { const ms = Date.now() - t0; if (ms > 2000) console.log(`[遅い] 一覧を作るのに ${ms}ms かかりました（台帳のファイルの読み込みが遅い可能性）`); });
+    res.on('finish', () => { const ms = Date.now() - t0; if (ms > 2000) console.log(lt`[遅い] 一覧を作るのに ${ms}ms かかりました（台帳のファイルの読み込みが遅い可能性）`); });
     const roleData = rolesData(), modelSettings = modelView.read(), initialPick = modelView.initial(modelSettings);
     pruneUnread(); // 起動前から残っていた通知・外で片付けられた作業にも対応する。
     // 画面で使う物だけ送る：作業の「やったこと」「注意」「メモ」の本文は送らず、「次にやること」は1行目だけ（1MB → 数百KB）
@@ -1606,6 +1606,13 @@ async function api(req, res, url) {
   if (url.pathname === '/api/pick-folder') {
     if (DRY) return send(res, 200, { path: '' });
     const { execFile } = require('child_process');
+    if (process.platform === 'win32') {
+      // Windows はフォルダ選択の窓（.NET）を PowerShell から出す。出力は UTF-8 にそろえる
+      const prompt = String(b.prompt || lt('フォルダを選んでください')).replace(/[\r\n'"`$]/g, '');
+      const script = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = '${prompt}'; $d.ShowNewFolderButton = $true; if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }`;
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-Command', script], { timeout: 10 * 60 * 1000, windowsHide: true }, (err, out) => send(res, 200, { path: err ? '' : String(out).trim() }));
+      return undefined;
+    }
     execFile('osascript', ['-e', `POSIX path of (choose folder with prompt "${String(b.prompt || lt('フォルダを選んでください')).replace(/["\\]/g, '')}")`], (err, out) => {
       if (err) return send(res, 200, { path: '' }); // 取り消した時
       return send(res, 200, { path: String(out).trim().replace(/\/$/, '') });
@@ -1861,14 +1868,14 @@ if (require.main === module) {
   let tries = 0;
   server.on('error', e => {
     if (e.code === 'EADDRINUSE' && process.env.HUB_RESTART_WAIT && tries++ < 50) return setTimeout(() => server.listen(PORT, '127.0.0.1'), 200);
-    console.error(e.code === 'EADDRINUSE' ? `ポート ${PORT} は使われています（もう起動しているかもしれません）` : e);
+    console.error(e.code === 'EADDRINUSE' ? lt`ポート ${PORT} は使われています（もう起動しているかもしれません）` : e);
     process.exit(1);
   });
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`Project Hub ${VERSION}`);
-    console.log(`Project Hub: http://127.0.0.1:${PORT}  （台帳の場所: ${ROOT}）`);
-    console.log(sessions.available() ? '作業画面: 使えます' : '作業画面: 部品（node-pty）が未設定。setup.sh を実行してください');
-    console.log('止める時は、この窓で Control + C');
+    console.log(lt`Project Hub: http://127.0.0.1:${PORT}  （台帳の場所: ${ROOT}）`);
+    console.log(sessions.available() ? lt('作業画面: 使えます') : lt('作業画面: 部品（node-pty）が未設定。setup.sh を実行してください'));
+    console.log(lt('止める時は、この窓で Control + C'));
     if (!DRY) { procwatch.start(); appUpdate.start(); }
   });
   process.on('SIGINT', shutdown);
