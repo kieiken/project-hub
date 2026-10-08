@@ -606,7 +606,7 @@ function phaseRoad(p, info) {
       ${done ? '<span class="stamp">COMPLETE</span>' : ''}
       <span class="no">フェーズ ${i + 1}</span><span class="nm">${esc(ph.name)}</span>
       <div class="pbar"><i style="width:${Math.round((done ? 1 : ph.ratio) * 100)}%"></i></div>
-      <span class="st">${esc(ph.state === '完了' ? '完了' : ph.completionPending ? UI.text('完了報告あり・確認待ち') : i === info.cur ? '進行中' : '未着手')}・作業 ${ph.tasks.filter(t => t.state === '完了').length} / ${ph.tasks.length}</span></div>`;
+      <span class="st">${esc(ph.state === '完了' ? UI.text('完了') : ph.completionPending ? UI.text('完了報告あり・確認待ち') : i === info.cur ? UI.text('進行中') : UI.text('未着手'))}・作業 ${ph.tasks.filter(t => t.state === '完了').length} / ${ph.tasks.length}</span></div>`;
   }).join('');
   const c = info.list[info.cur];
   const continued = p.phaseContinueKey && p.phaseContinueKey === p.phaseOfferKey;
