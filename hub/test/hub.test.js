@@ -620,7 +620,7 @@ test('会話画面：送るたびに AI を選べ、変えた時は見ていな�
   fs.writeFileSync(path.join(bin, 'claude'), js(`const o=x=>console.log(JSON.stringify(x));o({type:'system',subtype:'init',session_id:'S-claude'});o({type:'assistant',message:{content:[{type:'tool_use',name:'Bash',input:{command:'npm test'}},{type:'text',text:'GOT['+i+'] ARGS['+a+']'}]}});o({type:'result',is_error:false,result:'x',session_id:'S-claude'});`), { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'codex'), js(`const o=x=>console.log(JSON.stringify(x));o({type:'thread.started',thread_id:'T-codex'});o({type:'item.completed',item:{type:'command_execution',command:'ls'}});o({type:'item.completed',item:{type:'agent_message',text:'CODEX['+i+'] ARGS['+a+']'}});o({type:'turn.completed'});`), { mode: 0o755 });
   const oldPath = process.env.PATH;
-  process.env.PATH = bin + ':' + oldPath;
+  process.env.PATH = bin + path.delimiter + oldPath;
   const tf = path.join(ROOT2, 'Product', 'サンプルアプリ', '.ai', 'tasks', 'chat-test.md');
   fs.writeFileSync(tf, '---\nid: chat-test\ntitle: 会話\nstate: 実行中\n---\n');
   const rows = () => chatLib.read(path.join(ROOT2, 'Product', 'サンプルアプリ'), 'chat-test');
@@ -765,7 +765,7 @@ if(m>=0){o({type:'turn.failed',error:{message:'{"type":"error","status":400,"err
 o({type:'item.completed',item:{type:'agent_message',text:'OK ARGS['+a.join(' ')+']'}});o({type:'turn.completed'});});
 `, { mode: 0o755 });
   const oldPath = process.env.PATH;
-  process.env.PATH = bin + ':' + oldPath;
+  process.env.PATH = bin + path.delimiter + oldPath;
   const tf = path.join(ROOT2, 'Product', 'サンプルアプリ', '.ai', 'tasks', 'model-test.md');
   fs.writeFileSync(tf, '---\nid: model-test\ntitle: m\nstate: 実行中\n---\n');
   const rows = () => chatLib.read(path.join(ROOT2, 'Product', 'サンプルアプリ'), 'model-test');
@@ -807,7 +807,7 @@ setTimeout(()=>{o({type:'assistant',message:{content:[{type:'text',text:'DONE['+
 process.on('SIGTERM',()=>process.exit(143));
 `, { mode: 0o755 });
   const oldPath = process.env.PATH;
-  process.env.PATH = bin + ':' + oldPath;
+  process.env.PATH = bin + path.delimiter + oldPath;
   const tf = path.join(ROOT2, 'Product', 'サンプルアプリ', '.ai', 'tasks', 'q-test.md');
   fs.writeFileSync(tf, '---\nid: q-test\ntitle: q\nstate: 実行中\n---\n');
   const rows = () => chatLib.read(path.join(ROOT2, 'Product', 'サンプルアプリ'), 'q-test');
@@ -858,7 +858,7 @@ let i='';process.stdin.on('data',d=>i+=d);process.stdin.on('end',()=>{const o=x=
 o({type:'system',subtype:'init',session_id:'S-u'});o({type:'assistant',message:{content:[{type:'text',text:'OK'}]}});o({type:'result',is_error:false,result:'',session_id:'S-u'});});
 `, { mode: 0o755 });
   const oldPath = process.env.PATH;
-  process.env.PATH = bin + ':' + oldPath;
+  process.env.PATH = bin + path.delimiter + oldPath;
   const P = 'サンプルアプリ', T = 'unread-test';
   fs.writeFileSync(path.join(ROOT2, 'Product', P, '.ai', 'tasks', `${T}.md`), `---\nid: ${T}\ntitle: 未読\nstate: 実行中\n---\n`);
   const rows = () => chatLib.read(path.join(ROOT2, 'Product', P), T).filter(r => r.role === 'assistant');
@@ -1058,7 +1058,7 @@ test('作業用コピーの場所が無い時：取り込むと説明して記�
 
 test('別の AI に作業を渡す（/api/delegate）：同じ作業で動かし、子作業を作らない', async () => {
   const bin = path.join(tmp2, 'fakebin3'); // 上の試験で作った、0.6秒で返事する Claude
-  const oldPath = process.env.PATH; process.env.PATH = bin + ':' + oldPath;
+  const oldPath = process.env.PATH; process.env.PATH = bin + path.delimiter + oldPath;
   try {
     const tf = path.join(ROOT2, 'Product', 'サンプルアプリ', '.ai', 'tasks', 'dlg-parent.md');
     fs.mkdirSync(path.dirname(tf), { recursive: true });

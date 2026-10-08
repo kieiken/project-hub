@@ -46,7 +46,7 @@ else {const text=JSON.stringify(args);out({event:'result',result:{status:'SUCCES
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(root, '_hub/ai-tools-models.json'), JSON.stringify({
     agy: { models: [AGY_MODEL], known: [AGY_MODEL], refreshedAt: new Date().toISOString(), source: 'fixture' } }));
-  process.env.PATH = bin + ':' + process.env.PATH;
+  process.env.PATH = bin + path.delimiter + process.env.PATH;
   process.env.HUB_ROOT = root;
   process.env.HUB_PORT = String(port);
   process.env.HUB_DRY_RUN = '1';
