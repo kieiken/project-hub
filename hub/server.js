@@ -262,7 +262,7 @@ function fableBackup(data, role) {
 }
 // ChatGPT アプリ・Codex の設定ファイル（~/.codex/config.toml）に、Hub の MCP が登録されているか
 const CODEX_CONFIG = () => path.join(process.env.HUB_AI_HOME || os.homedir(), '.codex', 'config.toml');
-const MCP_BLOCK = () => lt`\n# Project Hub の道具（作業を読む・結果を書き戻す）。Hub を起動しておくこと\n[mcp_servers.project-hub]\ncommand = "node"\nargs = ["${path.join(__dirname, 'mcp.js')}"]\n`;
+const MCP_BLOCK = () => lt`\n# Project Hub の道具（作業を読む・結果を書き戻す）。Hub を起動しておくこと\n[mcp_servers.project-hub]\ncommand = "node"\nargs = ["${path.join(__dirname, 'mcp.js').split(path.sep).join('/')}"]\n`;
 function codexMcpStatus() {
   let text = '';
   try { text = fs.readFileSync(CODEX_CONFIG(), 'utf8'); } catch (e) { return { registered: false, configFile: CODEX_CONFIG(), configExists: false }; }
@@ -486,7 +486,7 @@ let tsCache = { at: 0, url: '' };
 function tailscaleUrl() {
   if (Date.now() - tsCache.at < 60000) return Promise.resolve(tsCache.url);
   const { execFile } = require('child_process');
-  const bins = ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale'];
+  const bins = ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale', path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe')];
   const tryAt = i => new Promise(done => {
     if (i >= bins.length) return done('');
     execFile(bins[i], ['status', '--json'], { timeout: 3000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
@@ -1606,6 +1606,13 @@ async function api(req, res, url) {
   if (url.pathname === '/api/pick-folder') {
     if (DRY) return send(res, 200, { path: '' });
     const { execFile } = require('child_process');
+    if (process.platform === 'win32') {
+      // Windows はフォルダ選択の窓（.NET）を PowerShell から出す。出力は UTF-8 にそろえる
+      const prompt = String(b.prompt || lt('フォルダを選んでください')).replace(/[\r\n'"`$]/g, '');
+      const script = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = '${prompt}'; $d.ShowNewFolderButton = $true; if ($d.ShowDialog() -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }`;
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-Command', script], { timeout: 10 * 60 * 1000, windowsHide: true }, (err, out) => send(res, 200, { path: err ? '' : String(out).trim() }));
+      return undefined;
+    }
     execFile('osascript', ['-e', `POSIX path of (choose folder with prompt "${String(b.prompt || lt('フォルダを選んでください')).replace(/["\\]/g, '')}")`], (err, out) => {
       if (err) return send(res, 200, { path: '' }); // 取り消した時
       return send(res, 200, { path: String(out).trim().replace(/\/$/, '') });

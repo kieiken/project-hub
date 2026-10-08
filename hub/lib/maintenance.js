@@ -223,7 +223,7 @@ class Maintenance {
     let output='',bytes=0,settled=false,child,timer,why='';
     const finish=(code)=>{if(settled)return;settled=true;clearTimeout(timer);resolve({name:script,command:choice.command,ok:code===0&&!why,code,output,note:why});};
     const stop=reason=>{why=reason;try {process.kill(-child.pid,'SIGKILL');}catch(e) {child.kill('SIGKILL');}};
-    try {child=spawn('npm',['--offline','--ignore-scripts','run',script],{cwd:base,env:process.env,detached:true,stdio:['ignore','pipe','pipe']});}
+    try {const launch=require('./launch'),npm=launch.exeArgv(launch.findExe('npm')||'npm',['--offline','--ignore-scripts','run',script]);child=spawn(npm.file,npm.args,{cwd:base,env:process.env,detached:!launch.WIN,windowsHide:true,stdio:['ignore','pipe','pipe']});}
     catch(e){finish(null);return;}
     for(const stream of [child.stdout,child.stderr])stream.on('data',d=>{bytes+=d.length;output=(output+d.toString()).slice(-20000);if(bytes>2*1024*1024)stop(lt('出力が多いため停止しました'));});
     child.on('error',e=>{why=e.message;finish(null);});child.on('close',finish);timer=setTimeout(()=>stop(lt('時間内に終わらなかったため停止しました')),this.timeout);

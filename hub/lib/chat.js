@@ -363,7 +363,8 @@ class ChatRunner {
 
   run(o, turn, meta, rows) {
     const { project, task, pdir, dir, ai, model, effort, env, onEnd, account = 'default' } = o;
-    const child = spawn(turn.command, turn.args, { cwd: dir, env: launch.childEnv(ai, launch.accountEnv(ai, account, { ...process.env, ...(env || {}) })), stdio: ['pipe', 'pipe', 'pipe'] });
+    const argv = launch.exeArgv(launch.findExe(turn.command) || turn.command, turn.args); // Windows は .exe / .cmd を解決する
+    const child = spawn(argv.file, argv.args, { cwd: dir, env: launch.childEnv(ai, launch.accountEnv(ai, account, { ...process.env, ...(env || {}) })), stdio: ['pipe', 'pipe', 'pipe'] });
     if (!o.started) o.started = Date.now(); // 思考の指定をやり直しても、最初に送った時から数える
     const run = { child, ai, account, model, effort, userRow: o.userRow, texts: [], err: '', done: null, sid: null, stopped: false, started: o.started, limitSwitch: o.limitSwitch, last: '', stopVersion: this.stops.get(this.key(project, task)) || 0 };
     run.startedP = new Promise(resolve => { child.once('spawn', () => { run.spawned = true; resolve(true); }); child.once('error', () => resolve(false)); });

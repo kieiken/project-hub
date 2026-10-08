@@ -45,7 +45,10 @@ function noLinks(dir) {
     const parent = path.dirname(p); if (parent === p) break; p = parent;
   }
 }
-const run = (file, args, env) => new Promise(resolve => execFile(file, args, { env, timeout: 15000, maxBuffer: 65536 }, (error, stdout, stderr) => resolve({ error, stdout, stderr })));
+const run = (file, args, env) => new Promise(resolve => {
+  const launch = require('./launch'), x = launch.exeArgv(launch.findExe(file) || file, args); // Windows は .exe / .cmd を解決する
+  execFile(x.file, x.args, { env, timeout: 15000, maxBuffer: 65536 }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
+});
 class Accounts {
   constructor({ file, home = process.env.HUB_AI_HOME || os.homedir(), dry = false, busy = () => false, execute = run, trash = process.env.HUB_TRASH || path.join(home, '.Trash') }) {
     Object.assign(this, { file, home, dry, busy, execute, trash }); this.locks = new Set(); this.readers = new Map();

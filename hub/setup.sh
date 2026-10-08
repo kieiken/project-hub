@@ -65,5 +65,9 @@ chmod +x "$HERE/start.command" "$HERE/app/run.sh" "$HERE/app/build-app.sh"
 if [ "$(uname)" = "Darwin" ] && [ "${HUB_SKIP_APP:-0}" != "1" ]; then
   bash "$HERE/app/build-app.sh"
 elif [ "${HUB_SKIP_APP:-0}" != "1" ]; then
-  echo "準備できました（Mac 以外なので .app は作りません）。bash start.command で起動します。"
+  if [ "${OS:-}" = "Windows_NT" ]; then
+    echo "準備できました（Windows なので .app は作りません）。hub/start.bat をダブルクリックで起動します。"
+  else
+    echo "準備できました（Mac 以外なので .app は作りません）。bash start.command で起動します。"
+  fi
 fi

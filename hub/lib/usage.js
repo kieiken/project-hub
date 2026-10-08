@@ -92,7 +92,7 @@ function readCli(ai, file, options = {}) {
     ['app-server','--listen','stdio://','-c','analytics.enabled=false', ...require('./launch').accountArgs(ai, options.account || 'default')];
   return new Promise((resolve, reject) => {
     let child;
-    try { child = start(file, args, { stdio:['pipe','pipe','pipe'], cwd: os.tmpdir(), env: require('./launch').accountEnv(ai, options.account || 'default', options.env || process.env) }); }
+    try { const x = require('./launch').exeArgv(file, args); child = start(x.file, x.args, { stdio:['pipe','pipe','pipe'], cwd: os.tmpdir(), env: require('./launch').accountEnv(ai, options.account || 'default', options.env || process.env) }); }
     catch { reject(error('start')); return; }
     let bytes = 0, buf = '', stopped = false, settled = false, value, failure, killTimer;
     const finish = () => {

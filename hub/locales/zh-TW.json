@@ -2375,5 +2375,8 @@
   "Macで開いたTerminalで /login と入力し、終わったら［状態を確認］を押してください。": "在 Mac 開啟的 Terminal 輸入 /login，完成後按［確認狀態］。",
   "削除は完了しましたが、上限記録の片付けを保存できませんでした": "刪除已完成，但無法保存使用上限紀錄的清理",
   "成果の記録が整っていません：": "成果紀錄尚未備妥：",
-  "表（横にスクロールできます）": "表格（可水平捲動）"
+  "表（横にスクロールできます）": "表格（可水平捲動）",
+  "Git for Windows の bash.exe が見つかりません。Git for Windows を入れてください": "找不到 Git for Windows 的 bash.exe。請安裝 Git for Windows",
+  "Git for Windows の bash.exe が見つかりません": "找不到 Git for Windows 的 bash.exe",
+  "[裏の作業の見張り] Windows では裏で動く AI の見張りを行いません": "[背景作業監看] Windows 不監看在背景執行的 AI"
 }
