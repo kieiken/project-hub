@@ -39,7 +39,7 @@ function codexExtras(data) {
     const count = Number.isSafeInteger(reset.availableCount) && reset.availableCount >= 0 ? reset.availableCount : available.length;
     if (count > 0 && available.length) result.resetCredits = {
       count: Math.min(count, 1000),
-      items: available.slice(0, 20).map(item => ({ title: label(item.title, 'リセット'), expiresAt: resetTime(item.expiresAt) })),
+      items: available.slice(0, 20).map(item => ({ title: label(item.title, lt('リセット')), expiresAt: resetTime(item.expiresAt) })),
     };
   }
   const credits = data.rateLimits?.credits ?? data.credits;

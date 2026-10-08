@@ -12,7 +12,7 @@ var UI = globalThis.HubI18n || {text: x=>x, html:x=>x, label:x=>x, message:x=>x,
   };
   let sheet, draft, results, busy = false, autoSeen = false, saveFailed = false, message = '', returnFocus;
   function sample() {
-    const p = state.projects.find(p => p.id === 'サンプルアプリ');
+    const p = state.projects.find(p => p.id === UI.text('サンプルアプリ'));
     const t = p?.tasks.find(t => t.state !== '完了');
     return t ? { p, t } : null;
   }
@@ -20,7 +20,7 @@ var UI = globalThis.HubI18n || {text: x=>x, html:x=>x, label:x=>x, message:x=>x,
     if (!results) return UI.html('<p>まだ確認していません。下の［確かめる］を押してください。AIへの依頼は行いません。</p>');
     return draft.ais.map(ai => {
       const r = results.tools[ai];
-      const installed = r.installed ? UI.template`入っています${r.version ? '（版 ' + esc(r.version) + '）' : UI.text('（版は確認できません）')}` : UI.text('見つかりません。［戻る］で入れ方を確認してください。');
+      const installed = r.installed ? UI.template`入っています${r.version ? UI.template`（版 ${esc(r.version)}）` : UI.text('（版は確認できません）')}` : UI.text('見つかりません。［戻る］で入れ方を確認してください。');
       const login = { ready: UI.text('ログインしています'), required: UI.text('ログインが必要です。入れ方の画面に戻り、ログインしてください。'), unknown: UI.text('確認できません。作業を始めた時にAIが案内する場合があります。') }[r.login];
       const notice = { 'settings-unreadable': UI.text('Agyの設定を確認できません。設定ファイルを確認してください。'), 'api-provider': UI.text('AgyがAPIの利用設定になっています。契約・無料枠のログイン経路を確認してください。Hubは認証を変更しません。') }[r.notice];
       return UI.template`<div class="card"><h3>${esc(guides[ai].name)}</h3><p>${installed}</p><p>ログイン：${login}</p>${notice ? UI.template`<p>${notice}</p>` : ''}</div>`;
@@ -35,12 +35,12 @@ var UI = globalThis.HubI18n || {text: x=>x, html:x=>x, label:x=>x, message:x=>x,
     else if (n === 1) body = UI.template`<p>Macの［アプリケーション］→［ユーティリティ］にある［ターミナル］を開きます。必要なAIだけ、次の順番で準備してください。すでに入っている場合はログインの確認へ進めます。</p>
       ${draft.ais.map(ai => { const g = guides[ai]; return UI.template`<div class="card"><h3>${g.name}</h3><p>1. 入れる：次の1行をターミナルに貼り、Returnキーを押します。</p><div class="onboarding-command"><code>${esc(g.install)}</code><button class="btn plain sm" type="button" data-onboarding-copy="${ai}" data-command="install" aria-label="${g.name}のインストールコマンドをコピー">コピー</button></div>
       <p>2. ログインする：入れたあと、次の1行を実行して画面の案内に従います。必要に応じてブラウザが開きます。</p><div class="onboarding-command"><code>${g.login}</code><button class="btn plain sm" type="button" data-onboarding-copy="${ai}" data-command="login" aria-label="${g.name}の起動コマンドをコピー">コピー</button></div>
-      <p>${ai === 'grok' ? UI.text('xAIのアカウントでログインしてください。APIキーは使いません。') : ai === 'agy' ? UI.text('Googleアカウントでの案内に従ってください。') : '契約している' + (ai === 'codex' ? 'ChatGPT' : 'Claude') + 'のアカウントでログインしてください。APIキーの入力はこの案内では使いません。'}</p><a href="${g.url}" target="_blank" rel="noopener noreferrer">${g.name}の公式の手引き ↗</a></div>`; }).join('')}
+      <p>${ai === 'grok' ? UI.text('xAIのアカウントでログインしてください。APIキーは使いません。') : ai === 'agy' ? UI.text('Googleアカウントでの案内に従ってください。') : UI.template`契約している${ai === 'codex' ? 'ChatGPT' : 'Claude'}のアカウントでログインしてください。APIキーの入力はこの案内では使いません。`}</p><a href="${g.url}" target="_blank" rel="noopener noreferrer">${g.name}の公式の手引き ↗</a></div>`; }).join('')}
       <p>AIの利用料金は各社との契約によります。この設定案内では、Project Hubから請求することはありません。コマンドはコピーするだけで、自動では実行しません。</p>`;
     else if (n === 2) body = UI.template`${checkSummary()}<button class="btn" type="button" data-onboarding-action="check">${results ? UI.text('もう一度確かめる') : UI.text('確かめる')}</button><p class="small">インストールとログイン状態だけを調べます。AIへの依頼やログイン操作は行いません。未確認の項目があっても、次へ進めます。</p>`;
     else body = UI.template`<p>準備の案内はここまでです。選んだAI：${draft.ais.map(ai => guides[ai].name).join('、')}。</p><p>新しく始める時のAIは、今の設定のままです。変更する場合は［設定］の［新しく始めるときのAI］で選んでください。</p>
       ${results ? UI.template`<details><summary>準備の確認結果</summary>${checkSummary()}</details>` : UI.html('<p>まだ準備を確認していません。［戻る］から確認できます。</p>')}
-      <div class="onboarding-start">${sample() ? UI.template`<button class="btn" type="button" data-onboarding-action="sample">サンプル「${'サンプルアプリ'}」の作業を開く</button>` : ''}<button class="btn plain" type="button" data-onboarding-action="newproject">新しいプロジェクトを作る</button></div><p class="small">このボタンでは、AIはまだ動きません。</p>`;
+      <div class="onboarding-start">${sample() ? UI.template`<button class="btn" type="button" data-onboarding-action="sample">サンプル「${UI.text('サンプルアプリ')}」の作業を開く</button>` : ''}<button class="btn plain" type="button" data-onboarding-action="newproject">新しいプロジェクトを作る</button></div><p class="small">このボタンでは、AIはまだ動きません。</p>`;
     sheet.innerHTML = UI.template`<div class="onboarding-box"><h2 id="onboarding-title">はじめの設定</h2><ol class="onboarding-progress">${titles.map((t, i) => UI.template`<li ${i === n ? 'aria-current="step"' : ''}>${i + 1} ${t}</li>`).join('')}</ol>
       <div class="onboarding-body"><h3 tabindex="-1" id="onboarding-step">${n + 1}. ${titles[n]}</h3>${body}</div><p class="onboarding-message" role="status">${esc(message)}</p>
       ${saveFailed ? UI.html('<p role="status">進捗を保存できていません。保存しないで閉じることもできます。次の起動時に案内が再び開く場合があります。</p>') : ''}

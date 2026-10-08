@@ -319,7 +319,7 @@ sessions.onExit = (project, task, ai, s) => { if (!s?.stopped && !(s?.watchers.s
 const handoff = require('./lib/handoff');
 function reportChild(child, kind, text) {
   try { return handoff.reportToParent(store, child, { kind, text }, { record, unread: chatEnded, emitRow: (project, task, row) => chats.emit(project, task, { type: 'row', row }) }); }
-  catch (e) { console.log(`[親への報告] ${e.message}`); return false; }
+  catch (e) { console.log(lt`[親への報告] ${e.message}`); return false; }
 }
 // 裏で動いている AI（チャットの AI が nohup などで起動した codex / claude / agy / grok）。終わったら、その作業を未読にする
 const procwatch = require('./lib/procwatch').create({ projects: () => store.listProjects(), baseOf });
@@ -705,7 +705,7 @@ async function api(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/ping') return send(res, 200, { ok: true, version: VERSION, pid: process.pid });
   if (req.method === 'GET' && url.pathname === '/api/state') {
     const t0 = Date.now();
-    res.on('finish', () => { const ms = Date.now() - t0; if (ms > 2000) console.log(`[遅い] 一覧を作るのに ${ms}ms かかりました（台帳のファイルの読み込みが遅い可能性）`); });
+    res.on('finish', () => { const ms = Date.now() - t0; if (ms > 2000) console.log(lt`[遅い] 一覧を作るのに ${ms}ms かかりました（台帳のファイルの読み込みが遅い可能性）`); });
     const roleData = rolesData(), modelSettings = modelView.read(), initialPick = modelView.initial(modelSettings);
     pruneUnread(); // 起動前から残っていた通知・外で片付けられた作業にも対応する。
     // 画面で使う物だけ送る：作業の「やったこと」「注意」「メモ」の本文は送らず、「次にやること」は1行目だけ（1MB → 数百KB）
@@ -1868,14 +1868,14 @@ if (require.main === module) {
   let tries = 0;
   server.on('error', e => {
     if (e.code === 'EADDRINUSE' && process.env.HUB_RESTART_WAIT && tries++ < 50) return setTimeout(() => server.listen(PORT, '127.0.0.1'), 200);
-    console.error(e.code === 'EADDRINUSE' ? `ポート ${PORT} は使われています（もう起動しているかもしれません）` : e);
+    console.error(e.code === 'EADDRINUSE' ? lt`ポート ${PORT} は使われています（もう起動しているかもしれません）` : e);
     process.exit(1);
   });
   server.listen(PORT, '127.0.0.1', () => {
     console.log(`Project Hub ${VERSION}`);
-    console.log(`Project Hub: http://127.0.0.1:${PORT}  （台帳の場所: ${ROOT}）`);
-    console.log(sessions.available() ? '作業画面: 使えます' : '作業画面: 部品（node-pty）が未設定。setup.sh を実行してください');
-    console.log('止める時は、この窓で Control + C');
+    console.log(lt`Project Hub: http://127.0.0.1:${PORT}  （台帳の場所: ${ROOT}）`);
+    console.log(sessions.available() ? lt('作業画面: 使えます') : lt('作業画面: 部品（node-pty）が未設定。setup.sh を実行してください'));
+    console.log(lt('止める時は、この窓で Control + C'));
     if (!DRY) { procwatch.start(); appUpdate.start(); }
   });
   process.on('SIGINT', shutdown);

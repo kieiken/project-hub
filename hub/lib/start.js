@@ -40,7 +40,7 @@ function saveImage(p, name, data) {
       throw Error(lt('画像をPNGに変換できませんでした。画像を書き出し直して追加してください'));
     }
   }
-  return { id, name: /^hub-paste-/i.test(path.basename(name)) ? '貼り付け画像.png' : path.basename(name), url: '/api/start/image?project=' + encodeURIComponent(p.id) + '&id=' + id, path: imageFile(p, id, true) };
+  return { id, name: /^hub-paste-/i.test(path.basename(name)) ? lt('貼り付け画像.png') : path.basename(name), url: '/api/start/image?project=' + encodeURIComponent(p.id) + '&id=' + id, path: imageFile(p, id, true) };
 }
 function imageFromPath(p, raw) {
   const file = fs.realpathSync(String(raw));

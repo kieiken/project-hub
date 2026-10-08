@@ -86,7 +86,7 @@ class Freetalk {
     const id = require('./task-ids').reserveTaskId(this.store, ID, p.dir, day);
     const file = path.join(p.dir, '.ai/tasks', id + '.md');
     noLinks(path.dirname(file)); fs.mkdirSync(path.dirname(file),{recursive:true});
-    fs.writeFileSync(file, `---\nid: ${id}\ntitle: 新しい話題\nfreetalk: true\ntitleAssigned: false\nstate: 未着手\nworkspaceMode: direct\nworkdir: ${scalar(this.dir)}\nowner: ${scalar(pick.ai === 'claude' ? 'Claude Code' : pick.ai === 'chatgpt' ? 'ChatGPT' : pick.ai === 'agy' ? 'Agy CLI' : pick.ai === 'grok' ? 'Grok' : 'Codex')}\nmodel: ${scalar(pick.model)}\neffort: ${scalar(pick.effort)}\nquestion:\nupdated: ${new Date().toISOString()}\n---\n# 自由対話\n`, { flag: 'wx' });
+    fs.writeFileSync(file, `---\nid: ${id}\ntitle: ${lt('新しい話題')}\nfreetalk: true\ntitleAssigned: false\nstate: 未着手\nworkspaceMode: direct\nworkdir: ${scalar(this.dir)}\nowner: ${scalar(pick.ai === 'claude' ? 'Claude Code' : pick.ai === 'chatgpt' ? 'ChatGPT' : pick.ai === 'agy' ? 'Agy CLI' : pick.ai === 'grok' ? 'Grok' : 'Codex')}\nmodel: ${scalar(pick.model)}\neffort: ${scalar(pick.effort)}\nquestion:\nupdated: ${new Date().toISOString()}\n---\n# 自由対話\n`, { flag: 'wx' });
     return this.store.readTask(file);
   }
   nameTopic(task, speech) {

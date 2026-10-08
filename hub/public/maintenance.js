@@ -23,7 +23,7 @@ function drawMaintenance() {
     <button class="btn plain" data-maint-action="verify" type="button" ${disabled}>台帳とリンクを確認</button>
     ${d.scripts.some(s=>s.allowed)?UI.template`<label class="maintenance-choice">アプリのテスト<select id="maintenance-script">${d.scripts.filter(s=>s.allowed).map(s=>UI.template`<option value="${esc(s.name)}">npm run ${esc(s.name)}：${esc(s.command)}</option>`).join('')}</select></label><button class="btn" data-maint-action="test" type="button" ${disabled}>アプリのテストを実行（1分まで）</button>`:UI.html('<p class="small">このプロジェクトには実行できるテストのコマンドがありません。</p>')}
     <div id="maintenance-result" role="status"></div>
-    <h3>③ 記録</h3>${d.historyError?UI.template`<p class="note">削除の記録を取得できませんでした：${esc(d.historyError)}</p>`:''}${records.length?records.map(r=>UI.template`<p>${esc(new Date(r.at).toLocaleString('ja-JP'))}・${r.kind==='remove'?'削除 '+esc(r.title):UI.text('片付け')}・${r.count}件${r.external?.length?UI.template`（外の場所${r.external.length}件を含む）`:""} ${r.kind==='remove'&&!r.count?UI.text('移したものはありません'):r.restored?UI.text('元に戻しました'):UI.template`<button class="btn plain sm" data-maint-action="${r.kind==='remove'?'unremove':'restore'}" data-transaction="${esc(r.id)}" type="button" ${disabled}>元に戻す</button>`}${r.error?UI.template`<small>${esc(r.error)}</small>`:''}</p>`).join(''):UI.html('<p class="note">記録はまだありません。</p>')}`;
+    <h3>③ 記録</h3>${d.historyError?UI.template`<p class="note">削除の記録を取得できませんでした：${esc(d.historyError)}</p>`:''}${records.length?records.map(r=>UI.template`<p>${esc(new Date(r.at).toLocaleString('ja-JP'))}・${r.kind==='remove'?UI.text('削除 ')+esc(r.title):UI.text('片付け')}・${r.count}件${r.external?.length?UI.template`（外の場所${r.external.length}件を含む）`:""} ${r.kind==='remove'&&!r.count?UI.text('移したものはありません'):r.restored?UI.text('元に戻しました'):UI.template`<button class="btn plain sm" data-maint-action="${r.kind==='remove'?'unremove':'restore'}" data-transaction="${esc(r.id)}" type="button" ${disabled}>元に戻す</button>`}${r.error?UI.template`<small>${esc(r.error)}</small>`:''}</p>`).join(''):UI.html('<p class="note">記録はまだありません。</p>')}`;
   updateMaintenanceSelection();
 }
 function maintenanceBusy() {
@@ -97,7 +97,7 @@ ${script}: ${choice.command}`))return;
           $('#maintenance-drawer').hidden=true;view={kind:'work',project,task:result.task};save();await load();
           toast(result.active?UI.text('進行中の問題解決を開きました'):result.reused?UI.text('問題解決の続きをAIに頼みました'):UI.text('問題解決を作ってAIに頼みました'));
         }
-      } else {await refreshMaintenance();const note=result.error || (action==='apply'?UI.template`${result.moved}件をゴミ箱へ移しました`:UI.template`${result.restored}件を元に戻しました${result.skipped?.length?'。残した理由：'+result.skipped.map(x=>x.why).join(' / '):''}`);$('#maintenance-result').textContent=note;toast(note);await load();}
+      } else {await refreshMaintenance();const note=result.error || (action==='apply'?UI.template`${result.moved}件をゴミ箱へ移しました`:UI.template`${result.restored}件を元に戻しました${result.skipped?.length?UI.text('。残した理由：')+result.skipped.map(x=>x.why).join(' / '):''}`);$('#maintenance-result').textContent=note;toast(note);await load();}
     }
   } catch(err){toast(err.message);const box=$('#maintenance-result');if(box) {if(action==='solve')box.innerHTML=UI.template`<p>${esc(err.message)}</p><button class="btn" data-maint-action="solve" type="button" disabled>問題解決</button>`;else box.textContent=err.message;}}
   finally {maintenancePending=false;updateMaintenanceSelection();}

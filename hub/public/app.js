@@ -188,7 +188,7 @@ function notificationBadges(p, tasks, count = false) {
   const done = tasks.filter(t => CONFIRM(p, t)).length;
   const badge = (n, kind, label, tip) => n ? UI.template`<span class="notice ${kind}" title="${tip}">${label}${count ? ' ' + n : ''}</span>` : '';
   const html = badge(unread, 'notice-unread', UI.text('未読'), UI.text('まだ開いていないAIの結果です。作業の会話を開くと消えます'))
-    + badge(reply, 'notice-reply', '返事待ち', UI.text('質問への返事・停止の対処・AIへの入力が必要です'))
+    + badge(reply, 'notice-reply', UI.text('返事待ち'), UI.text('質問への返事・停止の対処・AIへの入力が必要です'))
     + badge(done, 'notice-confirm', UI.text('完了確認'), UI.text('完了に移すか、まだ続けるかを選んでください'));
   return html ? UI.template`<span class="notifications">${html}</span>` : '';
 }
@@ -384,7 +384,7 @@ function updateTurnCounts() {
   const replies = items.filter(({ p, t }) => REPLY(p, t)).length;
   const confirmations = items.filter(({ p, t }) => CONFIRM(p, t)).length;
   $('#turn-n').textContent = UI.text('返事待ち ') + replies;
-  $('#turn-done-n').textContent = '完了確認 ' + confirmations;
+  $('#turn-done-n').textContent = UI.text('完了確認 ') + confirmations;
   $('#turn').setAttribute('aria-label', UI.template`あなたの番：返事待ち ${replies}件、完了確認 ${confirmations}件`);
 }
 function render() {
@@ -416,7 +416,7 @@ function nextName(base, existing) {
   return `${stem} 2`;
 }
 function renderEmpty() {
-  $('#main').innerHTML = `<div class="view"><div class="empty"><h2>台帳が見つかりません</h2>
+  $('#main').innerHTML = UI.template`<div class="view"><div class="empty"><h2>台帳が見つかりません</h2>
     <p><code>${esc(state.root)}/Product/</code> に台帳（PROJECT.md）がありません。</p>
     <p>ターミナルで <code>bash setup.sh</code> を実行すると、今の作業の台帳が作られます。</p>
     <p>AIの準備は、順番に案内します。</p><button class="btn" type="button" data-onboarding-open>はじめの設定</button></div></div>`;
@@ -515,7 +515,7 @@ function addNewRefs(paths) {
 }
 function renderNewProject() {
   const opts = state.projects.filter(p => p.kind !== 'freetalk').map(p => UI.template`<option value="${esc(p.id)}" ${newProjectPreset?.parent === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
-  $('#main').innerHTML = `<div class="view"><div class="ph"><h2>${newProjectPreset?.derivedFrom ? UI.text('同じ階層に分岐') : newProjectPreset?.parent ? UI.text('子プロジェクトを作る') : UI.text('新しいプロジェクト')}</h2></div>
+  $('#main').innerHTML = UI.template`<div class="view"><div class="ph"><h2>${newProjectPreset?.derivedFrom ? UI.text('同じ階層に分岐') : newProjectPreset?.parent ? UI.text('子プロジェクトを作る') : UI.text('新しいプロジェクト')}</h2></div>
     <div class="card"><form class="newform" id="projform">
       <input type="hidden" name="derivedFrom" value="${esc(newProjectPreset?.derivedFrom || '')}"><label>プロジェクト名<input name="name" id="np-name" required maxlength="60" placeholder="例：HD 占いアプリ" value="${esc(newProjectPreset?.name || '')}"></label>
       ${newProjectPreset ? UI.template`<label>最初の作業（やりたいこと。書くと、作ったあとすぐ AI に頼みます。名前だけのプロジェクトにしないため）<textarea name="firstTask" rows="2" maxlength="4000" placeholder="例：台湾向けの投稿を3本作る"></textarea></label>` : ''}
@@ -559,7 +559,7 @@ function taskContext(p,t,compact) {
   const derived = projectFamily(p).flatMap(q=>q.tasks.filter(x=>x.kind==='derived' && (x.derivedFrom===`${p.id}/${t.id}` || q.id===p.id && x.derivedFrom===t.id)).map(x=>({p:q,t:x})));
   const stat = x => (live(x.p.id, x.t.id) ? UI.template`<span class="pst busy"><i></i>${esc(ownerOf(x.t.owner).name)} が作業中</span>` : x.t.state === '完了' ? UI.html('<span class="small">終わった</span>') : UI.template`<span class="small">${esc(UI.label(x.t.state))}</span>`);
   const link = x => UI.template`<button class="lnk" data-go="work" data-p="${esc(x.p.id)}" data-t="${esc(x.t.id)}" type="button">${esc(x.p.name)} / ${esc(x.t.title)}</button>`;
-  return UI.template`<div class="task-context small"><span class="pill">${t.kind==='derived'?UI.text('派生'):UI.text('本作業')}</span>${src ? ' 派生元：'+link(src) : ''}${derived.length ? '　渡した・派生した作業：'+derived.map(x => `${link(x)} ${stat(x)}`).join(' / ') : ''}　${t.copy?UI.text('作業用コピーで作業'):t.workspaceMode==='direct' || t.workspaceStarted?UI.text('本体で作業（合体不要）'):UI.text('作業場所：開始時に決定（Gitのない場所は本体）')}</div>`;
+  return UI.template`<div class="task-context small"><span class="pill">${t.kind==='derived'?UI.text('派生'):UI.text('本作業')}</span>${src ? UI.text(' 派生元：')+link(src) : ''}${derived.length ? UI.text('　渡した・派生した作業：')+derived.map(x => `${link(x)} ${stat(x)}`).join(' / ') : ''}　${t.copy?UI.text('作業用コピーで作業'):t.workspaceMode==='direct' || t.workspaceStarted?UI.text('本体で作業（合体不要）'):UI.text('作業場所：開始時に決定（Gitのない場所は本体）')}</div>`;
 }
 function sourceOptions(p,t) {
   return projectFamily(p).flatMap(q=>q.tasks.filter(x=>!t || x.id!==t.id || q.id!==p.id).map(x=>UI.template`<option value="${esc(q.id+'/'+x.id)}" ${t && (t.derivedFrom===q.id+'/'+x.id || q.id===p.id && t.derivedFrom===x.id) ? 'selected' : ''}>${esc(q.name)} / ${esc(x.title)}</option>`)).join('');
@@ -570,7 +570,7 @@ function taskRow(p, t, showProject, tab) {
   const w = aiWaiting(p.id, t.id);
   const sub = t.question ? UI.template`<span class="q2">あなたへの質問：${linkify(t.question)}</span>`
     : w.length ? UI.template`<span class="q2">${w.map(x => AI_LABEL[x.ai]).join(UI.text('・'))} が入力を待っています（${Math.floor(Math.max(...w.map(x => x.quiet)) / 60)}分）</span>`
-    : UI.template`<span>${showProject ? esc(p.name) + '・' : ''}${t.state === '完了' ? '完了' : cur ? '次：' + esc(cur.text) : t.next ? '次：' + esc(t.next.split('\n')[0]) : esc(UI.label(t.state))}</span>`;
+    : UI.template`<span>${showProject ? esc(p.name) + '・' : ''}${t.state === '完了' ? UI.text('完了') : cur ? UI.text('次：') + esc(cur.text) : t.next ? UI.text('次：') + esc(t.next.split('\n')[0]) : esc(UI.label(t.state))}</span>`;
   const status = t.question ? '返事待ち' : w.length ? UI.text('入力待ち')
     : t.state === '返事待ち' || t.state === '上限で停止' ? t.state
     : t.resultsPending ? UI.text('成果整理') : t.completionPending ? UI.text('完了確認') : live(p.id, t.id) ? UI.text('作業中') : '';
@@ -592,7 +592,7 @@ function pendingBar(p, t) {
 function completionButtons(p, t) {
   const k = `data-p="${esc(p.id)}" data-t="${esc(t.id)}"`;
   if (t.question && t.state !== '完了') return ''; // 質問がある間は、まず答える（完了の操作は出さない）
-  if (t.resultsPending) return UI.template`<div class="wq"><span>${t.resultsPending.auto === 'running' ? UI.text('手順は済みです。AIが成果の記録を整えています') : '成果の記録が整っていません：' + esc(t.resultsPending.reason)}</span>${t.resultsPending.detail && t.resultsPending.auto !== 'running' ? UI.template`<div class="small">${esc(t.resultsPending.detail)}</div>` : ''}${t.resultsPending.auto === 'running' ? '' : UI.template`<button class="btn sm" data-act="resultsorganize" ${k} type="button">成果の整理を頼む</button>`}</div>`;
+  if (t.resultsPending) return UI.template`<div class="wq"><span>${t.resultsPending.auto === 'running' ? UI.text('手順は済みです。AIが成果の記録を整えています') : UI.text('成果の記録が整っていません：') + esc(t.resultsPending.reason)}</span>${t.resultsPending.detail && t.resultsPending.auto !== 'running' ? UI.template`<div class="small">${esc(t.resultsPending.detail)}</div>` : ''}${t.resultsPending.auto === 'running' ? '' : UI.template`<button class="btn sm" data-act="resultsorganize" ${k} type="button">成果の整理を頼む</button>`}</div>`;
   if (t.completionPending) return UI.template`<div class="wq"><span>AI が手順をすべて済にしました。完了に移しますか？</span><button class="btn sm" data-act="taskcomplete" ${k} type="button">完了に移す</button><button class="btn plain sm" data-act="taskcontinue" ${k} type="button">まだ続ける</button>
     ${t.done ? UI.template`<div class="small done-note"><b>やったこと：</b>${linkify(t.done.length > 400 ? t.done.slice(0, 400) + '…' : t.done)}</div>` : ''}</div>`;
   return UI.template`<button class="btn plain sm" data-act="${t.state === '完了' ? 'taskcontinue' : 'taskcomplete'}" ${k} type="button">${t.state === '完了' ? UI.text('再開する') : UI.text('完了に移す')}</button>`;
@@ -662,7 +662,7 @@ async function addQuickImages(p, files, native = false) {
       let r;
       if (native) r = await api('/api/start/image-path', { project: p.id, path: f });
       else {
-        const name = f.name || `貼り付け画像-${Date.now()}.png`;
+        const name = f.name || UI.template`貼り付け画像-${Date.now()}.png`;
         const response = await fetch('/api/start/image?' + new URLSearchParams({ project: p.id, name }), { method: 'POST', headers: { 'X-Hub': '1' }, body: f });
         r = await response.json(); if (!response.ok) throw Error(r.error || UI.text('画像を保存できません'));
       }
@@ -707,10 +707,10 @@ function renderOverview(p) {
       <button class="btn plain" data-maintenance="1" data-p="${esc(p.id)}" type="button">整理と確認</button>${githubUrl(p) ? UI.template`<button class="btn plain" data-url="${esc(githubUrl(p))}" type="button" title="GitHub で開く（${esc(githubUrl(p))}）">GitHub</button>` : UI.template`<span id="github-create-status">${githubCreateButton(p)}</span>`}<button class="btn plain" data-act="files" type="button">ファイルを見る</button></div>
     ${description ? UI.template`<details class="more project-notes" data-p="${esc(p.id)}" ${projectNotesOpen.has(p.id) ? 'open' : ''}><summary>説明・メモ</summary><p class="desc">${esc(description)}</p></details>` : ''}
     ${state.completionWarning ? UI.template`<p class="wq">${esc(state.completionWarning)}</p>` : ''}
-    ${p.completionPending ? '<p class="wq">プロジェクトの完了報告があります。上の［完了にする］で確認するか、［まだ続ける］を選んでください。</p><button class="btn plain" data-act="pstatus" data-p="' + esc(p.id) + '" data-s="進行中" type="button">まだ続ける</button>' : ''}
+    ${p.completionPending ? UI.template`<p class="wq">プロジェクトの完了報告があります。上の［完了にする］で確認するか、［まだ続ける］を選んでください。</p><button class="btn plain" data-act="pstatus" data-p="${esc(p.id)}" data-s="進行中" type="button">まだ続ける</button>` : ''}
     ${p.derivedFrom ? UI.template`<p class="small">派生元：${proj(p.derivedFrom) ? UI.template`<button class="lnk" data-go="project" data-p="${esc(p.derivedFrom)}" type="button">${esc(proj(p.derivedFrom).name)}</button>` : esc(p.derivedFrom)}</p>` : ''}
     ${phaseRoad(p, info)}
-    <div class="card"><h3 class="sec">${info.curName ? UI.template`今のフェーズの作業（${esc(info.curName)}）` : '作業'}</h3>
+    <div class="card"><h3 class="sec">${info.curName ? UI.template`今のフェーズの作業（${esc(info.curName)}）` : UI.text('作業')}</h3>
       <form class="quick" id="quickform" data-p="${esc(p.id)}">
         <textarea name="text" rows="2" maxlength="4000" placeholder="やりたいことを書くだけで始められます（例：入退室の画面を作って）">${esc(quickDraft(p).text)}</textarea>
         <div class="quick-images" id="quick-images"></div>
@@ -779,7 +779,7 @@ async function openFiles(btn) {
   const list = [];
   if (t && t.workdir) list.push({ label: UI.text('作業の場所'), path: t.workdir, kind: 'workdir' });
   p.folders.forEach(f => list.push({ label: f.label, path: f.path, kind: 'folder' }));
-  list.push({ label: '台帳（PROJECT.md・指示ファイル）', path: p.dir, kind: 'project' });
+  list.push({ label: UI.text('台帳（PROJECT.md・指示ファイル）'), path: p.dir, kind: 'project' });
   const go = async it => {
     try { await api('/api/open', { project: p.id, kind: it.kind, label: it.label, task: t && t.id }); toast(UI.template`${it.label}を開きました`); }
     catch (e) { toast(`${it.label}：${e.message}`); }
@@ -945,7 +945,7 @@ function renderWork() {
             ? UI.template`この作業は ${esc(ownerOf(t.owner).name)}（Discord）に頼んでいます${t.via ? `（${esc(t.via)}）` : ''}。<br>報告を受けたら、下の「手順」に印を付けてください。全部付いたら、完了に移すか確認してください。<br>ここで Claude Code・Codex・Agy CLI に手伝わせることもできます。`
             : ownerOf(t.owner).kind === 'you' ? UI.template`この作業は、あなたの担当です。<br>終わったら、下の「手順」に印を付けるか、状態を「完了」にしてください。`
             : state.terminal
-            ? UI.template`まだ AI は動いていません。<br>上の「${AI_LABEL[main]}で始める」を押すと、ここで作業が始まります。<br>ファイルやスクショは、この画面に落とす（または ⌘V で貼る）と AI に渡せます。<br>${esc(t.next ? '次にやること：' + t.next.split('\n')[0] : '')}`
+            ? UI.template`まだ AI は動いていません。<br>上の「${AI_LABEL[main]}で始める」を押すと、ここで作業が始まります。<br>ファイルやスクショは、この画面に落とす（または ⌘V で貼る）と AI に渡せます。<br>${esc(t.next ? UI.text('次にやること：') + t.next.split('\n')[0] : '')}`
             : UI.html('作業画面の部品が未設定です。［設定］をご覧ください。<br>それまでは、始めると別の窓で開きます。')}</div></div>`}
     </div>`}
     <div class="wfoot">
@@ -2014,7 +2014,7 @@ function syncRoleAccountChoices() {
     el.innerHTML = roleAiOptions(slot.ai); el.value = slot.ai;
   });
   const note = $('#role-account-status');
-  if (note) note.textContent = accountCheckPromise ? UI.text('ログイン状態を確認中…') : accountCheckError || UI.template`ログイン済みの AI だけ選べます${accountCheckedAt ? '（' + accountCheckedAt + ' に確認）' : ''}`;
+  if (note) note.textContent = accountCheckPromise ? UI.text('ログイン状態を確認中…') : accountCheckError || UI.template`ログイン済みの AI だけ選べます${accountCheckedAt ? UI.template`（${accountCheckedAt} に確認）` : ''}`;
   const button = $('#role-account-check'); if (button) button.disabled = Boolean(accountCheckPromise);
 }
 async function checkRoleAccounts() {
@@ -2041,7 +2041,7 @@ function accountOptions(ai, selected) {
 function taskAccountSelect(p, t, ai, chat = false) {
   const rows = (state.accounts || []).filter(r => r.ai === ai), selected = t.accounts?.[ai] || 'default';
   const hidden = rows.length < 2 && selected === 'default';
-  return UI.template`<label class="account-pick small" ${hidden ? 'hidden' : ''}>${chat ? UI.text('アカウント') : esc(AI_LABEL[ai]) + 'のアカウント'} <select ${chat ? 'id="chat-account"' : ''} data-task-account data-p="${esc(p.id)}" data-t="${esc(t.id)}" data-ai="${esc(ai)}" aria-label="${esc(AI_LABEL[ai] || '')}のアカウント">${accountOptions(ai, selected)}</select></label>`;
+  return UI.template`<label class="account-pick small" ${hidden ? 'hidden' : ''}>${chat ? UI.text('アカウント') : UI.template`${esc(AI_LABEL[ai])}のアカウント`} <select ${chat ? 'id="chat-account"' : ''} data-task-account data-p="${esc(p.id)}" data-t="${esc(t.id)}" data-ai="${esc(ai)}" aria-label="${UI.template`${esc(AI_LABEL[ai] || '')}のアカウント`}">${accountOptions(ai, selected)}</select></label>`;
 }
 const taskFastPending = new Set();
 let taskFastSaving = 0;

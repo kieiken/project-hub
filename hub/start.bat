@@ -2,6 +2,7 @@
 rem Project Hub (Windows): start the server and open the page in the browser.
 rem Set HUB_LANG=zh-TW before calling this to use the Traditional Chinese UI.
 setlocal
+chcp 65001 >NUL
 cd /d "%~dp0"
 if "%HUB_PORT%"=="" set "HUB_PORT=4545"
 set "URL=http://127.0.0.1:%HUB_PORT%"
