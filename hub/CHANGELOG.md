@@ -4,6 +4,14 @@
 番号の付け方：大きな作り直し＝1つ目、機能を足した＝2つ目、直しただけ＝3つ目を上げる。
 
 
+## 4.91.0（2026-10-08）
+- Windows 10／11 でも動くようにした（WSL 不要）。Claude Code・Codex・npm の `.cmd` シムを中の実行ファイル（claude.exe、または node と本体の JS）に展開して起動し、cmd.exe を通さない。作業画面（node-pty の ConPTY）・会話・利用枠・CLI の版確認・アカウント・はじめの設定・検証スクリプトの起動をこの方法にそろえた。
+- Windows では、外の Terminal を Git for Windows の bash の新しい窓で開き、フォルダ・ファイル・URL を Explorer と既定のブラウザで開き、フォルダ選択を PowerShell の選択窓で出す。裏で動く AI の見張り（ps・lsof）は Windows では行わない。
+- Windows 用の `hub/setup.bat`（Git for Windows の bash で setup.sh を実行）と `hub/start.bat`（起動してブラウザを開く）を追加。
+- `.gitattributes` で文字ファイルの改行を LF に固定（.bat は CRLF）。Windows の改行変換で複数行の翻訳キーが一致せず日本語のまま出たり、setup.sh が bash で動かなくなったりするのを防ぐ。公開物にも含める。
+- 繁體中文：翻訳を通らずに書かれていた画面の文字（新しいプロジェクトの入力欄、左欄の返事待ち、フェーズの状態、アカウント名、利用枠の残り時間、はじめの設定、片付けの記録、起動時のメッセージなど）を翻訳に通し、足りない訳を追加。
+- テストで偽の CLI を置く PATH を `path.delimiter` でつなぐように直した（Windows では本物の CLI が呼ばれていた）。
+
 ## 4.90.0（2026-10-08）
 
 - macOS AppのCIと明示設定時の本体同梱を追加。繁體中文の説明書・見本・テンプレート・CIを公開エクスポートへ含め、検査を維持。
