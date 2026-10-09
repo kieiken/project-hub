@@ -32,7 +32,8 @@ function saveImage(p, name, data) {
   fs.mkdirSync(dirOf(p), { recursive: true });
   fs.writeFileSync(file, data);
   if (!/\.(png|jpe?g)$/i.test(id)) {
-    try { execFileSync('/usr/bin/sips', ['-s', 'format', 'png', file, '--out', imageFile(p, id, true)], { timeout: 15000, stdio: 'pipe' }); }
+    try { if (process.platform === 'win32') execFileSync(process.execPath, [path.join(__dirname, 'convert-image.js'), file, imageFile(p, id, true)], { timeout: 15000, stdio: 'pipe', windowsHide: true });
+    else execFileSync('/usr/bin/sips', ['-s', 'format', 'png', file, '--out', imageFile(p, id, true)], { timeout: 15000, stdio: 'pipe' }); }
     catch {
       // 失敗した一時コピーだけを片付ける。利用者の元画像には触らない。
       for (const temp of [file, imageFile(p, id, true)]) { try { fs.unlinkSync(temp); } catch { /* 未作成 */ } }
@@ -43,7 +44,7 @@ function saveImage(p, name, data) {
 }
 function imageFromPath(p, raw) {
   const file = fs.realpathSync(String(raw));
-  const allowed = [os.homedir(), os.tmpdir(), '/private/tmp'].map(x => fs.realpathSync(x));
+  const allowed = [os.homedir(), os.tmpdir(), '/private/tmp'].filter(x => fs.existsSync(x)).map(x => fs.realpathSync(x));
   if (!allowed.some(x => file.startsWith(x + path.sep)) || !IMAGE.test(file)) throw Error('この場所の画像は追加できません');
   const stat = fs.statSync(file);
   if (!stat.isFile() || stat.size > MAX) throw Error('画像は1枚50MBまでです');

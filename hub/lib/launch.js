@@ -111,6 +111,12 @@ function as(s) { return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"'); }
 
 // シェル用の1行（ターミナルの窓を開く時に使う）
 function buildCommand({ ai, dir, prompt, cmd, model, effort }) {
+  if (process.platform === 'win32') {
+    const platform = require('./platform');
+    const argv = buildArgv({ ai, prompt, cmd, model, effort });
+    const resolved = platform.resolveCommand(argv.command, argv.args);
+    return 'Set-Location -LiteralPath ' + platform.psQuote(dir) + '; & ' + [resolved.file, ...resolved.args].map(platform.psQuote).join(' ');
+  }
   if (ai === 'agy') {
     const argv = buildArgv({ ai, prompt, model, effort });
     return `cd ${sq(dir)} && env ${API_ENV.flatMap(k => ['-u', k]).map(sq).join(' ')} ${[argv.command, ...argv.args].map(sq).join(' ')}`;
@@ -156,15 +162,29 @@ function run(file, args, dry) {
 }
 
 function openTerminal(command, dry) {
+  if (process.platform === 'win32') {
+    const args = ['-NoProfile', '-NoExit', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')];
+    if (dry) return Promise.resolve({ dry: true, file: 'powershell.exe', args });
+    const child = require('child_process').spawn('powershell.exe', args, { detached: true, stdio: 'ignore', windowsHide: false });
+    return new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', () => { child.unref(); resolve({ ok: true }); }); });
+  }
   return run('osascript', [
     '-e', `tell application "Terminal" to do script "${as(command)}"`,
     '-e', 'tell application "Terminal" to activate',
   ], dry);
 }
 
-function openFolder(p, dry) { return run('open', [p], dry); }
+function openFolder(p, dry) {
+  if (process.platform === 'win32') return require('./platform').powershell('Invoke-Item -LiteralPath ' + require('./platform').psQuote(p), dry);
+  return run('open', [p], dry);
+}
 // ファイルは Finder でその場所を開いて選ぶ。URL は Mac の既定のブラウザで開く
-function revealFile(p, dry) { return run('open', ['-R', p], dry); }
-function openUrl(u, dry) { return run('open', [u], dry); }
+function revealFile(p, dry) { return process.platform === 'win32' ? run('explorer.exe', ['/select,', p], dry) : run('open', ['-R', p], dry); }
+function openUrl(u, dry) {
+  const url = new URL(u);
+  if (!['http:', 'https:'].includes(url.protocol)) throw Error('僅允許 HTTP 或 HTTPS 網址');
+  if (process.platform === 'win32') return require('./platform').powershell('Start-Process ' + require('./platform').psQuote(url.href), dry);
+  return run('open', [u], dry);
+}
 
 module.exports = { AIS, AI_KEY, AI_LABEL, AGY_MODEL, agyAccountError, childEnv, buildCommand, buildArgv, openTerminal, openFolder, revealFile, openUrl, sq, DEFAULT_CMD, CODEX_CONTEXT_ARGS, CONTEXT_RULE, MODEL_FLAG, EFFORT_FLAG, SWITCH_CMD, switchCommand, flagFor, modelLabel, startupInfo, setOverrides, getOverrides, setDiscoveredModels };

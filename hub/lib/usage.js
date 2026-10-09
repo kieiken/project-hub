@@ -1,6 +1,6 @@
 'use strict';
 // 契約CLIの状態だけを読む。user prompt / thread / turn は送らず、秘密・生出力は公開しない。
-const { spawn } = require('node:child_process');
+const { spawn } = require('./platform');
 const os = require('node:os');
 const { executable } = require('./ai-tools');
 

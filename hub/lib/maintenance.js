@@ -2,7 +2,8 @@
 // 選択式の整理、ゴミ箱への退避・復元、ローカル検証。
 const fs=require('node:fs'), path=require('node:path'), os=require('node:os');
 const {createHash,randomUUID}=require('node:crypto');
-const {execFileSync,spawn}=require('node:child_process');
+const {execFileSync}=require('node:child_process');
+const {spawn}=require('./platform');
 const {parseDoc}=require('./frontmatter');
 const digest=x=>createHash('sha256').update(x).digest('hex');
 const inside=(base,file)=>{base=base.normalize('NFC');file=file.normalize('NFC');return file===base || file.startsWith(base+path.sep);};

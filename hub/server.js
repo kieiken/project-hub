@@ -24,6 +24,7 @@ const { AsyncLocalStorage } = require('async_hooks');
 
 const PORT = Number(process.env.HUB_PORT || 4545);
 const ROOT = expandHome(process.env.HUB_ROOT || path.join(os.homedir(), 'Documents', 'AI-Workspace'));
+let workspaceSwitching = false;
 const DRY = process.env.HUB_DRY_RUN === '1'; // テスト用：実際には起動しない
 const limitEvidence = new LimitEvidence(path.join(ROOT, '_hub', 'limits.json'));
 const usage = new Usage({ dry: DRY, observe: snapshot => {
@@ -40,6 +41,7 @@ async function refreshLimitEvidence(request) {
 const PUBLIC = path.join(__dirname, 'public');
 const ROLES_FILE = path.join(ROOT, '_hub', 'roles.yaml');
 const store = new Store(ROOT);
+const skillManager = new (require('./lib/skills').Skills)(ROOT);
 const projectOrder = new (require('./lib/project-order').ProjectOrder)(store);
 // 外から使う（iPhone）の設定と、今の要求が外からかどうか（記録に「外から」と印を付けるため）
 const remote = new remoteLib.Remote({ file: path.join(ROOT, '_hub', 'remote.json') });
@@ -135,9 +137,10 @@ function send(res, code, body, type = 'application/json; charset=utf-8') {
 function allowed(req) {
   const hosts = [`127.0.0.1:${PORT}`, `localhost:${PORT}`];
   if (!hosts.includes(req.headers.host)) return false;
-  if (req.method === 'GET') return true;
   const origin = req.headers.origin;
   if (origin && !hosts.map(h => `http://${h}`).includes(origin)) return false;
+  if (req.headers['sec-fetch-site'] === 'cross-site') return false;
+  if (req.method === 'GET') return true;
   return req.headers['x-hub'] === '1';
 }
 
@@ -232,7 +235,7 @@ function fableBackup(data, role) {
 }
 // ChatGPT アプリ・Codex の設定ファイル（~/.codex/config.toml）に、Hub の MCP が登録されているか
 const CODEX_CONFIG = () => path.join(process.env.HUB_AI_HOME || os.homedir(), '.codex', 'config.toml');
-const MCP_BLOCK = () => `\n# Project Hub の道具（作業を読む・結果を書き戻す）。Hub を起動しておくこと\n[mcp_servers.project-hub]\ncommand = "node"\nargs = ["${path.join(__dirname, 'mcp.js')}"]\n`;
+const MCP_BLOCK = () => `\n# Project Hub の道具（作業を読む・結果を書き戻す）。Hub を起動しておくこと\n[mcp_servers.project-hub]\ncommand = "node"\nargs = ["${path.join(__dirname, 'mcp.js').replace(/\\/g, '/')}"]\n`;
 function codexMcpStatus() {
   let text = '';
   try { text = fs.readFileSync(CODEX_CONFIG(), 'utf8'); } catch (e) { return { registered: false, configFile: CODEX_CONFIG(), configExists: false }; }
@@ -343,7 +346,11 @@ function modelError(ai, model) {
     if (!aiTools.catalog().agy.models.some(x => x.id === launch.AGY_MODEL.id)) return '設定画面で Agy のモデル一覧を再取得してください。別のモデルへは切り替えません';
   }
   if (!model) return '';
-  if (aiTools.staleModel(ai, model)) return `モデル「${model}」は現在の候補から外れています。新しいモデルを選んでください`;
+  if (ai === 'codex' && aiTools.catalog().codex.source === 'codex-cli' &&
+      !aiTools.catalog().codex.models.some(row => row.id === launch.flagFor(ai, model))) {
+    return `目前 Codex CLI 的模型清單不包含「${model}」。請在工作畫面的模型欄選擇可用模型；不會自動換成其他模型。`;
+  }
+  if (aiTools.staleModel(ai, model)) return `模型「${model}」已不在目前可用清單中，請重新選擇模型。`;
   if (Object.prototype.hasOwnProperty.call(launch.getOverrides()[ai] || {}, model)) return '';
   return launch.flagFor(ai, model) ? '' : `モデル「${model}」の CLI 名が分かりません。設定で直してください`;
 }
@@ -441,6 +448,7 @@ function modelPolicy(p, t, where = 'chat', projects) {
 }
 
 function taskPrompt(p, t, file, dir, where = 'chat', startup) {
+  const selectedSkills = skillManager.prompt(p.id);
   const issuesRule = `【問題点を短くまとめる決まり】PROJECT.md の issues を足す・変える時は、同じプロジェクトの .ai/issues-summary.json も更新する（他プロジェクトには書かない）。保存形式は {"items":[{"hash":"原文のsha256先頭16文字","title":"30字までの問題名","state":"未解決/確認待ち/判断待ち/解決済み/履歴のいずれか","next":"50字までの次の対応（無ければ空）","who":"人/AI/空のいずれか"}]}。原文は文字列ならそのまま、オブジェクトなら text。hash は Node の require('node:crypto').createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16) で計算する（text は原文そのもの。空白・改行を変えない）。問題名と次の対応に作業ID・commit・テスト件数を入れない。新しい状態の項目を足したら、同じ件の古い項目は「履歴」にする。確かめていない事は「確認待ち」にし、不具合・解決と断定しない。原文は消さない。`;
   const rel = dir && path.relative(workRoot(p), dir);
   const copy = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? `今いるフォルダ（${dir}）はこの作業専用の作業用コピー。ここだけで作業し、本体には触らないこと（取り込みは人が作業画面の［本体に取り込む］で行う）。`
@@ -462,9 +470,9 @@ function taskPrompt(p, t, file, dir, where = 'chat', startup) {
   if (where !== 'terminal') {
     const read = `作業「${String(t.title).replace(/[\r\n]+/g, ' ')}」（作業ID ${t.id}）の続きを。読む：台帳/.ai/rules.md・台帳/PROJECT.md・台帳/.ai/tasks/${t.id}.md。区切りで更新、実施した手順だけ[x]（無ければ3〜5個）。workdir・state・questionは書き換えない（Hub管理）。`;
     return instructions.packet({ pdir: p.dir, project: p.id, task: t.id, policy: modelPolicy(p, t, where, all), issues: issuesRule, port: PORT, contextRule: launch.CONTEXT_RULE, askRule: chat.ASK_RULE,
-      common: [dir ? `cwd=${dir === p.dir ? '台帳' : '台帳/' + path.relative(p.dir, dir).split(path.sep).join('/')}。${rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? '専用の作業用コピー。ここだけで作業。本体には触らない（取り込みは人の［本体に取り込む］）。' : '本体。コピーは使わず、ここで作業してよい（Hub指定）。'}` : '', look, context, read].filter(Boolean).join('\n') });
+      common: [dir ? `cwd=${dir === p.dir ? '台帳' : '台帳/' + path.relative(p.dir, dir).split(path.sep).join('/')}。${rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? '専用の作業用コピー。ここだけで作業。本体には触らない（取り込みは人の［本体に取り込む］）。' : '本体。コピーは使わず、ここで作業してよい（Hub指定）。'}` : '', look, context, selectedSkills, read].filter(Boolean).join('\n') });
   }
-  return [modelPolicy(p, t, where, all), where === 'terminal' ? TERMINAL_HANDOFF_NOTE + '\n' + TERMINAL_LIMIT_NOTE : '', where === 'terminal' && startup ? launch.startupInfo(startup.ai, startup.model) : '', launch.CONTEXT_RULE, copy, look, context, issuesRule, `作業「${String(t.title).replace(/[\r\n]+/g, ' ')}」（作業ID ${t.id}）の続きをしてください。まず次の3つを読むこと: ${path.join(p.dir, '.ai', 'rules.md')} / ${path.join(p.dir, 'PROJECT.md')} / ${file}。区切りごとに作業ファイルを更新し、「## 手順」の終わった所を [x] にすること（手順が無ければ3〜5個書く）。作業ファイルの先頭の workdir・state・question の行は Hub が管理する：書き換えない（特に、取り込み済みの後に古い内容で書き戻さない）。`].filter(Boolean).join('\n\n');
+  return [modelPolicy(p, t, where, all), where === 'terminal' ? TERMINAL_HANDOFF_NOTE + '\n' + TERMINAL_LIMIT_NOTE : '', where === 'terminal' && startup ? launch.startupInfo(startup.ai, startup.model) : '', launch.CONTEXT_RULE, copy, look, context, selectedSkills, issuesRule, `作業「${String(t.title).replace(/[\r\n]+/g, ' ')}」（作業ID ${t.id}）の続きをしてください。まず次の3つを読むこと: ${path.join(p.dir, '.ai', 'rules.md')} / ${path.join(p.dir, 'PROJECT.md')} / ${file}。区切りごとに作業ファイルを更新し、「## 手順」の終わった所を [x] にすること（手順が無ければ3〜5個書く）。作業ファイルの先頭の workdir・state・question の行は Hub が管理する：書き換えない（特に、取り込み済みの後に古い内容で書き戻さない）。`].filter(Boolean).join('\n\n');
 }
 
 function usageWithLimit(snapshot) {
@@ -474,6 +482,9 @@ function usageWithLimit(snapshot) {
 }
 
 async function api(req, res, url) {
+  if (url.pathname.startsWith('/api/skills') && fromRemote()) return send(res, 403, { error: 'Skill 管理僅限本機操作。' });
+  if (req.method === 'GET' && url.pathname === '/api/skills') return send(res, 200, skillManager.status());
+  if (workspaceSwitching) return send(res, 503, { error: '正在切換儲存位置，請稍候重新整理。' });
   // Mac の許可が無くて中を読めない時の知らせ（Finder が違う場所で開くのを防ぐ）
   const denied = x => { try { fs.readdirSync(fs.statSync(x).isDirectory() ? x : path.dirname(x)); return ''; } catch (e) { return ['EPERM', 'EACCES'].includes(e.code) ? 'Mac の許可が無くて開けません。設定画面の「Mac のファイルの許可」で［確認をもう一度出す］を押し、「許可」を選んでください' : ''; } };
   // 本体が台帳のフォルダ（書類フォルダの中）を読めるか。Mac の許可が本体に効いているかをアプリが確かめる
@@ -492,7 +503,7 @@ async function api(req, res, url) {
     // 画面で使う物だけ送る：作業の「やったこと」「注意」「メモ」の本文は送らず、「次にやること」は1行目だけ（1MB → 数百KB）
     const slim = t => { const { done, note, memo, next, ...rest } = t; return { ...rest, next: String(next || '').split('\n')[0] }; };
     const state = {
-      root: ROOT, roles: roleData, version: VERSION, latest: readVersion(),
+      root: ROOT, platform: process.platform, roles: roleData, version: VERSION, latest: readVersion(),
       github: github.summary(),
       completionWarning: store.completion.warning, projectOrder: projectOrder.read(), projectPins: projectOrder.readPins(),
       taskHandoffs: taskTransfer.pending(),
@@ -662,6 +673,34 @@ async function api(req, res, url) {
   }
 
   const b = await readBody(req);
+  if (url.pathname === '/api/skills/roots') return send(res, 200, skillManager.saveRoots(b.roots));
+  if (url.pathname === '/api/skills/project') {
+    if (!store.readProject(b.project)) return send(res, 404, { error: '找不到專案。' });
+    skillManager.select(b.project, b.ids); return send(res, 200, { ok: true });
+  }
+  if (url.pathname === '/api/workspace/location') {
+    if (process.platform !== 'win32' || fromRemote() || DRY) return send(res, 403, { error: '只能從 Windows 本機變更儲存位置。' });
+    if (aiTools.isOperating() || sessions.list().some(x => x.running) || chats.running.size) return send(res, 409, { error: '請先停止 AI 工作或等待工具更新完成。' });
+    let change;
+    try {
+      workspaceSwitching = true;
+      change = require('./lib/workspace-location').prepare({ root: ROOT, target: b.path, mode: b.mode,
+        configFile: path.join(__dirname, 'windows-local.json'), appDir: path.dirname(__dirname) });
+      change.commit();
+      const child = require('child_process').spawn(process.execPath, [path.join(__dirname, 'server.js')], {
+        cwd: __dirname, env: { ...process.env, HUB_ROOT: change.target, HUB_RESTART_WAIT: '1' },
+        detached: true, windowsHide: true, stdio: 'ignore' });
+      await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+      child.unref();
+      send(res, 200, { ok: true, root: change.target });
+      setTimeout(shutdown, 300);
+    } catch (e) {
+      if (change) change.rollback();
+      workspaceSwitching = false;
+      return send(res, 400, { error: e.message });
+    }
+    return undefined;
+  }
   if (url.pathname === '/api/github') return send(res, 200, await github.save(b));
   if (url.pathname === '/api/github/owners') return send(res, 200, { owners: await github.owners(b.account) });
   if (url.pathname === '/api/github/preview' || url.pathname === '/api/github/create') {
@@ -1309,6 +1348,10 @@ async function api(req, res, url) {
   // Mac のフォルダ選択の窓を出して、選んだ場所を返す
   if (url.pathname === '/api/pick-folder') {
     if (DRY) return send(res, 200, { path: '' });
+    if (process.platform === 'win32') {
+      const result = await require('./lib/platform').powershell("[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; $picker = New-Object System.Windows.Forms.FolderBrowserDialog; $picker.Description = '請選擇資料夾'; if ($picker.ShowDialog() -eq 'OK') { [Console]::Write($picker.SelectedPath) }; $picker.Dispose()");
+      return send(res, 200, { path: result.output });
+    }
     const { execFile } = require('child_process');
     execFile('osascript', ['-e', `POSIX path of (choose folder with prompt "${String(b.prompt || 'フォルダを選んでください').replace(/["\\]/g, '')}")`], (err, out) => {
       if (err) return send(res, 200, { path: '' }); // 取り消した時
@@ -1489,6 +1532,9 @@ async function remoteGate(req, res, url) {
 }
 
 const server = http.createServer(async (req, res) => {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
+  res.setHeader('Referrer-Policy', 'no-referrer');
   try {
     const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
     if (remoteLib.isRemote(req)) return await reqCtx.run({ remote: true }, () => remoteGate(req, res, url));

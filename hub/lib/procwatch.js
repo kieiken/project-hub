@@ -13,7 +13,7 @@ const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7,
 // 外のコマンドを動かして出力を返す。終わり方が 0 以外でも出力があれば使う（lsof は一部の番号が無いと 1 で終わる）
 function defaultExec(cmd, args) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: TIMEOUT, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } }, (e, stdout) => {
+    execFile(cmd, args, { windowsHide: true, timeout: TIMEOUT, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } }, (e, stdout) => {
       if (e && !(typeof e.code === 'number' && stdout)) return reject(e);
       resolve(String(stdout || ''));
     });
@@ -50,7 +50,17 @@ const RE_APP = new RegExp(`^/.*?\\.app/\\S*?/${NAME}`); // 空白のあるアプ
 const RE_INTERP = new RegExp(`^(?:\\S*/)?(?:node|nodejs|bun|deno)\\s+(?:-\\S+\\s+)*(?:\\S*/)?${NAME}`);
 const RE_PKG = /^(?:\S*\/)?(?:node|nodejs|bun)\s+(?:-\S+\s+)*\S*\/@(?:anthropic-ai\/claude-code|openai\/(codex))\/\S+(?=\s|$)/; // npm で入れた物
 function aiOf(command) {
-  const c = String(command || '');
+  let c = String(command || '');
+  if (process.platform === 'win32' && /(?:[A-Za-z]:|\\|\.exe\b)/i.test(c)) {
+    const tokens = c.match(/"[^"]*"|[^\s]+/g) || [];
+    const names = tokens.slice(0, 2).map(t => t.replace(/^"|"$/g, '').replace(/\\/g, '/'));
+    if (/(?:^|\/)claude(?:\.exe|\.js)?$/i.test(names[0] || '')) return 'claude';
+    if (/(?:^|\/)(codex|agy)(?:\.exe)?$/i.test(names[0] || '')) return names[0].match(/(codex|agy)(?:\.exe)?$/i)[1].toLowerCase();
+    if (/(?:^|\/)node(?:\.exe)?$/i.test(names[0] || '') && /\/(codex|claude|cli)\.[cm]?js$/i.test(names[1] || '')) {
+      if (names[1].includes('@openai/codex')) return 'codex';
+      if (names[1].includes('@anthropic-ai/claude-code')) return 'claude';
+    }
+  }
   const m = c.match(RE_FIRST) || c.match(RE_APP) || c.match(RE_INTERP);
   if (m) return m[1];
   const k = c.match(RE_PKG);
@@ -90,9 +100,14 @@ function parseLsof(text) {
 const inside = (dir, cwd) => Boolean(dir) && (cwd === dir || cwd.startsWith(dir.endsWith(path.sep) ? dir : dir + path.sep));
 function mapCwd(cwd, projects, baseOf, real = x => x) {
   if (!cwd) return { project: null, task: null };
+  cwd = path.resolve(expandHome(cwd));
+  if (process.platform === 'win32') cwd = cwd.toLowerCase();
   let best = null;
   const consider = (dir, project, task) => {
-    for (const d of new Set([dir, real(dir)])) if (inside(d, cwd) && (!best || d.length > best.len || (d.length === best.len && task && !best.task))) best = { len: d.length, project, task };
+    for (let d of new Set([dir, real(dir)])) {
+      if (process.platform === 'win32') d = d.toLowerCase();
+      if (inside(d, cwd) && (!best || d.length > best.len || (d.length === best.len && task && !best.task))) best = { len: d.length, project, task };
+    }
   };
   for (const p of projects || []) for (const t of p.tasks || []) { const wd = expandHome(t.workdir); if (wd) consider(path.resolve(wd), p.id, t.id); }
   if (best) return { project: best.project, task: best.task };
@@ -141,9 +156,10 @@ function create(opts = {}) {
     busy = true;
     try {
       let text;
-      try { text = await exec('ps', psArgs(platform)); }
+      try { text = platform === 'win32' ? await exec('powershell.exe', ['-NoProfile', '-Command', "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_Process -Filter \"Name='node.exe' OR Name='claude.exe' OR Name='codex.exe' OR Name='agy.exe'\" | Select-Object ProcessId,ParentProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress"]) : await exec('ps', psArgs(platform)); }
       catch (e) { warn(`ps が使えません：${String(e.message || e).split('\n')[0]}`); return current; }
-      const rows = parsePs(text);
+      const parsed = platform === 'win32' ? JSON.parse(text || '[]') : null;
+      const rows = platform === 'win32' ? [].concat(parsed || []).map(r => ({ pid: r.ProcessId, ppid: r.ParentProcessId, since: String(r.CreationDate || ''), command: r.CommandLine || '' })) : parsePs(text);
       if (!rows.length) { warn('ps の出力を読めませんでした'); return current; }
       const kept = pickAi(rows, selfPid);
       const dirs = kept.length ? await cwds(kept) : [];

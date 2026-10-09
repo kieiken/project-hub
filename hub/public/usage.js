@@ -4,7 +4,7 @@ let usageData = null, usageLoading = false, usageError = '', usageClearing = fal
 const usageCompactMedia = typeof matchMedia === 'function' ? matchMedia('(max-width: 900px)') : null;
 function usageDate(value) {
   if (!value || !Number.isFinite(Date.parse(value))) return '未提供';
-  return new Date(value).toLocaleString('ja-JP', { month:'numeric', day:'numeric', weekday:'short', hour:'2-digit', minute:'2-digit', timeZoneName:'short' });
+  return new Date(value).toLocaleString('zh-TW', { month:'numeric', day:'numeric', weekday:'short', hour:'2-digit', minute:'2-digit', timeZoneName:'short' });
 }
 function usageRemaining(value, now = Date.now()) {
   if (!value || !Number.isFinite(Date.parse(value))) return 'リセット日時は未提供';
@@ -19,9 +19,10 @@ function usageSummary(ai, provider, now = Date.now(), compact = false) {
   if (Date.parse(provider.fetchedAt) + 6 * 60000 < now) return `${name} 前回の情報`;
   const windows = provider.windows.filter(w => !w.id.startsWith('model:')).slice(0,2);
   return name + ' ' + windows.map(w => {
-    if (!compact && w.resetsAt && Date.parse(w.resetsAt) <= now) return `${w.label} 再確認待ち`;
+    if (!compact && w.resetsAt && Date.parse(w.resetsAt) <= now) return `${w.label.replace('週間', '每週').replace('時間', ' 小時')} 等待重新確認`;
     let label = w.label.replace(/枠$/, '');
     if (compact) label = label.replace(/^週間$/, 'W').replace(/^(\d+)時間$/, '$1hr');
+    if (!compact) label = label.replace(/^週間$/, '每週').replace(/^(\d+)時間$/, '$1 小時');
     if (compact && ai === 'codex' && windows.length === 1 && label === 'W') label = '';
     const value = w.resetsAt && Date.parse(w.resetsAt) <= now ? '再確認待ち' : w.usedPercent === null ? '未提供' : Math.round(w.usedPercent) + '%';
     return `${label ? label + ' ' : ''}${value}`;
@@ -66,8 +67,8 @@ function drawUsage() {
   const summary = compact => usageError ? '利用状況 未取得' : usageData ? ['codex','claude'].map(ai => usageSummary(ai,usageData.providers[ai],now,compact)).join(' / ') : '利用状況';
   const full = summary(false);
   b.textContent = summary(usageCompactMedia?.matches);
-  b.setAttribute('aria-label', full + '。利用枠の使用率とリセット時期を見る');
-  b.setAttribute('title', full + '。利用枠の使用率とリセット時期を見る');
+  b.setAttribute('aria-label', full + '。查看額度使用比例與重設時間');
+  b.setAttribute('title', full + '。查看額度使用比例與重設時間');
   drawUsageControls();
   $('#usage-body').innerHTML = usageError ? '<p class="note">Hubに接続できませんでした。現在の利用状況は未取得です。</p>' : usageHtml(usageData);
   $('#usage-fable-clear')?.addEventListener('click',clearFableLimit);

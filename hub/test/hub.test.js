@@ -656,9 +656,9 @@ test('新しいプロジェクトを始められる（ひな形・フェーズ�
 
 test('バージョン：package.json と変更の記録の一番上が同じ番号。画面にも出る', async () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(HUB, 'package.json'), 'utf8'));
-  const top = fs.readFileSync(path.join(HUB, 'CHANGELOG.md'), 'utf8').match(/^## ([\d.]+)/m)[1];
+  const top = fs.readFileSync(path.join(HUB, 'CHANGELOG.md'), 'utf8').match(/^## (\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/m)[1];
   assert.strictEqual(top, pkg.version, '更新したら package.json と CHANGELOG.md の両方の番号を上げる');
-  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+  assert.match(pkg.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   const st = await (await fetch(BASE2 + '/api/state')).json();
   assert.deepStrictEqual([st.version, st.latest], [pkg.version, pkg.version]);
   assert.deepStrictEqual(await (await fetch(BASE2 + '/api/version')).json(), { version: pkg.version, latest: pkg.version });

@@ -3,7 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile, spawn } = require('child_process');
+const { execFile, spawn } = require('./platform');
 
 const { AIS, AI_LABEL, AGY_MODEL, childEnv, agyAccountError } = require('./launch');
 const { latestVersion, newer } = require('./update-check');
@@ -37,12 +37,7 @@ const foundAt = new Map();
 function executable(name) {
   const hit = foundAt.get(name);
   if (hit && Date.now() - hit.at < 30000) return hit.file;
-  let file = '';
-  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue;
-    const f = path.join(dir, name);
-    try { fs.accessSync(f, fs.constants.X_OK); file = f; break; } catch (e) { /* 次へ */ }
-  }
+  const file = require('./platform').executable(name);
   foundAt.set(name, { file, at: Date.now() });
   return file;
 }

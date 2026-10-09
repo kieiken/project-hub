@@ -9,13 +9,13 @@ async function loadGithub(fresh = false) {
     const r = await api('/api/github' + (fresh ? '?fresh=1' : ''));
     if ($('#github-box') !== box || epoch !== githubSettingsEpoch) return;
     const account = r.accounts.some(a => a.login === r.settings.account) ? r.settings.account : r.accounts.find(a => a.active)?.login || r.accounts[0]?.login || '';
-    const command = r.gh ? 'gh auth login --hostname github.com --web --git-protocol https' : 'brew install gh';
+    const command = r.gh ? 'gh auth login --hostname github.com --web --git-protocol https' : state.platform === 'win32' ? 'winget install --id GitHub.cli -e' : state.platform === 'win32' ? 'winget install --id GitHub.cli -e' : 'brew install gh';
     box.innerHTML = `${r.error ? `<p>${esc(r.error)}</p>` : ''}${r.accounts.length ? `<label>ふだん使うアカウント<select id="github-account">${githubOptions(r.accounts.map(a => a.login), account)}</select></label>
       <label>作る場所（既定）<select id="github-owner">${githubOptions([...new Set([account, ...(account === r.settings.account && r.settings.owner ? [r.settings.owner] : [])])], account === r.settings.account ? r.settings.owner || account : account)}</select></label>
       <div class="acts"><button class="btn plain" data-github-setting="owners" type="button">組織を読み込む</button><button class="btn" data-github-setting="save" type="button">GitHubの設定を保存</button></div>` : ''}
-      <p>${r.gh ? '新しくログインする時は、Macのターミナルで次を実行してください。' : 'MacのターミナルでGitHubの道具を入れてください。'}</p>
+      <p>${r.gh ? '若要登入新帳號，請在電腦的終端機執行以下命令。' : '請在電腦的終端機執行以下命令，安裝 GitHub CLI。'}</p>
       <code>${esc(command)}</code><button class="cp" data-copy="${esc(command)}" type="button" aria-label="コマンドをコピー">⧉ コピー</button>
-      <p class="small">Hub は合言葉（トークン）を保存しません。操作のたびに gh のログインを使います。HubからMac全体の既定アカウントは変えません。</p>
+      <p class="small">Hub 使用 GitHub CLI 的登入狀態，不會另存存取權杖，也不會更改電腦上的預設 GitHub 帳號。</p>
       <button class="btn plain" data-github-setting="refresh" type="button">もう一度確かめる</button><p id="github-settings-status" role="status"></p>`;
   } catch (e) { if ($('#github-box') === box && epoch === githubSettingsEpoch) box.textContent = e.message; }
 }

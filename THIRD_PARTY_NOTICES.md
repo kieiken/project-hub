@@ -71,3 +71,8 @@ SOFTWARE.
 
 - teddashh/bat-agent-connector（MIT）：入力待ちの見張り、取り込み前の確認、操作の記録
 - arumwu/goose-acp-handoff：AI を交代する時の引き継ぎ資料
+
+
+## Windows fork: sharp
+
+Windows image conversion additionally uses sharp 0.35.5 (Apache-2.0), Copyright Lovell Fuller and contributors. Its platform packages include libvips and additional image libraries; their notices are distributed in the installed npm packages. See https://github.com/lovell/sharp and the installed node_modules/sharp/LICENSE and node_modules/@img package notices.

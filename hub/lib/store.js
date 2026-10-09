@@ -7,7 +7,7 @@ const { createHash } = require('crypto');
 const { parseDoc, parseYaml, setScalar, scalar } = require('./frontmatter');
 const { Completion, hash } = require('./completion');
 
-const SAFE_NAME = /^[^/\\\0]+$/;
+const SAFE_NAME = { test: require('./safe-name').safeName };
 
 function expandHome(p) {
   if (!p || typeof p !== 'string') return '';
@@ -238,7 +238,7 @@ class Store {
   // 新しいプロジェクト：ひな形（CLAUDE.md・AGENTS.md・.ai/ など）を写し、台帳を書く
   createProject({ name, description, body, phases, parent, derivedFrom, related, refs }, templateDir) {
     const nm = oneLine(name).replace(/[\/\\\0]/g, '・').slice(0, 60);
-    if (!nm || nm === '.' || nm === '..' || nm.startsWith('.') || nm.startsWith('_')) return { error: 'プロジェクト名を入れてください' };
+    if (!SAFE_NAME.test(nm) || nm.startsWith('.') || nm.startsWith('_')) return { error: '請輸入有效的專案名稱，避免 Windows 保留名稱與特殊字元。' };
     const projects = this.listProjects();
     const { Hierarchy } = require('./hierarchy');
     const h = new Hierarchy(this);
@@ -355,7 +355,7 @@ class Store {
     const file = this.taskFile(projectId, taskId);
     if (!file) return null;
     const before = read(file), key = `${projectId}/${taskId}`, preserve = this.completion.data.tasks[key]?.hash === hash(before);
-    const lines = before.split('\n');
+    const lines = before.split(/\r?\n/);
     let inside = false, n = -1, hit = false;
     for (let i = 0; i < lines.length; i++) {
       if (/^##\s/.test(lines[i])) { inside = /^##\s+手順/.test(lines[i]); continue; }
@@ -366,6 +366,7 @@ class Store {
     const steps = readSteps(parseDoc(text).body);
     const cur = parseDoc(text).data.state;
     if (!steps.every(x => x.done) && cur === '完了') text = setScalar(text, 'state', '実行中');
+    if (before.includes('\r\n')) text = text.replace(/\r?\n/g, '\r\n');
     fs.writeFileSync(file, text);
     if (preserve && parseDoc(text).data.state === '完了') this.completion.approveTask(key,text);
     return this.readTask(file);
@@ -376,7 +377,8 @@ class Store {
     const file = this.taskFile(projectId, taskId);
     const item = oneLine(textIn).slice(0, 120);
     if (!file || !item) return null;
-    const lines = read(file).split('\n');
+    const before = read(file);
+    const lines = before.split(/\r?\n/);
     const h = lines.findIndex(l => /^##\s+手順/.test(l));
     if (h >= 0) {
       let end = h + 1;
@@ -390,6 +392,7 @@ class Store {
     }
     let text = setScalar(lines.join('\n'), 'updated', now());
     if (parseDoc(text).data.state === '完了') text = setScalar(text, 'state', '実行中');
+    if (before.includes('\r\n')) text = text.replace(/\r?\n/g, '\r\n');
     fs.writeFileSync(file, text);
     return this.readTask(file);
   }

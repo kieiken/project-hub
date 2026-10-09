@@ -4,14 +4,14 @@
 // 設定は <ROOT>/_hub/chatgpt.json：{ work }（true＝ファイルの書き換え・コマンドの実行も許す。最初は false）
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn } = require('./platform');
 const { expandHome } = require('./store');
 
 const READ_MAX = 200 * 1024, OUT_MAX = 64 * 1024, CMD_MAX_SEC = 120;
 const WORK_OFF = '設定で「実作業もできる」をオンにしてください';
 // 秘密が入りがちなファイル（OpenAI に送らない）
 const SECRET = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|\.netrc|\.npmrc|\.pypirc)$/i;
-const SHELL = ['/bin/zsh', '/bin/bash', '/bin/sh'].find(f => fs.existsSync(f)) || 'sh';
+const SHELL = process.platform === 'win32' ? 'powershell.exe' : ['/bin/zsh', '/bin/bash', '/bin/sh'].find(f => fs.existsSync(f)) || 'sh';
 
 const S = (props, required) => ({ type: 'object', properties: props, required, additionalProperties: false });
 const str = description => ({ type: 'string', description });
@@ -61,7 +61,7 @@ class Chatgpt {
     if (!list.length) fail(403, `プロジェクトの外は${write ? '書けません' : '読めません'}：${raw}`);
     const x = write ? list[0] : list.find(f => fs.existsSync(f)) || fail(404, `見つかりません：${raw}`);
     const parts = path.relative(roots.find(r => within(x, [r])), x).split(path.sep);
-    if (parts.includes('.git')) fail(403, '.git の中は扱えません');
+    if (parts.some(part => part.toLowerCase() === '.git')) fail(403, '.git の中は扱えません');
     if (SECRET.test(path.basename(x))) fail(403, `秘密が入っていそうなファイルは扱えません：${path.basename(x)}`);
     // つながり（シンボリックリンク）で外へ出ていないか
     let probe = x; while (!fs.existsSync(probe)) probe = path.dirname(probe);
@@ -158,7 +158,7 @@ class Chatgpt {
 function run(command, cwd, sec) {
   return new Promise(resolve => {
     const out = { stdout: '', stderr: '' }; let size = 0, truncated = false, timedOut = false;
-    const child = spawn(SHELL, ['-lc', command], { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(SHELL, process.platform === 'win32' ? ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')] : ['-lc', command], { cwd, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     const take = k => c => { if (size >= OUT_MAX) { truncated = true; return; } const s = c.toString('utf8').slice(0, OUT_MAX - size); size += s.length; out[k] += s; if (s.length < c.length) truncated = true; };
     child.stdout.on('data', take('stdout')); child.stderr.on('data', take('stderr'));
     const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, 'SIGKILL'); } catch (e) { child.kill('SIGKILL'); } }, sec * 1000);

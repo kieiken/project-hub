@@ -202,7 +202,7 @@ function transferNeedsUpdate() {
 }
 function transferUpdateMessage() {
   const next = state.latest ? `［新しい版 v${state.latest} にする］` : '新版へ切り替えるボタン';
-  const reason = transferNeedsUpdate() ? `受け取りは新しい版の機能です。今動いている Hub はまだ v${state.version} です。` : `この稼働版では受け取りの窓口を確認できませんでした（稼働版 v${state.version || '不明'}）。`;
+  const reason = transferNeedsUpdate() ? `受け取りは新しい版の機能です。今動いている Hub はまだ v${state.version} です。` : `この稼働版では受け取りの窓口を無法確認でした（稼働版 v${state.version || '不明'}）。`;
   return `${reason}AI と順番待ちが終わってから、プロジェクト「${proj(view.project)?.name || view.project}」の画面上部に${next}が表示されていれば押してください。`;
 }
 function transferButton(project, task, title, label = '成果を受け取る', action = 'absorb', classes = 'btn sm') {
@@ -348,9 +348,10 @@ function nextName(base, existing) {
   return `${stem} 2`;
 }
 function renderEmpty() {
-  $('#main').innerHTML = `<div class="view"><div class="empty"><h2>台帳が見つかりません</h2>
-    <p><code>${esc(state.root)}/Product/</code> に台帳（PROJECT.md）がありません。</p>
-    <p>ターミナルで <code>bash setup.sh</code> を実行すると、今の作業の台帳が作られます。</p></div></div>`;
+  $('#main').innerHTML = `<div class="view"><div class="empty"><h2>歡迎使用 Project Hub</h2>
+    <p>Windows 繁體中文版本已就緒。按左側「＋ 新增專案」建立第一個專案。</p>
+    <p>專案資料儲存在 <code>${esc(state.root)}</code>。建立專案後，輸入需求即可交由 Claude Code 或 Codex 協助。</p>
+    <p>這是 v4.68.2 的本機修改版；預設僅此電腦可連線，AI 使用較保守的權限設定。</p></div></div>`;
 }
 
 let turnTab = 'reply'; // reply＝返事が必要 ／ done＝完了に移す
@@ -451,7 +452,7 @@ function renderNewProject() {
       <input type="hidden" name="derivedFrom" value="${esc(newProjectPreset?.derivedFrom || '')}"><label>プロジェクト名<input name="name" id="np-name" required maxlength="60" placeholder="例：HD 占いアプリ" value="${esc(newProjectPreset?.name || '')}"></label>
       ${newProjectPreset ? `<label>最初の作業（やりたいこと。書くと、作ったあとすぐ AI に頼みます。名前だけのプロジェクトにしないため）<textarea name="firstTask" rows="2" maxlength="4000" placeholder="例：台湾向けの投稿を3本作る"></textarea></label>` : ''}
       <label>説明（何を作るか・誰のためか。1〜2行）<textarea name="description" id="np-desc" rows="2" maxlength="400"></textarea></label>
-      <label>フェーズ（1行に1つ。順番どおり）<textarea name="phases" id="np-phases" rows="4" maxlength="400">計画\n作る\nチェック\n仕上げ</textarea></label>
+      <label>フェーズ（1行に1つ。順番どおり）<textarea name="phases" id="np-phases" rows="4" maxlength="400">規劃\n實作\n驗證\n完成</textarea></label>
       <details class="more"><summary>くわしく（なくてもよい）</summary><div class="newform" style="margin-top:10px">
         <label>本体のフォルダ（もうコードや資料がある時）
           <div class="dropfield" id="np-drop"><input name="body" id="np-body" maxlength="300" placeholder="ここにフォルダを落とす、または［選ぶ］"><button class="btn plain sm" id="np-pick" type="button">選ぶ…</button></div></label>
@@ -460,7 +461,7 @@ function renderNewProject() {
           <div class="dropfield refs" id="np-refs"><div class="reflist" id="np-reflist"><span class="small">ここに落とす、または［選ぶ］</span></div><button class="btn plain sm" id="np-refpick" type="button">選ぶ…</button></div></label>
         ${state.projects.length ? `<fieldset class="rels"><legend>関連プロジェクト（Hub の他のプロジェクト。AI がその資料を読んでよい）</legend>${state.projects.map(p => `<label class="chk"><input type="checkbox" name="related" value="${esc(p.id)}"> ${esc(p.name)}</label>`).join('')}</fieldset>` : ''}
       </div></details>
-      <p class="small">台帳（PROJECT.md）・AI 用の指示（CLAUDE.md・AGENTS.md）・作業用のフォルダ（資料・作業・成果物・.ai）を <span class="path">${esc(state.root)}/Product/</span> に作ります。</p>
+      <p class="small">專案紀錄、AI 指示與工作資料夾將建立於 <span class="path">${esc(state.root)}/Product/</span>。</p>
       <div><button class="btn" type="submit">プロジェクトを作る</button></div>
     </form></div></div>`;
   drawRefs();
@@ -647,7 +648,7 @@ function renderOverview(p) {
         <textarea name="text" rows="2" maxlength="4000" placeholder="やりたいことを書くだけで始められます（例：入退室の画面を作って）">${esc(quickDraft(p).text)}</textarea>
         <div class="quick-images" id="quick-images"></div>
         <div class="quick-controls" id="quick-controls">${quickControls(p)}</div>
-        <p class="small">画像はここに落とす・⌘V・📎で追加（最大10枚）。入力内容はプロジェクトごとに保存します。</p>
+        <p class="small">画像はここに落とす・Ctrl+V・📎で追加（最大10枚）。入力内容はプロジェクトごとに保存します。</p>
       </form>
       ${active.length ? active.map(t => taskRow(p, t)).join('') : '<p class="note">進行中の作業はありません。</p>'}
       ${others.length ? `<details class="more"><summary>他のフェーズの作業（${others.length}）</summary>${others.map(t => taskRow(p, t)).join('')}</details>` : ''}
@@ -676,7 +677,7 @@ function renderOverview(p) {
       <div class="card issues-card"><h3 class="sec">問題点</h3>${issuesHtml(p.issues)}</div>
       <div class="card"><h3 class="sec">関連プロジェクト・参考（AI が読むだけ）</h3>${p.related.length || refsOf(p).length ? `<ul>${p.related.map(r => { const q = state.projects.find(x => x.name === r || x.id === r); return `<li>${q ? `<button class="lnk" data-go="project" data-p="${esc(q.id)}" type="button">${esc(q.name)}</button>` : esc(r)}</li>`; }).join('')}${refsOf(p).map(f => `<li><span class="ref" title="${esc(f.path)}">${esc(f.path.split('/').filter(Boolean).pop() || f.path)}</span></li>`).join('')}</ul>` : '<p class="note">なし</p>'}
         <p class="small">参考にしたいフォルダは、この画面に落とすと足せます。</p></div>
-      ${p.chats.length ? `<div class="card"><h3 class="sec">ブラウザのチャット</h3><ul>${p.chats.map(c => `<li>${c.url ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.title || c.url)}</a>` : esc(c.title || c)}</li>`).join('')}</ul></div>` : ''}
+      ${p.chats.length ? `<div class="card"><h3 class="sec">ブラウザのチャット</h3><ul>${p.chats.map(c => `<li>${c.url ? `<a href="${esc(hubSafeUrl(c.url))}" target="_blank" rel="noopener">${esc(c.title || c.url)}</a>` : esc(c.title || c)}</li>`).join('')}</ul></div>` : ''}
     </div></div>`;
   drawQuick(p);
 }
@@ -747,7 +748,7 @@ async function gptSend(P, T, msgP) {
     if (d) { d.hidden = false; if (!ok) { d.open = true; out.focus(); out.select(); } }
   });
   if (IN_APP) location.href = 'hubapp://gpt?open=1'; else window.open('https://chatgpt.com/', 'hub-chatgpt');
-  toast(ok ? (IN_APP ? '貼る文をコピーしました。右の ChatGPT の入力欄を押して ⌘V → 送ってください' : '貼る文をコピーしました。ChatGPT に貼って送ってください') : 'コピーできませんでした。開いた「貼る文」を ⌘C でコピーして、ChatGPT に貼ってください');
+  toast(ok ? (IN_APP ? '貼る文をコピーしました。右の ChatGPT の入力欄を押して Ctrl+V → 送ってください' : '貼る文をコピーしました。ChatGPT に貼って送ってください') : 'コピーできませんでした。開いた「貼る文」を ⌘C でコピーして、ChatGPT に貼ってください');
   return ok;
 }
 // ChatGPT に頼む（［ChatGPT に頼む］か、ChatGPT を選んで［送る］）。この時に初めて貼る文を作る。下の欄の依頼は「今回の依頼」として入れ、会話にも残す
@@ -776,7 +777,7 @@ window.hubGptClip = text => {
   bar.dataset.p = P; bar.dataset.t = T;
   bar.innerHTML = `<b>ChatGPT の返事をコピーしました</b><span class="small">（${text.length} 文字・${esc(t ? t.title : T)}）</span><button class="btn sm" data-act="gptback" type="button">Hub に戻す</button><button class="btn sm" data-act="gptback" data-next="codex" type="button">戻して Codex に続けさせる</button><button class="btn plain sm" data-act="gptclipoff" type="button">閉じる</button>`;
 };
-const gptBox = (p, t, show) => `<div class="gptbox" data-p="${esc(p.id)}" data-t="${esc(t.id)}"${show ? '' : ' hidden'}><b>ChatGPT</b><button class="btn plain sm gpt-close" data-act="gptclose" type="button" title="ChatGPT をやめて、元の AI に戻します">✕ 閉じる</button><span class="small">${IN_APP ? '① 下の欄に依頼を書いて［ChatGPT に頼む］（ここで初めて貼る文を作ってコピー）→ 右の ChatGPT で ⌘V → 送る　② 返事の［コピー］を押すと、Hub が気づいて戻すボタンを出します' : '① 貼る文をコピー → ChatGPT でモデルを選んで貼って送る　② 返事をコピーして下に貼る → ［Hub に戻す］'}</span><button class="btn sm" data-act="gptcopy" type="button">① ChatGPT に頼む（貼る文を作ってコピー${IN_APP ? '・横に開く' : ''}）</button>${IN_APP ? '<a class="btn plain sm" href="hubapp://gpt?open=0">横の ChatGPT を閉じる</a>' : ''}
+const gptBox = (p, t, show) => `<div class="gptbox" data-p="${esc(p.id)}" data-t="${esc(t.id)}"${show ? '' : ' hidden'}><b>ChatGPT</b><button class="btn plain sm gpt-close" data-act="gptclose" type="button" title="ChatGPT をやめて、元の AI に戻します">✕ 閉じる</button><span class="small">${IN_APP ? '① 下の欄に依頼を書いて［ChatGPT に頼む］（ここで初めて貼る文を作ってコピー）→ 右の ChatGPT で Ctrl+V → 送る　② 返事の［コピー］を押すと、Hub が気づいて戻すボタンを出します' : '① 貼る文をコピー → ChatGPT でモデルを選んで貼って送る　② 返事をコピーして下に貼る → ［Hub に戻す］'}</span><button class="btn sm" data-act="gptcopy" type="button">① ChatGPT に頼む（貼る文を作ってコピー${IN_APP ? '・横に開く' : ''}）</button>${IN_APP ? '<a class="btn plain sm" href="hubapp://gpt?open=0">横の ChatGPT を閉じる</a>' : ''}
   <details class="gpt-text"${gptOut[p.id + '/' + t.id] ? '' : ' hidden'}${gptFail.has(p.id + '/' + t.id) ? ' open' : ''}><summary>貼る文を見る（自分でコピーする時）</summary><textarea class="gpt-out" rows="5" readonly>${esc(gptOut[p.id + '/' + t.id] || '')}</textarea></details>
   <textarea class="gpt-back" rows="3" placeholder="② ChatGPT の返事${IN_APP ? '（横で［コピー］を押すと自動で入ります）' : 'をここに貼る'}">${esc(gptDraft[p.id + '/' + t.id] || '')}</textarea><button class="btn sm" data-act="gptback" type="button">Hub に戻す</button><button class="btn sm" data-act="gptback" data-next="codex" type="button" title="返事を会話に残し、担当を Codex に戻して、返事をもとに続きを頼みます">戻して Codex に続けさせる</button></div>`;
 let sendWorkAnswer = null;
@@ -872,7 +873,7 @@ function renderWork() {
             ? `この作業は ${esc(ownerOf(t.owner).name)}（Discord）に頼んでいます${t.via ? `（${esc(t.via)}）` : ''}。<br>報告を受けたら、下の「手順」に印を付けてください。全部付いたら、完了に移すか確認してください。<br>ここで Claude Code・Codex・Agy CLI に手伝わせることもできます。`
             : ownerOf(t.owner).kind === 'you' ? `この作業は、あなたの担当です。<br>終わったら、下の「手順」に印を付けるか、状態を「完了」にしてください。`
             : state.terminal
-            ? `まだ AI は動いていません。<br>上の「${AI_LABEL[main]}で始める」を押すと、ここで作業が始まります。<br>ファイルやスクショは、この画面に落とす（または ⌘V で貼る）と AI に渡せます。<br>${esc(t.next ? '次にやること：' + t.next.split('\n')[0] : '')}`
+            ? `まだ AI は動いていません。<br>上の「${AI_LABEL[main]}で始める」を押すと、ここで作業が始まります。<br>ファイルやスクショは、この画面に落とす（または Ctrl+V で貼る）と AI に渡せます。<br>${esc(t.next ? '次にやること：' + t.next.split('\n')[0] : '')}`
             : '作業画面の部品が未設定です。［設定］をご覧ください。<br>それまでは、始めると別の窓で開きます。'}</div></div>`}
     </div>`}
     <div class="wfoot">
@@ -974,7 +975,7 @@ function syncChatPhoneLabels() {
 }
 function workMode() { try { return localStorage.getItem('hub-mode') === 'term' ? 'term' : 'chat'; } catch (e) { return 'chat'; } }
 function setMode(m) { try { localStorage.setItem('hub-mode', m); } catch (e) { /* 無視 */ } render(); }
-const EMPTY_CHAT = '<p class="chat-empty">ここで AI と話します。<br>下で答える AI とモデルを選び、依頼を書いて送ってください（⌘ + Enter でも送れます）。<br>途中で AI を変えると、それまでの会話を自動で引き継ぎます。ファイルやスクショは、ここに落とすか ⌘V で貼れます。</p>';
+const EMPTY_CHAT = '<p class="chat-empty">ここで AI と話します。<br>下で答える AI とモデルを選び、依頼を書いて送ってください（⌘ + Enter でも送れます）。<br>途中で AI を変えると、それまでの会話を自動で引き継ぎます。ファイルやスクショは、ここに落とすか Ctrl+V で貼れます。</p>';
 // 選ぶ欄に出すモデル（設定で隠したものは出さない。ただし今選んでいるものは残す）
 function orderedModels() { return ModelOrder.ordered(state.roles.models, state.modelOrder); }
 function shownModels(key, ...keep) {
@@ -1502,7 +1503,7 @@ let aiToolsBusyCount = 0;
 const aiCheckPending = { claude: false, codex: false, agy: false };
 const aiToolPending = { claude: false, codex: false, agy: false };
 const aiToolMessage = { claude: '', codex: '', agy: '' };
-const aiToolMethod = method => ({ standalone: '単独インストール', 'homebrew-cask': 'Homebrew', native: '公式インストール', missing: '未導入', unknown: '確認できません' }[method] || method || '不明');
+const aiToolMethod = method => ({ standalone: '獨立安裝', 'homebrew-cask': 'Homebrew', native: '官方安裝', missing: '尚未安裝', unknown: '無法確認' }[method] || method || '不明');
 const aiToolErrorText = e => [e.message, e.reason && e.reason !== e.message ? e.reason : '', e.stage ? `段階：${e.stage}` : ''].filter(Boolean).join('。');
 function drawAiTools() {
   const box = $('#ai-tools'); if (!box) return;
@@ -1512,17 +1513,17 @@ function drawAiTools() {
     const tool = aiTools[ai] || {}, busy = localBusy || tool.updating || Boolean(aiToolsOperation);
     const check = tool.updateCheck, checking = aiCheckPending[ai] || tool.checking;
     const running = Math.max(aiToolsBusyCount, (state.chatting || []).length + state.sessions.filter(s => s.running).length);
-    const message = aiToolMessage[ai] || (tool.updating ? '更新中です' : aiToolsOperation ? 'ほかの更新が進行中です' : !tool.installed ? 'この AI は見つかりませんでした' : '');
+    const message = aiToolMessage[ai] || (tool.updating ? '更新中です' : aiToolsOperation ? 'ほかの更新が進行中です' : !tool.installed ? '找不到此 AI 工具' : '');
     const canRefresh = tool.modelRefreshAvailable !== false;
-    const count = Array.isArray(tool.models) ? `選べるモデル ${tool.models.length} 件` : '';
+    const count = Array.isArray(tool.models) ? `可用模型：${tool.models.length} 個` : '';
     const models = Array.isArray(tool.models) ? tool.models : [];
     return `<div class="ai-tool-row" data-ai="${ai}">
-      <div class="ai-tool-head"><b>${esc(AI_LABEL[ai])}</b><span class="small">現在版：${esc(tool.version || '確認できません')}</span><span class="small">導入方法：${esc(aiToolMethod(tool.method))}</span></div>
+      <div class="ai-tool-head"><b>${esc(AI_LABEL[ai])}</b><span class="small">目前版本：${esc(tool.version || '無法確認')}</span><span class="small">安裝方式：${esc(aiToolMethod(tool.method))}</span></div>
       <div class="ai-tool-actions"><button class="btn sm" type="button" data-ai-check="${ai}" ${checking || tool.installed === false ? 'disabled' : ''}>${checking ? '確認中…' : '更新を確認'}</button>
         ${check?.ok && check.available ? `<button class="btn sm" type="button" data-ai-update="${ai}" ${busy || running || !check.applicable ? 'disabled' : ''}>v${esc(check.latestVersion)} を適用</button>` : ''}
         <button class="btn plain sm" type="button" data-ai-model-refresh="${ai}" ${busy || !canRefresh || tool.installed === false ? 'disabled' : ''}>モデル一覧を再取得</button>
         ${count ? `<span class="small">${esc(count)}</span>` : ''}</div>
-      ${tool.source ? `<span class="small">モデル候補の取得元：${esc(tool.source)}</span>` : ''}
+      ${tool.source ? `<span class="small">模型清單來源：${esc(tool.source)}</span>` : ''}
       ${check ? `<p class="small">${check.ok ? `最新版：${esc(check.latestVersion)}（${check.available === null ? '比較できません' : check.available ? '更新があります' : '更新はありません'}）` : '今回の更新確認に失敗しました。前回の情報では適用できません。'}${check.checkedAt ? ` · ${esc(new Date(check.checkedAt).toLocaleString())} 確認` : ''}</p>` : ''}
       ${check?.available && running ? `<p class="small">適用は動いている AI ${running} 件が終わってから行えます。更新確認はいつでもできます。</p>` : ''}
       ${check?.available && !check.applicable ? '<p class="small">この導入方法は画面からの適用に未対応です。</p>' : ''}
@@ -1565,7 +1566,7 @@ function refreshRoleModelChoices() {
     el.value = slot.model;
   });
   const note = $('#model-catalog');
-  if (note) note.textContent = `選べるモデル：Claude Code は ${(state.roles.models['claude-code'] || []).join(' / ')}、Codex は ${(state.roles.models.codex || []).join(' / ')}。思考は ${state.efforts.join(' → ')}。`;
+  if (note) note.textContent = `可用模型：Claude Code 使用 ${(state.roles.models['claude-code'] || []).join(' / ')}，Codex 使用 ${(state.roles.models.codex || []).join(' / ')}。思考強度：${state.efforts.join(' → ')}。`;
 }
 async function refreshAiToolCatalog() {
   const epoch = ++stateLoadEpoch;
@@ -1577,8 +1578,8 @@ async function refreshAiToolCatalog() {
 }
 function aiToolResultText(action, r) {
   const modelReport = result => {
-    if (!result) return 'モデル一覧の状態を確認できませんでした。';
-    if (result.ok === false) return `モデル一覧の再取得に失敗しました：${result.error || '理由を確認できません'}。`;
+    if (!result) return 'モデル一覧の状態を無法確認でした。';
+    if (result.ok === false) return `モデル一覧の再取得に失敗しました：${result.error || '理由を無法確認'}。`;
     const unchanged = Boolean(result.unchanged);
     const added = !unchanged && typeof result.added === 'number' ? `（追加 ${result.added} 件）` : '';
     return `${unchanged ? 'モデル一覧は前回の内容を使用しています' : `モデル一覧を再取得しました${added}`}。`
@@ -1587,9 +1588,9 @@ function aiToolResultText(action, r) {
   };
   if (action === 'models') return modelReport(r);
   const before = r.beforeVersion || '', after = r.afterVersion || '';
-  const base = r.verified === false ? `更新操作は終わりましたが、版を確認できませんでした${r.verifyError ? `：${r.verifyError}` : ''}。` : r.changed
-    ? before && after ? `更新しました：${before} → ${after}。` : `更新しましたが、版を確認できませんでした。`
-    : before || after ? `版は変わりませんでした（${after || before}）。` : '版の変化を確認できませんでした。';
+  const base = r.verified === false ? `更新操作は終わりましたが、版を無法確認でした${r.verifyError ? `：${r.verifyError}` : ''}。` : r.changed
+    ? before && after ? `更新しました：${before} → ${after}。` : `更新しましたが、版を無法確認でした。`
+    : before || after ? `版は変わりませんでした（${after || before}）。` : '版の変化を無法確認でした。';
   return base + modelReport(r.models);
 }
 async function runAiTool(ai, action) {
@@ -1840,72 +1841,100 @@ function renderSettings() {
       ${s.ai === '人' ? '' : `<select data-r="${i}" data-k="${k}" data-f="model" aria-label="モデル">${opt(shownModels(s.ai, s.model), s.model)}</select>
       <select data-r="${i}" data-k="${k}" data-f="effort" aria-label="思考">${opt(state.efforts, s.effort)}</select>`}</div>`;
   const dirty = JSON.stringify(rolesDraft) !== JSON.stringify(state.roles.roles);
-  $('#main').innerHTML = `<div class="view"><div class="settings">
-    <div class="card"><h2>作業画面</h2>
+  $('#main').innerHTML = `<div class="view"><div class="settings"><div class="card" id="skills-manager"><h2>Skill 管理</h2><p>載入中…</p></div>
+    ${state.platform === 'win32' ? `<div class="card"><h2>儲存位置</h2>
+      <p>目前位置：<span class="path">${esc(state.root)}</span></p>
+      <label for="workspace-path">新的儲存資料夾（完整路徑）</label>
+      <div class="acts"><input id="workspace-path" type="text" style="flex:1;min-width:240px" value="${esc(state.root)}" spellcheck="false"><button class="btn plain" id="workspace-browse" type="button">選擇資料夾</button></div>
+      <p><label for="workspace-mode">資料處理方式：</label><select id="workspace-mode"><option value="copy">複製現有資料，保留原檔</option><option value="empty">建立空白工作區，保留 AI 角色設定</option></select></p>
+      <p class="small">請選擇空白資料夾。現有專案指定的程式碼、參考資料與工作副本路徑不會更改；不要刪除原資料夾。切換前請停止 AI 工作，並儲存其他尚未套用的設定。</p>
+      <button class="btn" id="workspace-save" type="button">儲存並重新啟動</button><p id="workspace-result" role="status"></p></div>` : ''}
+    <div class="card"><h2>工作介面</h2>
       <p><span class="badge ${state.terminal ? '' : 'off'}"><i></i>${state.terminal ? '画面の中で Claude Code / Codex / Agy CLI を動かせます' : '部品（node-pty）が未設定です。ターミナルで setup.sh を実行してください。それまでは別の窓で開きます'}</span></p>
-      <p>権限：Claude Code は <code>${esc(state.roles.permissions['claude-code'] || '')}</code>、Codex は <code>${esc(state.roles.permissions.codex || '')}</code></p></div>
-    <div class="card"><h2>AI の更新</h2>
-      <p>それぞれの AI を確認して更新します。Agy CLI は Gemini 3.1 Pro (High) の手動選択専用です。モデル一覧だけを読み直すこともできます。今使っているモデルや役割は自動では変わりません。</p>
+      <p>權限：Claude Code 使用 <code>${esc(state.roles.permissions['claude-code'] || '')}</code>，Codex 使用 <code>${esc(state.roles.permissions.codex || '')}</code></p></div>
+    <div class="card"><h2>AI 工具更新</h2>
+      <p>檢查 AI 工具更新，或重新取得模型清單。Agy CLI 僅支援手動選擇 Gemini 3.1 Pro（High）。更新模型清單不會自動更換目前使用的模型或角色。</p>
       <div id="ai-tools" aria-live="polite">確認中…</div></div>
-    <div class="card"><h2>選ぶ欄に出すモデル</h2>
-      <p>会話・役割・ターミナルのモデルを選ぶ欄に出すかどうかを決めます。外しても、今そのモデルを使っている所はそのまま動きます。一覧は「AI の更新」で取り直した、今使えるモデルです。</p>
-      <p>上から順に、会話などのモデルを選ぶ欄に並びます。［↑］［↓］で順番を変えられます。パソコンでは左の印をドラッグしても動かせます。役割の担当と今の選択は変わりません。</p>
+    <div class="card"><h2>模型清單顯示與排序</h2>
+      <p>選擇要顯示在對話、角色與終端機選單中的模型。隱藏模型不會中斷正在使用該模型的工作。模型清單可在「AI 工具更新」重新取得。</p>
+      <p>模型依此處順序顯示。按上下箭頭或拖曳左側標記可調整順序，不會更改目前選擇或角色分配。</p>
       <div id="model-order-list">${modelOrderHtml()}</div>
       <div class="acts" style="margin-top:10px"><button class="btn plain" id="models-tidy" type="button">最新のモデルに整理する</button>
-        <span class="small">役割で使っている古いモデル名（6sol など）を、同じ系統の一番新しいモデルに置き換え、roles.yaml の一覧も今のものにします。</span></div>
+        <span class="small">將角色使用的舊模型（例如 6sol）改為同系列的最新模型，並更新角色設定檔中的模型清單。</span></div>
       <div id="tidy-result" class="small"></div></div>
-    <div class="card"><h2>スマホの表示</h2>
-      <p>スマホの会話でAIを選ぶ一覧の名前を変えます。設定はMacとiPhoneで共通です。保存は変更時に行います。</p>
+    <div class="card"><h2>手機顯示設定</h2>
+      <p>設定手機畫面中的 AI 顯示名稱。電腦與手機共用此設定，變更後立即儲存。</p>
       <div id="phone-labels">${phoneLabelsHtml()}</div></div>
-    <div class="card"><h2>新しく始めるときのAI</h2>
-      <p>新規プロジェクト・子作業・分岐の初期値です。役割の担当・既存作業・各プロジェクトで前回選んだ［始める］欄は変わりません。</p>
+    <div class="card"><h2>新工作預設使用的 AI</h2>
+      <p>套用於新增專案、子工作與分支；既有工作、角色分工及各專案上次選擇的 AI 不會變更。</p>
       <div id="initial-pick">${initialPickHtml()}</div></div>
-    <div class="card"><h2>Mac のファイルの許可</h2>
+    ${state.platform === 'win32' ? '<div class="card"><h2>Windows 檔案存取</h2><p>程式使用目前 Windows 帳號的檔案權限。請透過資料夾選擇視窗指定工作位置。此版本不需要 Mac 的檔案授權設定。</p></div>' : `    <div class="card"><h2>Mac のファイルの許可</h2>
       <p>書類・デスクトップ・ダウンロードのフォルダを、Project Hub が読めるか確かめます。「システム設定 → プライバシーとセキュリティ → ファイルとフォルダ」に Project Hub が無い時は、［確認をもう一度出す］を押し、Mac の確認で「許可」を選んでください。</p>
       ${/ProjectHubApp/.test(navigator.userAgent) ? `<div class="acts"><a class="btn plain" href="hubapp://access">許可を確かめる</a><a class="btn" href="hubapp://access?reset=1">確認をもう一度出す</a></div>
       <p class="small">それでも出ない時は、確かめた後の画面の［フルディスクアクセスを開く］から、Project Hub をリストに入れてオンにしてください（アプリのメニューからも同じことができます）。</p>`
-        : '<p class="small">アプリ（Project Hub.app）で開いた時に使えます。アプリが古い時は、ターミナルで <code>bash hub/app/build-app.sh</code> を実行して作り直してください。</p>'}</div>
+        : '<p class="small">アプリ（Project Hub.app）で開いた時に使えます。アプリが古い時は、ターミナルで <code>bash hub/app/build-app.sh</code> を実行して作り直してください。</p>'}</div>`}
     <div class="card"><h2>外から使う（iPhone）</h2>
-      <p>iPhone からも、Mac と同じ操作ができます。操作は接続先の Mac で実行されます。</p>
+      <p>透過 Tailscale 與通行密碼，可在手機操作本機服務。工作仍在這臺電腦執行；此功能尚未進行 Windows 實機遠端驗證。</p>
       <div id="remote-box" aria-live="polite">確認中…</div>
       <details class="more"><summary>使い始める手順</summary><ol class="small">
-        <li>Mac と iPhone に Tailscale を入れ、同じアカウントでログインします。</li>
-        <li><div>Mac のターミナルで <code>tailscale serve --bg 4545</code><button type="button" class="cp" data-copy="tailscale serve --bg 4545" title="コピー" aria-label="コピー">⧉ コピー</button> を1回だけ実行します。</div></li>
+        <li>在電腦與 iPhone 安裝 Tailscale，並登入同一個帳號。</li>
+        <li><div>在電腦的終端機執行 <code>tailscale serve --bg 4545</code><button type="button" class="cp" data-copy="tailscale serve --bg 4545" title="コピー" aria-label="コピー">⧉ コピー</button>，只需執行一次。</div></li>
         <li>ここで合言葉（8文字以上）を保存し、「外から使う」をオンにします。</li>
-        <li><div>iPhone の Safari で、上の「iPhone で開くアドレス」を開き、合言葉を入れます。<br>アドレスが出ていない時は、Mac のターミナルで <code>tailscale serve status</code><button type="button" class="cp" data-copy="tailscale serve status" title="コピー" aria-label="コピー">⧉ コピー</button> を実行します。1行目の <code>https://〜.ts.net</code> が開くアドレスです。</div></li>
+        <li><div>iPhone の Safari で、上の「iPhone で開くアドレス」を開き、合言葉を入れます。<br>若未顯示網址，在電腦的終端機執行 <code>tailscale serve status</code><button type="button" class="cp" data-copy="tailscale serve status" title="コピー" aria-label="コピー">⧉ コピー</button>。第一行的 <code>https://〜.ts.net</code> 就是連線網址。</div></li>
         <li>共有メニューの「ホーム画面に追加」で、アプリのように開けます。</li></ol></details></div>
     <div class="card"><h2>GitHub</h2><div id="github-box" aria-live="polite">確認中…</div></div>
     <div class="card"><h2>ChatGPT</h2>
-      <p>ChatGPT アプリ（6pro など）に作業を頼めます。Hub は ChatGPT を動かせないので、貼る文を作り、返事を貼って戻します。</p>
-      <p class="small"><b>使い方</b>：会話のモデル欄で「ChatGPT」を選んで依頼を書き［送る］→ 貼る文がコピーされる → ChatGPT アプリでモデルを選んで貼って送る → 返事をコピーして、作業画面の「② 返事を貼る」欄に貼り［Hub に戻す］（続きを Codex に作らせる時は［戻して Codex に続けさせる］）。貼る文には作業ファイル・台帳・最近の会話が入っているので、ChatGPT が自分で読みに行く必要はありません。</p>
+      <p>Hub 可以整理要交給 ChatGPT 的內容。請自行貼到 ChatGPT，再將回覆帶回 Hub。</p>
+      <p class="small"><b>使い方</b>：在對話的模型欄選擇 ChatGPT，填入指示並傳送，複製整理好的內容到 ChatGPT。取得回覆後，貼回工作畫面的回覆欄，再按「帶回 Hub」。若要交給 Codex 接續，選擇「帶回並交由 Codex 繼續」。複製內容包含工作檔案、專案紀錄與近期對話。</p>
       <details class="more"><summary>上級：ChatGPT アプリの中の Codex に Hub の道具をつなぐ（普段は不要）</summary>
         <div class="small">
-        <p>普段の ChatGPT の会話は Mac の中の道具を使えません（確認済み）。ChatGPT アプリの中の Codex だけが <span class="path">~/.codex/config.toml</span> の道具を読めます。Codex から Hub の作業を読み書きさせたい時だけ登録してください。</p>
+        <p>透過 MCP 設定，可讓支援此功能的 Codex 用戶端連線至 Hub。設定檔位於 <span class="path">~/.codex/config.toml</span>。需要讓 Codex 讀寫 Hub 工作時，再註冊此工具。</p>
         <div id="chatgpt-box" aria-live="polite">確認中…</div>
         </div></details></div>
-    <div class="card"><h2>空の作業を片付ける</h2>
-      <p>Hub の会話が空のままの作業や子プロジェクト（AI が勝手に作った物など）を探して、まとめてゴミ箱へ移します。最初から選ばれているのは、派生・子プロジェクトの作業で「やったこと」も空の物だけです。</p>
+    <div class="card"><h2>清理空白工作</h2>
+      <p>找出沒有對話內容的工作與子專案，並移至垃圾桶。預設只勾選沒有執行紀錄的衍生工作與子專案工作。</p>
       <div class="acts"><button class="btn plain" data-act="emptyscan" type="button">探す</button></div>
       <div id="empty-box">${emptyHtml()}</div></div>
     <div class="card"><h2>会話画面</h2>
-      <label class="chk"><input type="checkbox" id="set-detail" ${showDetail() ? 'checked' : ''}> コマンドなど、AI の細かい作業も会話に出す</label>
-      <label class="chk"><input type="checkbox" id="set-enter" ${enterSends() ? 'checked' : ''}> Enter だけで送る（改行は Shift + Enter。外すと今まで通り ⌘ + Enter）</label>
-      <p class="small">出さない時も、作業中の印と返事はいつも通り出ます。モデル名を断られた時などの大事な知らせは、いつも出ます。</p></div>
+      <label class="chk"><input type="checkbox" id="set-detail" ${showDetail() ? 'checked' : ''}> 在對話中顯示 AI 的詳細操作與命令</label>
+      <label class="chk"><input type="checkbox" id="set-enter" ${enterSends() ? 'checked' : ''}> 按 Enter 傳送；Shift + Enter 換行。取消勾選時以 Ctrl + Enter 傳送。</label>
+      <p class="small">關閉詳細資訊後，仍會顯示執行狀態、AI 回覆與重要錯誤訊息。</p></div>
     <div class="card"><h2>役割分担</h2>
-      <p>役割ごとに、いつもの担当と上限の時の担当を決めます（AI・モデル・思考）。作業ごとに変えたい時は、作業画面の下で選べます。</p>
-      <div class="tbl"><table><tr><th>役割</th><th>いつもの担当</th><th>上限の時</th><th>内容</th></tr>
+      <p>為每個角色設定主要 AI 與額度用盡時的備援 AI，以及模型、思考強度。個別工作也可在工作介面調整。</p>
+      <div class="tbl"><table><tr><th>役割</th><th>主要負責者</th><th>額度用盡時的備援</th><th>内容</th></tr>
       ${rolesDraft.map((r, i) => `<tr><td class="now">${esc(r.name)}</td><td>${cell(i, 'main', r.main)}</td><td>${cell(i, 'backup', r.backup)}</td><td class="job">${esc(r.job)}</td></tr>`).join('')}</table></div>
       <div class="acts" style="margin-top:12px"><button class="btn" id="roles-save" type="button" ${dirty ? '' : 'disabled'}>保存する</button>
         <button class="btn plain" id="roles-reset" type="button" ${dirty ? '' : 'disabled'}>元に戻す</button>
         <span class="${dirty ? 'dirty' : 'saved'}">${dirty ? '変更があります（まだ保存していません）' : '保存済み'}</span></div>
-      <p class="small"><span id="model-catalog">選べるモデル：Claude Code は ${esc((models['claude-code'] || []).join(' / '))}、Codex は ${esc((models.codex || []).join(' / '))}。思考は ${esc(state.efforts.join(' → '))}。</span>保存先 <span class="path">${esc(state.root)}/_hub/roles.yaml</span></p></div>
+      <p class="small"><span id="model-catalog">可用模型：Claude Code 使用 ${esc((models['claude-code'] || []).join(' / '))}，Codex 使用 ${esc((models.codex || []).join(' / '))}。思考強度：${esc(state.efforts.join(' → '))}。</span>保存先 <span class="path">${esc(state.root)}/_hub/roles.yaml</span></p></div>
     <div class="card"><h2>CLI に渡すモデル名</h2>
-      <p>画面のモデルの呼び名を、Claude Code・Codex が受け付ける名前に直します。<b>空にすると、モデルを指定せず CLI の既定のモデルを使います。</b>モデル名が拒否された場合は理由を表示し、設定を勝手に変えません。</p>
+      <p>設定畫面中的模型名稱所對應的 CLI 識別名稱。<b>空にすると、モデルを指定せず CLI の既定のモデルを使います。</b>若 CLI 不接受模型名稱，會顯示原因並保留原設定。</p>
       <div id="climodels" class="small">読み込み中…</div></div>
-    <div class="card"><h2>バージョン</h2><p>今の版：<b>v${esc(state.version || '')}</b>${state.latest && state.latest !== state.version ? `（新しい版 v${esc(state.latest)} を取り込み済み。上の［新しい版にする］で切り替わります）` : ''}</p>
+    <div class="card"><h2>バージョン</h2><p>目前版本：<b>v${esc(state.version || '')}</b>${state.latest && state.latest !== state.version ? `（新しい版 v${esc(state.latest)} を取り込み済み。上の［新しい版にする］で切り替わります）` : ''}</p>
       <details class="more" id="verd" ${verOpen ? 'open' : ''}><summary>変更の記録</summary><div id="verbox" class="small">読み込み中…</div></details></div>
     <div class="card"><details class="more" id="logd"><summary>最近の操作（記録）</summary><div id="logbox" class="small">読み込み中…</div></details></div>
   </div></div>`;
+  if ($('#workspace-browse')) $('#workspace-browse').onclick = async () => {
+    try { const r = await api('/api/pick-folder', {}); if (r.path) $('#workspace-path').value = r.path.trim(); }
+    catch (e) { $('#workspace-result').textContent = e.message; }
+  };
+  if ($('#workspace-save')) $('#workspace-save').onclick = async () => {
+    const target = $('#workspace-path').value.trim(), mode = $('#workspace-mode').value;
+    if (!confirm(`將儲存位置改為：${target}\n${mode === 'copy' ? '複製現有資料並保留原檔。' : '建立空白工作區，原資料保留在原位置。'}\n程式將重新啟動，是否繼續？`)) return;
+    const button = $('#workspace-save'), result = $('#workspace-result');
+    button.disabled = true; $('#workspace-browse').disabled = true;
+    result.textContent = '正在準備資料並重新啟動，請勿關閉此頁…';
+    try {
+      const r = await api('/api/workspace/location', { path: target, mode });
+      for (let i = 0; i < 60; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        try { const next = await api('/api/state'); if (next.root === r.root) { location.reload(); return; } } catch {}
+      }
+      result.textContent = '重新連線逾時。請從桌面開啟 Project Hub；原資料仍保留。';
+    } catch (e) { result.textContent = e.message; }
+    button.disabled = false; $('#workspace-browse').disabled = false;
+  };
+  if (window.loadSkillsManager) window.loadSkillsManager();
   renderedPhoneKey = phoneSettingsKey();
   drawAiTools(); loadAiTools();
   loadCliModels(); loadRemote(); loadChatgpt(); if (typeof loadGithub === 'function') loadGithub();
@@ -1940,12 +1969,12 @@ async function loadRemote() {
   try {
     const r = await api('/api/remote');
     if ($('#remote-box') !== box) return;
-    box.innerHTML = `<label class="chk"><input type="checkbox" id="remote-on" ${r.enabled ? 'checked' : ''} ${r.hasPasscode ? '' : 'disabled'}> 外から使う${r.hasPasscode ? '' : '（先に合言葉を保存してください）'}</label>
+    box.innerHTML = `<label class="chk"><input type="checkbox" id="remote-on" ${r.enabled ? 'checked' : ''} ${r.hasPasscode ? '' : 'disabled'}> 允許遠端連線${r.hasPasscode ? '' : '（請先儲存通行密碼）'}</label>
       <div class="acts" style="margin-top:8px"><input type="password" id="remote-pass" autocomplete="new-password" minlength="8" maxlength="200" placeholder="${r.hasPasscode ? '新しい合言葉（8文字以上）' : '合言葉（8文字以上）'}">
         <button class="btn plain" id="remote-pass-save" type="button">合言葉を保存</button></div>
       <p class="small">${r.hasPasscode ? '合言葉は保存済みです。変えると、入っている端末はすべて出ます。' : 'まだ合言葉がありません。'}</p>
-      <p>iPhone で開くアドレス：${r.url ? `<b>${esc(r.url)}</b><button type="button" class="cp" data-copy="${esc(r.url)}" title="コピー" aria-label="コピー">⧉ コピー</button>` : '<span class="small">見つかりません（Tailscale が動いていないか、Mac に入っていません。下の「使い始める手順」を見てください）</span>'}</p>
-      <div class="acts"><span>ログイン中の端末：${r.sessions.length} 台</span>
+      <p>iPhone 連線網址：${r.url ? `<b>${esc(r.url)}</b><button type="button" class="cp" data-copy="${esc(r.url)}" title="コピー" aria-label="コピー">⧉ コピー</button>` : '<span class="small">尚無網址（Tailscale 尚未安裝或未啟動，請參閱下方使用步驟）</span>'}</p>
+      <div class="acts"><span>已登入裝置：${r.sessions.length} 台</span>
         <button class="btn plain" id="remote-logout-all" type="button" ${r.sessions.length ? '' : 'disabled'}>すべての端末から出る</button></div>
 `;
   } catch (e) { if ($('#remote-box') === box) box.textContent = '読み込めませんでした'; toast(e.message); }
@@ -2024,7 +2053,7 @@ async function loadLog() {
   const box = $('#logbox'); if (!box) return;
   try {
     const rows = await api('/api/log?n=30');
-    box.innerHTML = rows.length ? `<ul class="log">${rows.map(r => `<li><span class="small">${esc(new Date(r.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span> ${esc(r.project || '')}${r.task ? '・' + esc(r.task) : ''}：${esc(ACTION[r.action] || r.action)}${r.ai ? `（${esc(AI_LABEL[r.ai] || r.ai)}）` : ''}${r.action === 'merge' && r.conflict ? '・ぶつかったので中止' : ''}</li>`).join('')}</ul>` : '<p class="note">まだありません。</p>';
+    box.innerHTML = rows.length ? `<ul class="log">${rows.map(r => `<li><span class="small">${esc(new Date(r.at).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span> ${esc(r.project || '')}${r.task ? '・' + esc(r.task) : ''}：${esc(ACTION[r.action] || r.action)}${r.ai ? `（${esc(AI_LABEL[r.ai] || r.ai)}）` : ''}${r.action === 'merge' && r.conflict ? '・ぶつかったので中止' : ''}</li>`).join('')}</ul>` : '<p class="note">まだありません。</p>';
   } catch (e) { box.textContent = '読み込めませんでした'; }
 }
 async function saveRoles() {
@@ -2032,7 +2061,7 @@ async function saveRoles() {
   catch (e) { toast(e.message); }
 }
 
-// 空の作業を片付ける：探した結果（画面を描き直しても残す）
+// 清理空白工作：探した結果（画面を描き直しても残す）
 let emptyFound = null;
 function emptyHtml() {
   if (!emptyFound) return '';
@@ -2434,7 +2463,7 @@ async function pollState() {
 }
 setInterval(pollState, 15000);
 
-// ---- ファイル・スクショを渡す（落とす／⌘V で貼る） ----
+// ---- ファイル・スクショを渡す（落とす／Ctrl+V で貼る） ----
 // 落とした AI の画面に渡す。画面の外なら、動いている AI が1つの時はそれに、無ければ保存して作業ファイルに記録するだけ
 function dropTarget(el) {
   if (el && el.closest && el.closest('.chat')) return '';

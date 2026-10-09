@@ -6,7 +6,7 @@
 // 会話は <台帳>/.ai/chat/<作業ID>.jsonl に1行ずつ、AI ごとの再開用の番号は <作業ID>.json、待っている指示は <作業ID>.queue.json に残す
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn } = require('./platform');
 const { randomUUID } = require('node:crypto');
 const launch = require('./launch');
 const instructions = require('./instructions');
@@ -384,7 +384,7 @@ class ChatRunner {
       else if (code === null && !text) error = run.err.trim() || '途中で終わりました';
       if (!run.stopped && run.limit && !run.done && !run.err.trim()) error = run.limit;
       const modelRejected = error && !text && turn.modelFlag && !run.stopped && MODEL_REJECTED.test(error + ' ' + run.err);
-      if (modelRejected) error = `指定したモデル「${turn.modelFlag}」を ${LABEL[ai]} が受け付けませんでした。設定画面の「AI の更新」と「CLI に渡すモデル名」を確認してください。${error}`;
+      if (modelRejected) error = `目前登入的 ${LABEL[ai]} 不支援模型「${turn.modelFlag}」。這不是提問或 skill 的問題。請到「設定 → AI 工具更新」重新取得模型清單，再選擇可用模型。原始錯誤：${error}`;
       // 思考の指定を断られた：指定なしで1回だけやり直す
       if (!modelRejected && error && !text && turn.effortFlag && !run.stopped && EFFORT_REJECTED.test(error + ' ' + run.err)) {
         this.emit(project, task, { type: 'row', row: append(pdir, task, { role: 'event', ai, text: `思考「${effort}」の指定は使えなかったため、指定なしでやり直します` }) });

@@ -26,15 +26,7 @@ function fixHelper() {
 if (pty) fixHelper();
 
 // コマンドが PATH のどこにあるか探す（見つからなければ null）
-function which(cmd, envPath) {
-  if (cmd.includes('/')) return fs.existsSync(cmd) ? cmd : null;
-  for (const d of String(envPath || '').split(':')) {
-    if (!d) continue;
-    const f = path.join(d, cmd);
-    try { fs.accessSync(f, fs.constants.X_OK); return f; } catch (e) { /* 次へ */ }
-  }
-  return null;
-}
+function which(cmd, envPath) { return require('./platform').executable(cmd, envPath) || null; }
 
 const MAX_SCROLLBACK = 200000; // 画面を開き直した時に見せる分（文字数）
 
@@ -69,11 +61,12 @@ class Sessions {
     if (ai === 'agy') { const error = agyAccountError(); if (error) throw new Error(error); }
     const fullEnv = childEnv(ai, { ...process.env, ...env, TERM: 'xterm-256color', LANG: process.env.LANG || 'ja_JP.UTF-8', HOME: os.homedir() });
     if (!dir || !fs.existsSync(dir)) throw new Error(`作業の場所が見つかりません: ${dir}`);
-    const exe = which(command, fullEnv.PATH);
+    const exe = which(command, fullEnv.PATH || fullEnv.Path);
     if (!exe) throw new Error(`「${command}」が見つかりません。ターミナルで ${command} が動くか確かめてください`);
     let proc;
     try {
-      proc = pty.spawn(exe, args, { name: 'xterm-256color', cols: cols || 100, rows: rows || 30, cwd: dir, env: fullEnv });
+      const resolved = require('./platform').resolveCommand(exe, args, fullEnv);
+      proc = pty.spawn(resolved.file, resolved.args, { name: 'xterm-256color', cols: cols || 100, rows: rows || 30, cwd: dir, env: fullEnv });
     } catch (e) {
       throw new Error(`作業画面を開けませんでした（${e.message}）`);
     }

@@ -45,7 +45,7 @@ test('並べ替え前後でfake CLIが受け取る --model と思考は同一',t
   fs.writeFileSync(fake,`#!${process.execPath}\nprocess.stdin.resume();process.stdin.on('end',()=>process.stdout.write(JSON.stringify(process.argv.slice(2))));\n`,{mode:0o700});
   const {buildTurn}=require('../lib/chat'),{spawnSync}=require('node:child_process');
   const pick={ai:'codex',model:'GPT-6.1-Sol',effort:'極高',meta:{},rows:[],text:'隔離見本',perm:'./fake-codex'};
-  const receive=()=>{const turn=buildTurn(pick),r=spawnSync(turn.command,turn.args,{cwd:path.dirname(file),input:turn.stdin,encoding:'utf8'});assert.equal(r.status,0,r.error?.message||r.stderr);return JSON.parse(r.stdout);};
+  const receive=()=>{const turn=buildTurn(pick),r=spawnSync(process.platform==='win32'?process.execPath:turn.command,process.platform==='win32'?[fake,...turn.args]:turn.args,{cwd:path.dirname(file),input:turn.stdin,encoding:'utf8'});assert.equal(r.status,0,r.error?.message||r.stderr);return JSON.parse(r.stdout);};
   const before=receive();view.setOrder(mixed,defaults,models);const after=receive();
   assert.deepEqual(after,before);assert.equal(after[after.indexOf('--model')+1],'gpt-6.1-sol');assert.ok(after.includes('model_reasoning_effort=xhigh'));
 });
