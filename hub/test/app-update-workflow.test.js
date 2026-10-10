@@ -11,9 +11,9 @@ function fixture(t, opts = {}) {
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-workflow-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const stage = path.join(root, '_hub/updates/job/source'); fs.mkdirSync(stage, { recursive: true });
-  fs.mkdirSync(path.join(stage, 'hub/locales'), { recursive: true });
+  fs.mkdirSync(path.join(stage, 'hub/locales/zh-TW'), { recursive: true });
   fs.mkdirSync(path.join(stage, 'hub/lib'));
-  fs.writeFileSync(path.join(stage, 'hub/locales/zh-TW.json'), '{}');
+  fs.writeFileSync(path.join(stage, 'hub/locales/zh-TW/pack.json'), '{"locale":"zh-TW"}');
   fs.writeFileSync(path.join(stage, 'hub/lib/locale.js'), '// C fixture');
   fs.mkdirSync(path.join(stage, 'hub/public')); fs.writeFileSync(path.join(stage, 'hub/public/app.js'), '// public input');
   fs.mkdirSync(path.join(stage, '.ai/tasks'), { recursive: true }); fs.writeFileSync(path.join(stage, '.ai/tasks/private.md'), 'private ledger');
@@ -33,7 +33,7 @@ function fixture(t, opts = {}) {
       fs.writeFileSync(args[args.indexOf('-o') + 1], JSON.stringify({ completed: opts.completed !== false, summary: '繁中完成', unresolved: [] }));
     } else if (file === 'git') {
       if (args[0] === 'status') stdout = opts.dirty ? ' M hub/server.js\n' : '';
-      else if (args[0] === 'ls-files') stdout = !args.includes('--others') ? 'hub/public/app.js\0hub/locales/zh-TW.json\0hub/lib/locale.js\0.ai/tasks/private.md\0' : opts.private ? '.env\0' : 'hub/locales/zh-TW.json\0';
+      else if (args[0] === 'ls-files') stdout = !args.includes('--others') ? 'hub/public/app.js\0hub/locales/zh-TW/pack.json\0hub/lib/locale.js\0.ai/tasks/private.md\0' : opts.private ? '.env\0' : 'hub/locales/zh-TW/pack.json\0';
       else if (args[0] === 'clone') fs.mkdirSync(path.join(args.at(-1), '.git'), { recursive: true });
       else if (args[0] === 'diff' && args.includes('--name-only')) stdout = opts.private ? '.env\0' : 'hub/public/app.js\0';
       else if (args[0] === 'rev-parse') stdout = sha;
@@ -53,7 +53,7 @@ function fixture(t, opts = {}) {
 test('translation uses bounded Codex settings, removes token env, and stages all public changes exactly', async t => {
   const f = fixture(t); assert.equal((await f.auto.translate(f.stage)).translated, true);
   const add = f.calls.find(x => x.file === 'git' && x.args[0] === 'add' && x.options.cwd === f.stage);
-  assert.deepEqual(add.args, ['add','--','hub/public/app.js','hub/locales/zh-TW.json']);
+  assert.deepEqual(add.args, ['add','--','hub/public/app.js','hub/locales/zh-TW/pack.json']);
 });
 test('incomplete translation and non-public changes cannot be staged or published', async t => {
   for (const opts of [{completed:false}, {private:true}]) {
@@ -79,14 +79,15 @@ test('publisher verifies authorized fork and main PR before pushing; verifies th
 });
 test('public path boundaries reject prefix lookalikes, credentials, user records, and traversal', () => {
   for (const file of ['README.md.secret','hub/.env','hub/node_modules/foo.js','hub/.ai/chat/notes.md','hub/private.key','../hub/app.js']) assert.equal(safe(file),false,file);
-  assert.equal(safe('hub/locales/zh-TW.json'),true); assert.equal(safe('docs/project-hub/templates/zh-TW/project/PROJECT.md'),true);
-  assert.equal(safe('docs/project-hub/templates/zh-TW/project/.ai/rules.md'),true);
-  assert.equal(safe('hub/seed-zh-TW/project/.ai/rules.md'),true);
-  assert.equal(safe('hub/seed-zh-TW-private/.ai/rules.md'),false);
+  assert.equal(safe('hub/locales/zh-TW/messages.json'),true); assert.equal(safe('hub/locales/zh-TW/templates/project/PROJECT.md'),true);
+  assert.equal(safe('hub/locales/zh-TW/templates/project/.ai/rules.md'),true);
+  assert.equal(safe('hub/locales/zh-TW/seed/project/.ai/rules.md'),true);
+  assert.equal(safe('hub/locales/zh-TW/private/.ai/rules.md'),false);
+  assert.equal(safe('hub/seed-private/.ai/rules.md'),false);
 });
 
 test('before C the automation refuses to start Codex or send a PR', async t => {
-  const f = fixture(t); fs.rmSync(path.join(f.stage, 'hub/locales/zh-TW.json'));
+  const f = fixture(t); fs.rmSync(path.join(f.stage, 'hub/locales/zh-TW/pack.json'));
   await assert.rejects(f.auto.translate(f.stage), /not installed yet/);
   assert.equal(f.calls.some(x => ['codex', 'gh'].includes(x.file)), false);
 });

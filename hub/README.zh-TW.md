@@ -21,7 +21,7 @@ HUB_LANG=zh-TW HUB_APP_DIR=/Applications HUB_ROOT="/Volumes/External/AI-Workspac
 
 - 可以重複執行。
 - 在 `HUB_ROOT` 下建立 `_hub/`（角色分工 `roles.yaml`）、`Product/`（專案台帳）與 `Work/`（工作副本）。預設為 `~/Documents/AI-Workspace/`；既有 `roles.yaml` 與台帳不會被覆寫。
-- `HUB_LANG=zh-TW` 使用繁中範本與 `hub/seed-zh-TW/` 中的虛構範例台帳；`ja` 使用原日文版。台帳會複製到 `Product/`，不代表真實專案或工作紀錄。範例路徑需自行調整。
+- `HUB_LANG=zh-TW` 使用語系包 `hub/locales/zh-TW/` 中的繁中範本與虛構範例台帳；未設定或 `ja` 使用內建日文版。台帳會複製到 `Product/`，不代表真實專案或工作紀錄。範例路徑需自行調整。
 - 透過 npm 安裝內嵌終端機元件 node-pty。安裝失敗時仍可使用管理功能，AI 工作改在另一個視窗開啟。
 - 建立 Project Hub.app 與桌面入口。透過 `HUB_APP_DIR=/Applications` 將程式本體放在系統應用程式資料夾，持續增長的資料、快取與編譯暫存則依本機規則放在資料碟。
 
@@ -163,8 +163,9 @@ GitHub Actions 會執行日文與繁中測試、乾式公開檢查，建立包�
 - **每次更新都提高版本**：`package.json` 的 `version` 與 `CHANGELOG.md` 最上方版本一致，否則測試失敗；繁中變更紀錄也請同步。新增功能提高第二碼、修正提高第三碼、大幅改寫提高第一碼。
 - `server.js`：Node.js 服務，內嵌終端機使用 node-pty；只監聽 `127.0.0.1:4545`，拒絕其他網站的操作。已啟用的遠端操作另經密語驗證。
 - `lib/frontmatter.js`：讀取台帳檔頭；`lib/store.js`：讀寫台帳與任務；`lib/launch.js`：組合啟動指令；`lib/sessions.js`：內嵌終端機；`lib/roles.js`：角色分工；`lib/git.js`：建立、合併與整理工作副本。
-- `public/`：介面，`vendor/` 隨附 xterm.js；`seed/`、`seed-zh-TW/`：初始台帳；`test/`：`node --test --test-force-exit hub/test/*.test.js`。
-- `docs/project-hub/templates/zh-TW/`：繁中專案與角色範本。角色識別碼、狀態、思考值與既有資料夾鍵使用原有格式；畫面依語言顯示中文。
+- `public/`：介面，`vendor/` 隨附 xterm.js；`seed/`：日文初始台帳；`test/`：`node --test --test-force-exit hub/test/*.test.js`。
+- `locales/<語系>/`：日文以外的獨立語系包（目前為 `zh-TW`）。日文內建於程式本體；`HUB_LANG` 指定的語系包不存在時改用日文。新增語言只要新增一個資料夾，不需修改程式本體：必備 `pack.json`（`locale` 與資料夾名稱相同、`name`、`dateLocale`），其餘依需要放入 `messages.json`（伺服器 `lt`）、`ui-messages.json`（僅畫面使用的文字）、`terms.json`（標題、狀態與角色的顯示名稱）、`native.json`（Mac App 與 Info.plist）、`ui.css`、`seed/`、`templates/`（`_hub/`、`project/`）。辭典的鍵是日文原文，插入值寫成 `${0}` 等形式。
+- `locales/zh-TW/templates/`：繁中專案與角色範本。角色識別碼、狀態、思考值與既有資料夾鍵使用原有格式；畫面依語言顯示中文。
 
 ## 複製、刪除、整理與檢查
 

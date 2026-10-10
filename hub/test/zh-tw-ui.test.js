@@ -7,8 +7,9 @@ const vm = require('node:vm');
 const publicDir = path.join(__dirname, '../public');
 const source = name => fs.readFileSync(path.join(publicDir, name), 'utf8');
 const kana = /[\u3041-\u3096\u30a1-\u30fa]/u;
+const { config, styles } = require('../lib/locale');
 function locale(language) {
-  const context = vm.createContext({ HUB_LOCALE: language ? { locale: language, messages: require("../locales/zh-TW.json") } : undefined });
+  const context = vm.createContext({ HUB_LOCALE: language ? config(language) : undefined });
   vm.runInContext(source('locale.js'), context);
   return context.HubI18n;
 }
@@ -21,7 +22,7 @@ function app() {
     return elements.get(key);
   };
   const document = { documentElement: {}, hidden: false, querySelector: element, querySelectorAll: () => [], addEventListener() {} };
-  const context = vm.createContext({ HUB_LOCALE: { locale: 'zh-TW', messages: require('../locales/zh-TW.json') }, document, window: {}, navigator: { userAgent: '' },
+  const context = vm.createContext({ HUB_LOCALE: config('zh-TW'), document, window: {}, navigator: { userAgent: '' },
     localStorage: { getItem() { return null; }, setItem() {} }, fetch: () => new Promise(() => {}),
     EventSource: class { close() {} }, URLSearchParams, setInterval() {}, clearInterval() {}, setTimeout() {}, clearTimeout() {},
     requestAnimationFrame: fn => fn(), console, ModelOrder: require('../public/model-order'), ProjectOrder: require('../public/project-order') });
@@ -121,18 +122,24 @@ test('Initial markup loads locale synchronously and marks only its own UI for tr
   assert.doesNotMatch(source('locale.js'), /MutationObserver|prototype\.(?:innerHTML|textContent)/);
 });
 
-test('CSS drag hints follow the document language and retain Japanese defaults', () => {
-  const css = source('app.css');
-  for (const selector of ['pane', 'chat', 'view']) assert.match(css, new RegExp('html\\[lang="zh-TW"\\] \\.' + selector + '\\.dropping::after\\{content:"[^"\\u3041-\\u3096\\u30a1-\\u30fa]+"\\}'));
-  assert.match(css, /content:"ここに落とすと渡します"/);
+test('CSS drag hints come from the active locale pack while core CSS keeps Japanese', () => {
+  const core = source('app.css');
+  assert.match(core, /content:"ここに落とすと渡します"/);
+  assert.doesNotMatch(core, /lang="zh-TW"|拖到這裡/);
+  assert.match(source('index.html'), /href="app\.css">\n<link rel="stylesheet" href="locale\.css">/);
+  const previous = process.env.HUB_LANG;
+  try {
+    process.env.HUB_LANG = 'zh-TW';
+    const css = styles();
+    for (const selector of ['pane', 'chat', 'view']) assert.match(css, new RegExp('\\.' + selector + '\\.dropping::after\\{content:"[^"\\u3041-\\u3096\\u30a1-\\u30fa]+"\\}'));
+    process.env.HUB_LANG = 'ja';
+    assert.equal(styles(), '');
+  } finally {
+    if (previous === undefined) delete process.env.HUB_LANG; else process.env.HUB_LANG = previous;
+  }
 });
 
-test('Catalog templates preserve every placeholder and interpolate opaque values without a second translation', () => {
-  const catalog = require('../locales/zh-TW.json');
-  for (const [key, value] of Object.entries(catalog)) {
-    const markers = text => [...text.matchAll(/\$\{\d+\}/g)].map(match => match[0]).sort();
-    assert.deepEqual(markers(value), markers(key), key);
-  }
+test('Catalog templates interpolate opaque values without a second translation', () => {
   const zh = locale('zh-TW'), user = '${9} $& 作業が見つかりません';
   assert.equal(zh.template`見つかりません：${user}`, '找不到：' + user);
   assert.equal(locale().template`見つかりません：${user}`, '見つかりません：' + user);

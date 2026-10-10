@@ -1,5 +1,5 @@
 'use strict';
-const { lt, locale, config:localeConfig, configScript } = require('./lib/locale');
+const { lt, locale, config:localeConfig, configScript, styles:localeStyles, templates:localeTemplates } = require('./lib/locale');
 // Project Hub 第2版：台帳の一覧、画面の中の作業画面、役割・モデル・思考の設定
 // 使い方: node server.js  →  http://127.0.0.1:4545
 const http = require('http');
@@ -143,7 +143,8 @@ const readVersion = () => {
 const VERSION = readVersion();
 function changelog(n) {
   let text = '';
-  try { text = fs.readFileSync(path.join(__dirname, locale()==='zh-TW'?'CHANGELOG.zh-TW.md':'CHANGELOG.md'), 'utf8'); } catch (e) { return []; }
+  const localized = path.join(__dirname, `CHANGELOG.${locale()}.md`);
+  try { text = fs.readFileSync(locale() !== 'ja' && fs.existsSync(localized) ? localized : path.join(__dirname, 'CHANGELOG.md'), 'utf8'); } catch (e) { return []; }
   const out = [];
   for (const part of text.split(/^## /m).slice(1)) {
     const [head, ...rest] = part.split('\n');
@@ -355,8 +356,8 @@ const githubProject = p => ({ ...p, base: baseOf(p) });
 const updateBusy = () => aiTools.isOperating() || sessions.list().some(x => x.running) || chats.running.size > 0 || procwatch.list().length > 0 ||
   [...chats.queues.values()].some(q => q.length > 0) || store.listProjects().some(p => maintenance.locked(p.id) || github.locked(baseOf(p)) || p.tasks.some(t => chats.queue(p.id, t.id).length > 0));
 const updateSource = process.env.HUB_UPDATE_SOURCE || '';
-// B installs the automation mechanism; C supplies the translation catalogs.
-const translationReady = ['hub/lib/locale.js', 'hub/locales/zh-TW.json'].every(file => fs.existsSync(path.join(updateSource, file)));
+// B installs the automation mechanism; C supplies the zh-TW locale pack it maintains.
+const translationReady = ['hub/lib/locale.js', 'hub/locales/zh-TW/pack.json'].every(file => fs.existsSync(path.join(updateSource, file)));
 const automation = process.env.HUB_AUTO_TRANSLATE === '1' && process.env.HUB_TRANSLATION_FORK && translationReady
   ? require('./lib/app-update-workflow').createAutomation({ root: ROOT, env: process.env }) : {};
 const appUpdate = new (require('./lib/app-update').AppUpdate)({ root: ROOT, source: updateSource,
@@ -1696,7 +1697,7 @@ async function api(req, res, url) {
     if (body && !fs.existsSync(body)) return send(res, 400, { error: lt`本体のフォルダが見つかりません: ${body}` });
     if (body && !fs.statSync(body).isDirectory()) return send(res, 400, { error: lt`フォルダではありません（ファイルです）: ${body}` });
     const refs = (Array.isArray(b.refs) ? b.refs : []).map(x => expandHome(String(x))).filter(x => path.isAbsolute(x) && fs.existsSync(x));
-    const r = store.createProject({ ...b, body, refs }, path.join(__dirname, '..', 'docs', 'project-hub', 'templates', ...(locale()==='zh-TW'?['zh-TW']:[]), 'project'));
+    const r = store.createProject({ ...b, body, refs }, path.join(localeTemplates(), 'project'));
     if (r.error) return send(res, 400, { error: r.error });
     record('newproject', { project: r.project.id });
     return send(res, 200, r.project);
@@ -1745,6 +1746,7 @@ async function api(req, res, url) {
 
 function serveStatic(res, pathname) {
   if(pathname==='/locale-config.js')return send(res,200,configScript(),TYPES['.js']);
+  if(pathname==='/locale.css')return send(res,200,localeStyles(),TYPES['.css']);
   const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.normalize(path.join(PUBLIC, rel));
   if (!file.startsWith(PUBLIC + path.sep)) return send(res, 403, 'forbidden', 'text/plain');

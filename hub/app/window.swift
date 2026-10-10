@@ -7,9 +7,6 @@ import Cocoa
 import WebKit
 import UniformTypeIdentifiers
 
-let hubLanguage = ProcessInfo.processInfo.environment["HUB_LANG"]
-    ?? (Bundle.main.object(forInfoDictionaryKey: "HubLanguage") as? String) ?? "ja"
-func tr(_ ja: String, _ zh: String) -> String { hubLanguage == "zh-TW" ? zh : ja }
 
 let home = FileManager.default.homeDirectoryForCurrentUser.path
 let logPath = home + "/Library/Logs/ProjectHub.log"
@@ -41,6 +38,36 @@ let hubLocation = (Bundle.main.object(forInfoDictionaryKey: "HubDir") as? String
 let hubDir = hubLocation.hasPrefix("@bundle/")
     ? Bundle.main.resourceURL!.appendingPathComponent(String(hubLocation.dropFirst("@bundle/".count))).path
     : hubLocation
+
+func installedLanguage(_ requested: String) -> String {
+    guard requested != "ja",
+          requested.range(of: "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$", options: .regularExpression) != nil,
+          let data = FileManager.default.contents(atPath: hubDir + "/locales/" + requested + "/pack.json"),
+          let pack = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          pack["locale"] as? String == requested else { return "ja" }
+    return requested
+}
+let hubLanguage = installedLanguage(ProcessInfo.processInfo.environment["HUB_LANG"]
+    ?? (Bundle.main.object(forInfoDictionaryKey: "HubLanguage") as? String) ?? "ja")
+let nativeMessages: [String: String] = {
+    guard hubLanguage != "ja",
+          let data = FileManager.default.contents(atPath: hubDir + "/locales/" + hubLanguage + "/native.json"),
+          let messages = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] else { return [:] }
+    return messages
+}()
+let nativePlaceholderPattern = try! NSRegularExpression(pattern: "\\$\\{([0-9]+)\\}")
+func tr(_ ja: String, _ values: String...) -> String {
+    let message = nativeMessages[ja] ?? ja
+    guard !values.isEmpty else { return message }
+    var result = message
+    for match in nativePlaceholderPattern.matches(in: message, range: NSRange(message.startIndex..., in: message)).reversed() {
+        guard let numberRange = Range(match.range(at: 1), in: message),
+              let index = Int(message[numberRange]), index < values.count,
+              let range = Range(match.range, in: result) else { continue }
+        result.replaceSubrange(range, with: values[index])
+    }
+    return result
+}
 let port = (Bundle.main.object(forInfoDictionaryKey: "HubPort") as? String) ?? "4545"
 let baseURL = URL(string: "http://127.0.0.1:\(port)")!
 
@@ -94,9 +121,9 @@ func logTail(_ n: Int) -> String {
 
 // Mac の「ファイルとフォルダ」の許可（書類・デスクトップ・ダウンロード）
 let privacyFolders: [(name: String, path: String, service: String)] = [
-    (tr("書類", "文件"), home + "/Documents", "SystemPolicyDocumentsFolder"),
-    (tr("デスクトップ", "桌面"), home + "/Desktop", "SystemPolicyDesktopFolder"),
-    (tr("ダウンロード", "下載"), home + "/Downloads", "SystemPolicyDownloadsFolder"),
+    (tr("書類"), home + "/Documents", "SystemPolicyDocumentsFolder"),
+    (tr("デスクトップ"), home + "/Desktop", "SystemPolicyDesktopFolder"),
+    (tr("ダウンロード"), home + "/Downloads", "SystemPolicyDownloadsFolder"),
 ]
 // 中を読んでみる。まだ決めていなければ、ここで Mac が「アクセスを求めています」と確認を出す
 func canRead(_ dir: String) -> Bool {
@@ -253,7 +280,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         let alert = NSAlert(); alert.messageText = prompt
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
         input.stringValue = defaultText ?? ""; alert.accessoryView = input
-        alert.addButton(withTitle: tr("保存", "儲存")); alert.addButton(withTitle: tr("キャンセル", "取消"))
+        alert.addButton(withTitle: tr("保存")); alert.addButton(withTitle: tr("キャンセル"))
         alert.window.initialFirstResponder = input
         alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn ? input.stringValue : nil) }
     }
@@ -262,7 +289,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
         let alert = NSAlert(); alert.messageText = message
-        alert.addButton(withTitle: tr("確認して進む", "確認並繼續")); alert.addButton(withTitle: tr("キャンセル", "取消"))
+        alert.addButton(withTitle: tr("確認して進む")); alert.addButton(withTitle: tr("キャンセル"))
         alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) }
     }
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
@@ -274,8 +301,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     func applicationDidFinishLaunching(_ n: Notification) {
         guard storageReady() else {
             let alert = NSAlert()
-            alert.messageText = tr("データ用ディスクを使えません", "無法使用資料磁碟")
-            alert.informativeText = tr("ストレージの確認に通りませんでした。データ用ディスクを接続してから、もう一度開いてください。", "磁碟檢查未通過。請確認資料磁碟已連接且空間足夠，再重新開啟。")
+            alert.messageText = tr("データ用ディスクを使えません")
+            alert.informativeText = tr("ストレージの確認に通りませんでした。データ用ディスクを接続してから、もう一度開いてください。")
             alert.runModal(); NSApp.terminate(nil); return
         }
         log("アプリを開きました（本体の場所: \(hubDir)）")
@@ -302,13 +329,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         NSApp.activate(ignoringOtherApps: true)
         buildMenu()
         updateTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.pollAppUpdate() }
-        web.loadHTMLString(page(tr("起動しています…", "正在啟動…"), tr("<p>数秒お待ちください。</p>", "<p>請稍候。</p>")), baseURL: nil)
+        web.loadHTMLString(page(tr("起動しています…"), tr("<p>数秒お待ちください。</p>")), baseURL: nil)
         DispatchQueue.global().async { self.startAndLoad() }
     }
 
     func startAndLoad() {
         guard storageReady() else {
-            showError(tr("データ用ディスクを使えません", "無法使用資料磁碟"), tr("<p>ディスクの確認に失敗したため、起動を止めました。</p>", "<p>磁碟確認失敗，已停止啟動。</p>"))
+            showError(tr("データ用ディスクを使えません"), tr("<p>ディスクの確認に失敗したため、起動を止めました。</p>"))
             return
         }
         // 本体が台帳を読めている時は、その画面を先に開く。
@@ -336,15 +363,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         log("PATH: \(path.isEmpty ? "（取れず）" : path)")
         guard let node = findNode(path: path) else {
             log("node が見つかりません")
-            showError(tr("Node.js が見つかりません", "找不到 Node.js"), tr("<p><a href=\"https://nodejs.org\">https://nodejs.org</a> から入れてから、もう一度開いてください。</p>", "<p>請從 <a href=\"https://nodejs.org\">https://nodejs.org</a> 安裝後重新開啟。</p>"))
+            showError(tr("Node.js が見つかりません"), tr("<p><a href=\"https://nodejs.org\">https://nodejs.org</a> から入れてから、もう一度開いてください。</p>"))
             return
         }
         let serverJS = hubDir + "/server.js"
         // 実際に読んでみる（ここで Mac が「書類フォルダへのアクセス」の確認を出す）
         if FileManager.default.contents(atPath: serverJS) == nil {
             log("本体を読めません: \(serverJS)（書類フォルダの許可が必要な可能性）")
-            showError(tr("本体のファイルを読めません", "無法讀取程式檔案"),
-                      tr("<p>「システム設定 → プライバシーとセキュリティ → ファイルとフォルダ」で、<b>Project Hub</b> の「書類フォルダ」をオンにしてから、もう一度開いてください。</p><p>場所：<code>\(serverJS)</code></p>", "<p>請到「系統設定 → 隱私權與安全性 → 檔案與檔案夾」，開啟 <b>Project Hub</b> 的「文件檔案夾」權限後重新開啟。</p><p>位置：<code>\(serverJS)</code></p>"))
+            showError(tr("本体のファイルを読めません"),
+                      tr("<p>「システム設定 → プライバシーとセキュリティ → ファイルとフォルダ」で、<b>Project Hub</b> の「書類フォルダ」をオンにしてから、もう一度開いてください。</p><p>場所：<code>${0}</code></p>", serverJS))
             DispatchQueue.main.async {
                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!)
             }
@@ -372,7 +399,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
             log("本体を起動しました（node: \(node)）")
         } catch {
             log("本体を起動できません: \(error)")
-            showError(tr("本体を起動できません", "無法啟動伺服器"), tr("<p>記録：<code>\(logPath)</code></p>", "<p>紀錄：<code>\(logPath)</code></p>"))
+            showError(tr("本体を起動できません"), tr("<p>記録：<code>${0}</code></p>", logPath))
             return
         }
         for _ in 0..<50 {
@@ -386,7 +413,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
         log("本体が応答しません（本体は\(p.isRunning ? "動いています" : "止まりました（終了コード \(p.terminationStatus)）")）")
         let busyPort = logTail(8).contains("は使われています")
-        showError(tr("本体が応答しません", "伺服器沒有回應"), (busyPort ? "<p><b>前の本体が止まったまま残っています。</b>ターミナルで <code>pkill -f ProjectHub/hub/server.js</code> を実行してから、［再読み込み］（⌘R）を押してください。</p>" : "") + tr("<p>メニューの［再読み込み］（⌘R）で、もう一度試せます。直らない時は、下の記録を Claude に見せてください：<code>\(logPath)</code></p><pre style=\"white-space:pre-wrap;font-size:12px;max-height:40vh;overflow:auto\">\(logTail(25))</pre>", "<p>請從選單按［重新載入］（⌘R）再試一次。若仍失敗，請提供以下紀錄：<code>\(logPath)</code></p><pre style=\"white-space:pre-wrap;font-size:12px;max-height:40vh;overflow:auto\">\(logTail(25))</pre>"))
+        showError(tr("本体が応答しません"), (busyPort ? "<p><b>前の本体が止まったまま残っています。</b>ターミナルで <code>pkill -f ProjectHub/hub/server.js</code> を実行してから、［再読み込み］（⌘R）を押してください。</p>" : "") + tr("<p>メニューの［再読み込み］（⌘R）で、もう一度試せます。直らない時は、下の記録を Claude に見せてください：<code>${0}</code></p><pre style=\"white-space:pre-wrap;font-size:12px;max-height:40vh;overflow:auto\">${1}</pre>", logPath, logTail(25)))
     }
 
     // This polls local status only. The server owns the persisted 24-hour GitHub limit.
@@ -435,26 +462,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         let main = NSMenu()
         let appItem = NSMenuItem(); main.addItem(appItem)
         let appMenu = NSMenu()
-        let reloadItem = appMenu.addItem(withTitle: tr("再読み込み", "重新載入"), action: #selector(reload), keyEquivalent: "r")
+        let reloadItem = appMenu.addItem(withTitle: tr("再読み込み"), action: #selector(reload), keyEquivalent: "r")
         reloadItem.target = self
-        appMenu.addItem(withTitle: tr("記録を開く", "開啟紀錄"), action: #selector(openLog), keyEquivalent: "l")
-        let gptItem = appMenu.addItem(withTitle: tr("横の ChatGPT を開く・閉じる", "開啟／關閉旁邊的 ChatGPT"), action: #selector(toggleGpt), keyEquivalent: "g")
+        appMenu.addItem(withTitle: tr("記録を開く"), action: #selector(openLog), keyEquivalent: "l")
+        let gptItem = appMenu.addItem(withTitle: tr("横の ChatGPT を開く・閉じる"), action: #selector(toggleGpt), keyEquivalent: "g")
         gptItem.keyEquivalentModifierMask = [.command, .shift]
         gptItem.target = self
-        appMenu.addItem(withTitle: tr("ファイルの許可を確かめる…", "檢查檔案權限…"), action: #selector(checkAccess), keyEquivalent: "")
-        appMenu.addItem(withTitle: tr("ファイルの許可をやり直す（確認をもう一度出す）…", "重新確認檔案權限…"), action: #selector(redoAccess), keyEquivalent: "")
+        appMenu.addItem(withTitle: tr("ファイルの許可を確かめる…"), action: #selector(checkAccess), keyEquivalent: "")
+        appMenu.addItem(withTitle: tr("ファイルの許可をやり直す（確認をもう一度出す）…"), action: #selector(redoAccess), keyEquivalent: "")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: tr("Project Hub を終了", "結束 Project Hub"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: tr("Project Hub を終了"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         // 編集メニュー（コピー・貼り付けを効かせる）
         let editItem = NSMenuItem(); main.addItem(editItem)
-        let edit = NSMenu(title: tr("編集", "編輯"))
-        edit.addItem(withTitle: tr("取り消す", "復原"), action: Selector(("undo:")), keyEquivalent: "z")
-        edit.addItem(withTitle: tr("カット", "剪下"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: tr("コピー", "複製"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        let pasteItem = edit.addItem(withTitle: tr("ペースト", "貼上"), action: #selector(pasteFromMenu), keyEquivalent: "v")
+        let edit = NSMenu(title: tr("編集"))
+        edit.addItem(withTitle: tr("取り消す"), action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: tr("カット"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: tr("コピー"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        let pasteItem = edit.addItem(withTitle: tr("ペースト"), action: #selector(pasteFromMenu), keyEquivalent: "v")
         pasteItem.target = self
-        edit.addItem(withTitle: tr("すべてを選択", "全選"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: tr("すべてを選択"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
         NSApp.mainMenu = main
     }
@@ -463,9 +490,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
         let panel = NSOpenPanel()
-        panel.message = tr("参照する画像を選んでください（最大10枚）", "請選擇參考圖片（最多 10 張）")
-        panel.title = tr("画像を選ぶ", "選擇圖片")
-        panel.prompt = tr("追加する", "新增")
+        panel.message = tr("参照する画像を選んでください（最大10枚）")
+        panel.title = tr("画像を選ぶ")
+        panel.prompt = tr("追加する")
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
@@ -616,14 +643,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
 
     func showAccess(_ result: [(name: String, ok: Bool)]) {
         let a = NSAlert()
-        a.messageText = tr("Mac のファイルの許可", "Mac 檔案權限")
-        let lines = result.map { "\($0.ok ? "✓" : "✕") \($0.name)フォルダ：\($0.ok ? tr("許可あり", "已允許") : tr("許可なし", "未允許"))" }.joined(separator: "\n")
+        a.messageText = tr("Mac のファイルの許可")
+        let lines = result.map { "\($0.ok ? "✓" : "✕") \($0.name)フォルダ：\($0.ok ? tr("許可あり") : tr("許可なし"))" }.joined(separator: "\n")
         let allOK = result.allSatisfy { $0.ok }
-        a.informativeText = lines + (allOK ? tr("\n\nすべて使えます。", "\n\n全部都能使用。") : tr("\n\n［確認をもう一度出す］で Mac の確認が出たら「許可」を選んでください。出ない時は［フルディスクアクセスを開く］で、表示された Project Hub をリストに入れてオンにしてください。", "\n\n請按［重新確認權限］，在 Mac 提示時選「允許」。若未出現提示，請按［開啟完整磁碟存取權］，把 Project Hub 加入清單並開啟。"))
+        a.informativeText = lines + (allOK ? tr("\n\nすべて使えます。") : tr("\n\n［確認をもう一度出す］で Mac の確認が出たら「許可」を選んでください。出ない時は［フルディスクアクセスを開く］で、表示された Project Hub をリストに入れてオンにしてください。"))
         if allOK { a.addButton(withTitle: "OK"); a.runModal(); return }
-        a.addButton(withTitle: tr("確認をもう一度出す", "重新確認權限"))
-        a.addButton(withTitle: tr("フルディスクアクセスを開く", "開啟完整磁碟存取權"))
-        a.addButton(withTitle: tr("閉じる", "關閉"))
+        a.addButton(withTitle: tr("確認をもう一度出す"))
+        a.addButton(withTitle: tr("フルディスクアクセスを開く"))
+        a.addButton(withTitle: tr("閉じる"))
         let r = a.runModal()
         if r == .alertFirstButtonReturn { askAccess(reset: true) }
         else if r == .alertSecondButtonReturn {

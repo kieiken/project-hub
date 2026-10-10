@@ -12,7 +12,7 @@ const port = 59100 + Math.floor(Math.random() * 300);
 Object.assign(process.env, { HUB_LANG: 'zh-TW', HUB_ROOT: root, HUB_PORT: String(port), HUB_DRY_RUN: '1', HUB_AI_HOME: path.join(tmp, 'ai-home') });
 fs.mkdirSync(path.join(root, '_hub'), { recursive: true });
 fs.writeFileSync(path.join(root, '_hub', 'roles.yaml'), 'models:\n  claude-code: [Opus 5.5]\n  codex: [GPT-6.1-Sol]\nroles:\n  司令塔: { main: [codex, GPT-6.1-Sol, 高], backup: [人], job: 協調 }\nswitch: { auto: false }\n');
-const { lt, locale, configScript, sectionNames, label } = require('../lib/locale');
+const { lt, locale, configScript, sectionNames, label, templates } = require('../lib/locale');
 const { Store, readSteps } = require('../lib/store');
 const { parseAsk } = require('../lib/chat');
 const { TOOLS } = require('../lib/chatgpt');
@@ -68,7 +68,8 @@ test('browser bootstrap is synchronous and escapes script endings', () => {
 });
 
 test('Chinese and Japanese task sections share steps, completion and append logic', () => {
-  const template = path.join(__dirname, '../../docs/project-hub/templates/zh-TW/project');
+  const template = path.join(templates(), 'project');
+  assert.equal(template, path.join(__dirname, '../locales/zh-TW/templates/project'));
   const result = store.createProject({ name: '日本語名稱', description: '作業が見つかりません' }, template);
   assert.ok(!result.error);
   assert.equal(result.project.name, '日本語名稱');
@@ -161,6 +162,9 @@ test('HTTP locale and Chinese generated projects work without translating user f
   assert.equal(config.locale, 'zh-TW');
   const script = await (await fetch(base + '/locale-config.js')).text();
   assert.match(script, /^window.HUB_LOCALE = /);
+  const css = await fetch(base + '/locale.css');
+  assert.match(css.headers.get('content-type'), /^text\/css/);
+  assert.equal(await css.text(), fs.readFileSync(path.join(__dirname, '../locales/zh-TW/ui.css'), 'utf8'));
   const changelog = await (await fetch(base + '/api/changelog')).json();
   assert.equal(changelog[0].version, require('../package.json').version);
   assert.ok(changelog.flatMap(release => release.items).some(item => item.includes('繁體中文')));

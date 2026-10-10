@@ -9,7 +9,8 @@ const TRANSLATION_MODEL = 'gpt-6.1-sol';
 const PUBLIC = /^(?:(?:README(?:\.zh-TW)?\.md|CONTRIBUTING(?:\.zh-TW)?\.md|THIRD_PARTY_NOTICES(?:\.zh-TW)?\.md|LICENSE|\.gitignore)$|hub\/|docs\/project-hub\/templates\/|docs\/screenshots\/[^/]+-redacted\.png$|scripts\/|\.github\/)/;
 const PRIVATE = /(?:^|\/)(?:node_modules|\.git|public-release|Inbox|\.env(?:\.[^/]*)?|\.npmrc|\.dev\.vars(?:\.[^/]*)?|\.claude|\.codex)(?:\/|$)|(?:^|\/)\.ai\/(?:chat|handoff|work)(?:\/|$)|\.(?:pem|key|log)$/;
 const safe = file => PUBLIC.test(file) && !PRIVATE.test(file) && !file.split('/').includes('..') &&
-  (!file.split('/').includes('.ai') || /^docs\/project-hub\/templates\/(?:zh-TW\/)?project\/\.ai\//.test(file) || /^hub\/seed(?:-zh-TW)?\//.test(file));
+  (!file.split('/').includes('.ai') || /^docs\/project-hub\/templates\/project\/\.ai\//.test(file) || /^hub\/seed\//.test(file)
+    || /^hub\/locales\/[^/]+\/(?:templates\/project\/\.ai\/|seed\/)/.test(file));
 const redact = text => String(text || '').replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,})\b/g, '[redacted]');
 
 function run(file, args, options = {}) {
@@ -66,8 +67,8 @@ function createAutomation(options = {}) {
     if (!enabled) throw Error('Automatic Traditional Chinese translation is not enabled');
     await guard();
     const stage = checkStage(source);
-    // B ports the workflow only. C supplies the catalogs and locale boundaries.
-    if (!fs.existsSync(path.join(stage, 'hub/locales/zh-TW.json')) || !fs.existsSync(path.join(stage, 'hub/lib/locale.js'))) throw Error('Traditional Chinese support is not installed yet (C)');
+    // B ports the workflow only. C supplies the zh-TW locale pack and locale boundaries.
+    if (!fs.existsSync(path.join(stage, 'hub/locales/zh-TW/pack.json')) || !fs.existsSync(path.join(stage, 'hub/lib/locale.js'))) throw Error('Traditional Chinese support is not installed yet (C)');
     if (env.HUB_TRANSLATION_MODEL && env.HUB_TRANSLATION_MODEL !== TRANSLATION_MODEL) throw Error('Translation requires gpt-6.1-sol');
     const work = path.join(path.dirname(stage), 'translation');
     fs.mkdirSync(work, { recursive: true });
@@ -97,8 +98,8 @@ function createAutomation(options = {}) {
       `Upstream commit: ${context.upstreamSha || 'unknown'}. Incoming merge conflicts: ${Boolean(context.conflicted)}.`,
       'Resolve merge conflicts surgically, preserving upstream functional changes and this edition\'s localization and daily updater. Do not overwrite the running app or workspace.',
       'Translate ALL new application-owned interface text, accessibility labels, CSS content hints, native menus/dialogs/diagnostics, server errors, MCP descriptions, AI instructions, manuals, change history, templates and fictional seeds into natural Taiwan Traditional Chinese.',
-      'Keep Japanese as the public default and use HUB_LANG=zh-TW. Use the existing HubI18n/UI.text/UI.template and backend lt catalog boundaries. Preserve arbitrary user text, AI replies, filenames/paths, terminal output, model/CLI names, schema keys, canonical Japanese status/role/effort values, machine question markers and licenses byte-for-byte.',
-      'Maintain Chinese Markdown heading compatibility with legacy Japanese files. Add regression coverage for new visible text and escaped interpolations. New ordinary UI source literals must have catalog entries; new docs must have complete parallel zh-TW translations.',
+      'Keep Japanese as the public default and use HUB_LANG=zh-TW. All Traditional Chinese resources live in the independent locale pack hub/locales/zh-TW/ (messages.json for backend lt, ui-messages.json for browser-only HubI18n/UI.text/UI.template phrases, terms.json, native.json for the macOS app with ${0} placeholders, ui.css, seed/, templates/); core code must not branch on zh-TW. Preserve arbitrary user text, AI replies, filenames/paths, terminal output, model/CLI names, schema keys, canonical Japanese status/role/effort values, machine question markers and licenses byte-for-byte.',
+      'Maintain Chinese Markdown heading compatibility with legacy Japanese files. Add regression coverage for new visible text and escaped interpolations. New ordinary UI source literals must have entries in the pack catalogs; new docs must have complete parallel zh-TW translations.',
       'Keep package version, package-lock and both change logs/README versions consistent; do not lower the feature version unless upstream requires a justified compatible version change.',
       'Do not install tools, change agent configuration, bypass approvals/sandbox, or change unrelated code. Do not run network commands. You may read/edit source and run local syntax checks. The parent will install dependencies, run the complete tests, verify the app, commit public files and publish the PR.',
       'Leave the final response in the required schema. completed=true only after translation and all merge conflict markers are resolved. Describe any actual unresolved item; do not invent success.',

@@ -14,9 +14,18 @@ ROOT="${HUB_ROOT:-$HOME/Documents/AI-Workspace}"
 export HUB_LANG="${HUB_LANG:-ja}"
 TPL="$HERE/../docs/project-hub/templates"
 SEED="$HERE/seed"
-if [ "$HUB_LANG" = "zh-TW" ]; then
-  TPL="$TPL/zh-TW"
-  SEED="$HERE/seed-zh-TW"
+# 日本語以外は hub/locales/<言語>/ の言語パックから。パックが無ければ日本語にする。
+# （初回は node がまだ PATH に無いことがあるので、シェルだけで確かめる）
+if [ "$HUB_LANG" != "ja" ]; then
+  PACK="$HERE/locales/$HUB_LANG"
+  if printf '%s\n' "$HUB_LANG" | grep -Eqx '[a-z]{2,3}(-[A-Za-z0-9]{2,8})*' \
+      && [ -f "$PACK/pack.json" ] && grep -Eq "\"locale\"[[:space:]]*:[[:space:]]*\"$HUB_LANG\"" "$PACK/pack.json"; then
+    [ ! -d "$PACK/templates" ] || TPL="$PACK/templates"
+    [ ! -d "$PACK/seed" ] || SEED="$PACK/seed"
+  else
+    echo "指定された言語パックがありません。日本語を使います。"
+    export HUB_LANG=ja
+  fi
 fi
 
 mkdir -p "$ROOT/_hub" "$ROOT/Product" "$ROOT/Work"
