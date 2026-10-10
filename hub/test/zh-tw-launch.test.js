@@ -25,11 +25,22 @@ test('Mock App builds keep the Japanese default and store Chinese language witho
     assert.match(result.stdout,/アプリを組み立てています/);
     const plist=fs.readFileSync(path.join(f.apps,'Project Hub.app/Contents/Info.plist'),'utf8');
     assert.ok(plist.includes('<key>HubLanguage</key><string>'+language+'</string>'));
-    assert.match(plist,/<string>ja<\/string><string>zh-TW<\/string>/);
+    const installed=fs.readdirSync(path.join(hub,'locales')).filter(locale=>{
+      if(locale==='ja'||!/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(locale)) return false;
+      try { return JSON.parse(fs.readFileSync(path.join(hub,'locales',locale,'pack.json'),'utf8')).locale===locale; } catch { return false; }
+    }).sort();
+    assert.ok(plist.includes('<key>CFBundleLocalizations</key><array>'+['ja',...installed].map(locale=>'<string>'+locale+'</string>').join('')+'</array>'));
+    assert.ok(plist.includes('<key>CFBundleDevelopmentRegion</key><string>'+language+'</string>'));
     assert.ok(plist.includes(language==='ja'?'書類フォルダにある':'用於讀寫文件資料夾'));
   }
   const swift=fs.readFileSync(path.join(hub,'app/window.swift'),'utf8');
-  assert.match(swift,/ProcessInfo\.processInfo\.environment\["HUB_LANG"\][\s\S]*HubLanguage[\s\S]*\?\? "ja"/);
+  assert.match(swift,/installedLanguage\(ProcessInfo\.processInfo\.environment\["HUB_LANG"\][\s\S]*HubLanguage[\s\S]*\?\? "ja"/);
+  assert.match(swift,/pack\["locale"\] as\? String == requested/);
+  assert.match(swift,/hubDir \+ "\/locales\/" \+ hubLanguage \+ "\/native\.json"/);
+  assert.match(swift,/func tr\(_ ja: String, _ values: String\.\.\.\)/);
+  assert.match(swift,/nativeMessages\[ja\] \?\? ja/);
+  assert.match(swift,/tr\("<p>記録：<code>\$\{0\}<\/code><\/p>", logPath\)/);
+  assert.doesNotMatch(swift,/zh-TW|zh_TW|文件|儲存|重新載入/);
   assert.match(swift,/env\["HUB_LANG"\] = hubLanguage/);
 });
 test('Chinese setup uses Chinese example data and templates and leaves an existing project untouched', t => {
@@ -41,6 +52,23 @@ test('Chinese setup uses Chinese example data and templates and leaves an existi
   assert.ok(fs.existsSync(path.join(f.env.HUB_ROOT,'Product','範例網站','PROJECT.md')));
   assert.match(fs.readFileSync(path.join(f.env.HUB_ROOT,'_hub/roles.yaml'),'utf8'),/司令塔:/);
 });
+test('An uninstalled language builds and prepares the Japanese defaults', t => {
+  const f=fixture(t);
+  const build=f.run('app/build-app.sh',{HUB_LANG:'fr'});
+  assert.equal(build.status,0,build.stderr);
+  assert.match(build.stdout,/日本語を使います/);
+  const plist=fs.readFileSync(path.join(f.apps,'Project Hub.app/Contents/Info.plist'),'utf8');
+  assert.ok(plist.includes('<key>HubLanguage</key><string>ja</string>'));
+  assert.ok(plist.includes('<key>CFBundleDevelopmentRegion</key><string>ja</string>'));
+  assert.ok(plist.includes('書類フォルダにある'));
+  assert.ok(!plist.includes('用於讀寫'));
+  const setup=f.run('setup.sh',{HUB_LANG:'fr'});
+  assert.equal(setup.status,0,setup.stderr);
+  assert.match(setup.stdout,/日本語を使います/);
+  assert.ok(fs.existsSync(path.join(f.env.HUB_ROOT,'Product','サンプルアプリ','PROJECT.md')));
+  assert.equal(fs.existsSync(path.join(f.env.HUB_ROOT,'Product','範例應用程式')),false);
+});
+
 test('Installed C catalogs enable the translation workflow only with explicit opt-in; preparation is mocked', () => {
   const source=fs.readFileSync(path.join(hub,'server.js'),'utf8');
   const code=source.slice(source.indexOf('const updateSource ='),source.indexOf('const appUpdate ='))+'\nglobalThis.ready=translationReady;globalThis.workflow=automation;';
@@ -64,8 +92,8 @@ test('Portable App bundles the runtime and templates with relocatable location a
   assert.ok(plist.includes('<key>HubDir</key><string>@bundle/runtime/hub</string>'));
   assert.ok(plist.includes('<key>HubRoot</key><string></string>'));
   assert.ok(plist.includes('<key>HubStorageGuard</key><string></string>'));
-  for(const file of ['hub/server.js','hub/locales/zh-TW.json','hub/node_modules/node-pty/package.json',
-    'docs/project-hub/templates/zh-TW/project/.ai/rules.md','hub/seed-zh-TW/Project Hub/PROJECT.md','LICENSE']) assert.ok(fs.existsSync(path.join(runtime,file)),file);
+  for(const file of ['hub/server.js','hub/locales/zh-TW/pack.json','hub/locales/zh-TW/messages.json','hub/locales/zh-TW/native.json','hub/node_modules/node-pty/package.json',
+    'docs/project-hub/templates/project/.ai/rules.md','hub/locales/zh-TW/templates/project/.ai/rules.md','hub/locales/zh-TW/seed/Project Hub/PROJECT.md','hub/seed/サンプルアプリ/PROJECT.md','LICENSE']) assert.ok(fs.existsSync(path.join(runtime,file)),file);
   for(const file of ['.git','.ai','hub/test','hub/app','hub/pr-c-ja-full.log']) assert.equal(fs.existsSync(path.join(runtime,file)),false,file);
   const swift=fs.readFileSync(path.join(hub,'app/window.swift'),'utf8');assert.match(swift,/hubLocation\.hasPrefix\("@bundle\/"\)[\s\S]*Bundle\.main\.resourceURL/);
 });

@@ -1,0 +1,3 @@
+.pane.dropping::after{content:"拖到這裡即可交付"}
+.chat.dropping::after{content:"拖到這裡即可加入指示欄"}
+.view.dropping::after{content:"拖到這裡即可新增參考資料夾（AI 只讀取）"}

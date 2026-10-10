@@ -14,7 +14,7 @@ const required = [...publicFiles, '.github/ISSUE_TEMPLATE/feedback.md',
   '.github/ISSUE_TEMPLATE/bug_report.md', '.github/ISSUE_TEMPLATE/config.yml',
   '.github/pull_request_template.md', 'hub/package.json', 'hub/CHANGELOG.md',
   'hub/server.js', 'hub/mcp.js', 'hub/public/index.html',
-  'hub/locales/zh-TW.json', 'hub/lib/locale.js', '.github/workflows/macos-app.yml'];
+  'hub/locales/zh-TW/pack.json', 'hub/lib/locale.js', '.github/workflows/macos-app.yml'];
 const git = args => execFileSync('git', args, { cwd: root, maxBuffer: 32 * 1024 * 1024 });
 function commit(ref) {
   return git(['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`]).toString().trim();
@@ -32,13 +32,13 @@ function excluded(name) {
   if (parts.some(p => ['.git', 'node_modules', 'public-release', 'Inbox', '.DS_Store'].includes(p))) return true;
   if (parts.some(p => /^\.env(?:\.|$)/.test(p) && !['.env.example', '.env.sample'].includes(p)
     || /^(?:\.npmrc|\.dev\.vars(?:\..*)?|.*\.log|.*\.(?:pem|key))$/.test(p))) return true;
-  // Only the templates and fictional seed may contain ledger metadata.
+  // Only the templates and fictional seed (built in or from a locale pack) may contain ledger metadata.
   if (parts.includes('.ai') && !name.startsWith('docs/project-hub/templates/project/.ai/')
-    && !name.startsWith('docs/project-hub/templates/zh-TW/project/.ai/')
-    && !name.startsWith('hub/seed/') && !name.startsWith('hub/seed-zh-TW/')) return true;
+    && !/^hub\/locales\/[^/]+\/templates\/project\/\.ai\//.test(name)
+    && !name.startsWith('hub/seed/') && !/^hub\/locales\/[^/]+\/seed\//.test(name)) return true;
   if (/\/\.ai\/(?:chat|handoff|work)(?:\/|$)/.test(name)) return true;
   if (parts.includes('_hub') && !name.startsWith('docs/project-hub/templates/_hub/')
-    && !name.startsWith('docs/project-hub/templates/zh-TW/_hub/')) return true;
+    && !/^hub\/locales\/[^/]+\/templates\/_hub\//.test(name)) return true;
   if (name.includes('/.claude/') || name.includes('/.codex/')) return true;
   return false;
 }

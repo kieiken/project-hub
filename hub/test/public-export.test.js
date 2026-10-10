@@ -6,29 +6,30 @@ const { excluded, selected, inspect } = require('../../scripts/export-public');
 const entry = (name, text) => ({ name, content: Buffer.from(text) });
 const publicNames = ['README.zh-TW.md', 'CONTRIBUTING.zh-TW.md', 'THIRD_PARTY_NOTICES.zh-TW.md',
   '.github/PULL_REQUEST_TEMPLATE/zh-TW.md', '.github/workflows/macos-app.yml'];
-const sourceNames = ['hub/locales/zh-TW.json', 'hub/lib/locale.js',
-  'docs/project-hub/templates/zh-TW/project/.ai/rules.md',
-  'docs/project-hub/templates/zh-TW/_hub/roles.yaml', 'hub/seed-zh-TW/範例文件/.ai/tasks/example.md'];
+const sourceNames = ['hub/locales/zh-TW/pack.json', 'hub/locales/zh-TW/messages.json', 'hub/lib/locale.js',
+  'hub/locales/zh-TW/templates/project/.ai/rules.md',
+  'hub/locales/zh-TW/templates/_hub/roles.yaml', 'hub/locales/zh-TW/seed/範例文件/.ai/tasks/example.md',
+  'hub/locales/ko/seed/example/.ai/tasks/one.md'];
 test('Public overlay selects Chinese documents, PR templates and only the intended workflow', () => {
   for (const name of publicNames) assert.equal(selected(name, true), true, name);
   for (const name of ['.github/workflows/private.yml', '.github/secrets.txt', 'private.md']) assert.equal(selected(name, true), false, name);
 });
-test('Both template languages and fictional seeds remain selected and inspected', () => {
+test('Built-in templates, every locale pack and fictional seeds remain selected and inspected', () => {
   for (const name of [...sourceNames, 'docs/project-hub/templates/project/.ai/rules.md', 'docs/project-hub/templates/_hub/roles.yaml', 'hub/seed/example/.ai/tasks/one.md']) {
     assert.equal(selected(name, false), true, name);
     assert.equal(excluded(name), false, name);
     assert.throws(() => inspect([entry(name, '-----BEGIN '+'PRIVATE KEY-----')]), /private key/);
   }
 });
-test('Chinese allowlists never expose personal ledger or runtime management metadata', () => {
+test('Locale pack allowlists never expose personal ledger or runtime management metadata', () => {
   for (const name of ['hub/personal/.ai/tasks/private.md', 'hub/personal/_hub/config.json',
-    'docs/project-hub/templates/zh-TW/project/.ai/chat/private.md',
-    'hub/seed-zh-TW/example/.ai/work/private.md', 'hub/seed-zh-TW/example/.ai/handoff/private.md',
-    'docs/project-hub/templates/zh-TW/_hub/state.log', 'hub/seed-zh-TW/example/_hub/accounts.json',
-    'hub/seed-zh-TW/example/.codex/config.toml', 'hub/seed-zh-TW/example/.claude/settings.json']) assert.equal(excluded(name), true, name);
+    'hub/locales/zh-TW/templates/project/.ai/chat/private.md', 'hub/locales/zh-TW/private/.ai/tasks/private.md',
+    'hub/locales/zh-TW/seed/example/.ai/work/private.md', 'hub/locales/zh-TW/seed/example/.ai/handoff/private.md',
+    'hub/locales/zh-TW/templates/_hub/state.log', 'hub/locales/zh-TW/seed/example/_hub/accounts.json',
+    'hub/locales/zh-TW/seed/example/.codex/config.toml', 'hub/locales/zh-TW/seed/example/.claude/settings.json']) assert.equal(excluded(name), true, name);
 });
 test('Secret files and generated outputs remain excluded inside all public allowlists', () => {
-  for (const prefix of ['hub/seed-zh-TW/example/', 'docs/project-hub/templates/zh-TW/project/']) {
+  for (const prefix of ['hub/locales/zh-TW/seed/example/', 'hub/locales/zh-TW/templates/project/']) {
     for (const tail of ['.env', '.env.local', '.npmrc', 'secret.key', 'private.pem', 'state.log', 'node_modules/file', 'public-release/file', '.git/config']) assert.equal(excluded(prefix+tail), true, prefix+tail);
   }
 });
@@ -44,7 +45,7 @@ test('Reviewed literals are exact and file-specific; unknown binaries require re
   assert.doesNotThrow(() => inspect([entry('hub/test/accounts.test.js','a'+'@example.test')]));
   assert.throws(() => inspect([entry('README.zh-TW.md','a'+'@example.test')]), /email/);
   assert.throws(() => inspect([entry('hub/test/accounts.test.js','other'+'@example.test')]), /email/);
-  assert.throws(() => inspect([entry('hub/seed-zh-TW/example/secret.png','not reviewed')]), /binary file needs review/);
+  assert.throws(() => inspect([entry('hub/locales/zh-TW/seed/example/secret.png','not reviewed')]), /binary file needs review/);
 });
 test('CI keeps read-only permissions, both language tests, guard-preserving bundle build and signature verification', () => {
   const workflow=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/macos-app.yml'),'utf8');
@@ -61,9 +62,9 @@ test('Committed dry export includes all A-D runtime inputs and Chinese metadata 
   assert.match(stdout,/inspection: 0 findings/);
   const output=path.join(root,'public-release/ProjectHub');
   for(const name of [...publicNames,'hub/lib/trash.js','hub/lib/app-update.js','hub/lib/app-update-workflow.js',
-    'hub/public/locale.js','hub/locales/zh-TW.json','hub/lib/locale.js',
-    'docs/project-hub/templates/zh-TW/project/.ai/rules.md','docs/project-hub/templates/zh-TW/project/.ai/tasks/_template.md',
-    'docs/project-hub/templates/zh-TW/_hub/roles.yaml','hub/seed-zh-TW/Project Hub/.ai/tasks/sample-hub-01.md']) assert.ok(fs.existsSync(path.join(output,name)),name);
+    'hub/public/locale.js','hub/locales/zh-TW/pack.json','hub/locales/zh-TW/messages.json','hub/locales/zh-TW/ui-messages.json','hub/lib/locale.js',
+    'hub/locales/zh-TW/templates/project/.ai/rules.md','hub/locales/zh-TW/templates/project/.ai/tasks/_template.md',
+    'hub/locales/zh-TW/templates/_hub/roles.yaml','hub/locales/zh-TW/seed/Project Hub/.ai/tasks/sample-hub-01.md']) assert.ok(fs.existsSync(path.join(output,name)),name);
   for(const name of ['.git','.ai','hub/node_modules','hub/pr-c-ja-full.log','table-preview-dark.png']) assert.equal(fs.existsSync(path.join(output,name)),false,name);
   assert.match(execFileSync('git',['check-ignore','public-release/ProjectHub/README.md'],{cwd:root,encoding:'utf8'}),/public-release/);
 });

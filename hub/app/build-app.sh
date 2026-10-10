@@ -9,6 +9,20 @@ if [ -n "${HUB_STORAGE_GUARD:-}" ]; then
   "$HUB_STORAGE_GUARD" || exit $?
 fi
 HERE="$(cd "$(dirname "$0")/.." && pwd)"        # hub/
+if [ "$HUB_LANG" != "ja" ]; then
+  if ! node - "$HERE" "$HUB_LANG" <<'NODE'
+const fs = require('fs'), path = require('path');
+const [hub, locale] = process.argv.slice(2);
+try {
+  if (!/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(locale) ||
+      JSON.parse(fs.readFileSync(path.join(hub, 'locales', locale, 'pack.json'), 'utf8')).locale !== locale) process.exit(1);
+} catch { process.exit(1); }
+NODE
+  then
+    echo "指定された言語パックがありません。日本語を使います。"
+    export HUB_LANG=ja
+  fi
+fi
 DEST="${HUB_APP_DIR:-$HOME/Applications}"
 VER="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$HERE/package.json" | head -n 1)"   # package.json の版
 TARGET="$DEST/Project Hub.app"
@@ -74,11 +88,14 @@ if [ "${HUB_BUNDLE_RUNTIME:-0}" = "1" ]; then
     cp -R "$HERE/$item" "$RUNTIME/hub/"
   done
   cp -R "$HERE/../docs/project-hub/templates" "$RUNTIME/docs/project-hub/"
-  for item in README.md README.zh-TW.md LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.zh-TW.md; do
-    cp "$HERE/../$item" "$RUNTIME/"
+  # Base documents are required; translated copies (README.<locale>.md etc.) follow installed languages.
+  cp "$HERE/../README.md" "$HERE/../LICENSE" "$HERE/../THIRD_PARTY_NOTICES.md" "$RUNTIME/"
+  for file in "$HERE/.."/README.*.md "$HERE/.."/THIRD_PARTY_NOTICES.*.md; do
+    [ ! -f "$file" ] || cp "$file" "$RUNTIME/"
   done
-  for item in README.md README.zh-TW.md CHANGELOG.md CHANGELOG.zh-TW.md seed seed-zh-TW; do
-    cp -R "$HERE/$item" "$RUNTIME/hub/"
+  cp -R "$HERE/seed" "$HERE/README.md" "$HERE/CHANGELOG.md" "$RUNTIME/hub/"
+  for file in "$HERE"/README.*.md "$HERE"/CHANGELOG.*.md; do
+    [ ! -f "$file" ] || cp "$file" "$RUNTIME/hub/"
   done
   HUB_LOCATION="@bundle/runtime/hub"
   # Recipient workspace/guard are provided at launch, not copied from CI.
@@ -91,19 +108,29 @@ node - "$HERE/package.json" "$APP/Contents/Info.plist" "$EXEC" "$HUB_LOCATION" "
 const fs = require('fs');
 const [pkg, file, executable, hub, port, root, guard, language] = process.argv.slice(2);
 const version = JSON.parse(fs.readFileSync(pkg)).version;
+const path = require('path'), localeRoot = path.join(path.dirname(pkg), 'locales');
 const xml = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
-const tr = (ja, zh) => language === 'zh-TW' ? zh : ja;
+const installed = fs.readdirSync(localeRoot).filter(locale => {
+  if (locale === 'ja' || !/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(locale)) return false;
+  try { return JSON.parse(fs.readFileSync(path.join(localeRoot, locale, 'pack.json'), 'utf8')).locale === locale; }
+  catch { return false; }
+}).sort();
+let messages = {};
+if (language !== 'ja') {
+  try { messages = JSON.parse(fs.readFileSync(path.join(localeRoot, language, 'native.json'), 'utf8')); } catch {}
+}
+const tr = ja => typeof messages?.[ja] === 'string' ? messages[ja] : ja;
 const values = {
  CFBundleName:'Project Hub', CFBundleDisplayName:'Project Hub', CFBundleIdentifier:'local.projecthub',
- CFBundleVersion:version, CFBundleShortVersionString:version, CFBundleDevelopmentRegion:language === 'zh-TW' ? 'zh-TW' : 'ja',
+ CFBundleVersion:version, CFBundleShortVersionString:version, CFBundleDevelopmentRegion:language,
  CFBundlePackageType:'APPL', CFBundleExecutable:executable, CFBundleIconFile:'AppIcon', LSMinimumSystemVersion:'12.0',
- NSDocumentsFolderUsageDescription:tr('書類フォルダにあるプロジェクトの台帳と本体を読み書きするために使います。', '用於讀寫文件資料夾中的專案台帳與本體。'),
- NSDesktopFolderUsageDescription:tr('デスクトップにある資料を開くために使います。', '用於開啟桌面上的資料。'),
- NSAppleEventsUsageDescription:tr('Finder に、フォルダやファイルの場所を開いてもらうために使います。', '用於透過 Finder 開啟資料夾或檔案位置。'),
- NSDownloadsFolderUsageDescription:tr('ダウンロードフォルダにある資料を開くために使います。', '用於開啟下載資料夾中的資料。'),
+ NSDocumentsFolderUsageDescription:tr('書類フォルダにあるプロジェクトの台帳と本体を読み書きするために使います。'),
+ NSDesktopFolderUsageDescription:tr('デスクトップにある資料を開くために使います。'),
+ NSAppleEventsUsageDescription:tr('Finder に、フォルダやファイルの場所を開いてもらうために使います。'),
+ NSDownloadsFolderUsageDescription:tr('ダウンロードフォルダにある資料を開くために使います。'),
  HubDir:hub, HubPort:port, HubRoot:root, HubStorageGuard:guard, HubLanguage:language
 };
-fs.writeFileSync(file, '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n' + Object.entries(values).map(([k,v]) => '<key>'+k+'</key><string>'+xml(v)+'</string>').join('\n') + '\n<key>CFBundleLocalizations</key><array><string>ja</string><string>zh-TW</string></array>\n<key>NSHighResolutionCapable</key><true/>\n<key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>\n</dict></plist>\n');
+fs.writeFileSync(file, '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n' + Object.entries(values).map(([k,v]) => '<key>'+k+'</key><string>'+xml(v)+'</string>').join('\n') + '\n<key>CFBundleLocalizations</key><array>' + ['ja', ...installed].map(locale => '<string>'+xml(locale)+'</string>').join('') + '</array>\n<key>NSHighResolutionCapable</key><true/>\n<key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>\n</dict></plist>\n');
 NODE
 
 # アイコン：app/icon.png（Codex が仕上げた 1024×1024）→ 無ければ見本の icon-concept.png から .icns を作る

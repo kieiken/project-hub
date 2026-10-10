@@ -689,7 +689,3 @@ input.cm{width:100%;border:1px solid var(--line);background:var(--panel);border-
 
 /* 設定の再描画ではブラウザのアンカー補正で位置を変えない。 */
 .settings-view{overflow-anchor:none}
-
-html[lang="zh-TW"] .pane.dropping::after{content:"拖到這裡即可交付"}
-html[lang="zh-TW"] .chat.dropping::after{content:"拖到這裡即可加入指示欄"}
-html[lang="zh-TW"] .view.dropping::after{content:"拖到這裡即可新增參考資料夾（AI 只讀取）"}

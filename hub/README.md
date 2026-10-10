@@ -172,6 +172,7 @@ git pull --rebase
 - `server.js`：Node.js で動く（画面内の作業画面には node-pty を使う）。`127.0.0.1:4545` だけで待ち受け、他のサイトからの操作は受け付けない
 - `lib/frontmatter.js`：台帳の先頭部分を読む ／ `lib/store.js`：台帳と作業ファイルの読み書き ／ `lib/launch.js`：起動コマンドの組み立て ／ `lib/sessions.js`：画面の中の作業画面（node-pty） ／ `lib/roles.js`：役割分担の読み書き ／ `lib/git.js`：作業用コピーの作成・取り込み・片付け
 - `public/`：画面（`vendor/` に xterm.js を同梱） ／ `seed/`：最初の台帳 ／ `test/`：`node --test --test-force-exit hub/test/*.test.js`
+- `locales/<言語>/`：日本語以外の言語パック（今は `zh-TW`）。日本語は本体に内蔵で、`HUB_LANG` に入っている言語パックが無ければ日本語で動きます。言語を足す時は本体を変えず、フォルダを1つ足します：`pack.json`（`locale` はフォルダ名と同じ・`name`・`dateLocale`）が必須で、`messages.json`（サーバーの `lt`）・`ui-messages.json`（画面だけの文言）・`terms.json`（見出し・状態や役割の表示名）・`native.json`（Mac App とInfo.plist）・`ui.css`・`seed/`・`templates/`（`_hub/`・`project/`）は必要なものだけ置きます。辞書のキーは日本語の原文で、差し込む値は `${0}` のように書きます
 
 ## コピー・削除・整理と確認
 
@@ -181,4 +182,4 @@ git pull --rebase
 
 ## CIでのMac App作成
 
-`.github/workflows/macos-app.yml` は両言語の試験と乾式公開検査の後、本体を含む繁體中文AppとSHA256を配布用に組み立てます。`HUB_BUNDLE_RUNTIME=1` の時だけ本体・辞書・テンプレート・見本をApp内に入れます。起動には別途Node.js 22以上と利用するAI CLIが必要です。通常のビルドは従来どおりソースの場所を参照します。Appは自己署名で、公証は行いません。
+`.github/workflows/macos-app.yml` は両言語の試験と乾式公開検査の後、本体を含む繁體中文AppとSHA256を配布用に組み立てます。`HUB_BUNDLE_RUNTIME=1` の時だけ本体・言語パック・テンプレート・見本をApp内に入れます。起動には別途Node.js 22以上と利用するAI CLIが必要です。通常のビルドは従来どおりソースの場所を参照します。Appは自己署名で、公証は行いません。
