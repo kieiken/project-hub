@@ -9,7 +9,7 @@ const path = require('path');
 const os = require('os');
 const { Remote, isRemote, whoOf, cookieOf } = require('../lib/remote');
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-remote-'));
+const tmp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-remote-'));
 const root = path.join(tmp, 'workspace'), pdir = path.join(root, 'Product', 'サンプルアプリ');
 const FILE = path.join(root, '_hub', 'remote.json');
 const port = 49000 + Math.floor(Math.random() * 500);
@@ -52,9 +52,12 @@ test.after(async () => { sessions.stopAll(); await new Promise(resolve => server
 
 test('中継の印がある通信だけを外からとみなす', () => {
   assert.equal(isRemote({ headers: { host: '127.0.0.1:4545' } }), false);
-  for (const h of ['tailscale-user-login', 'x-forwarded-for', 'x-forwarded-host']) assert.equal(isRemote({ headers: { [h]: 'x' } }), true, h);
+  assert.equal(isRemote({ headers: {} }), false);
+  for (const h of ['tailscale-user-login', 'x-forwarded-for', 'x-forwarded-host', 'forwarded', 'x-real-ip', 'via']) assert.equal(isRemote({ headers: { [h]: 'x' } }), true, h);
   assert.equal(whoOf({ headers: { 'x-forwarded-for': '100.1.1.1, 127.0.0.1' } }), '100.1.1.1');
   assert.equal(whoOf({ headers: { 'tailscale-user-login': 'a@b', 'x-forwarded-for': '1.1.1.1' } }), 'a@b');
+  assert.equal(whoOf({ headers: { forwarded: 'for=203.0.113.5;proto=https' } }), '203.0.113.5');
+  assert.equal(whoOf({ headers: { 'x-real-ip': '203.0.113.6' } }), '203.0.113.6');
   assert.equal(cookieOf({ headers: { cookie: 'a=1; hub_session=tok%2B; b=2' } }), 'tok+');
 
 });
