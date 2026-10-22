@@ -128,6 +128,19 @@ test('status exposes only login/email; login command preserves default credentia
   assert.deepEqual(a.command('codex', 'default', 'login').args, ['login', '--device-auth']);
   assert.ok(a.command('codex', x.id, 'status').args.includes('cli_auth_credentials_store="file"'));
 });
+test('claude status reads logged-out JSON despite exit 1 but keeps spawn failures and timeouts unknown', async () => {
+  const exit = (extra = {}) => Object.assign(new Error('Command failed'), { code: 1, killed: false, signal: null, ...extra });
+  const json = '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}';
+  const replies = [
+    { error: exit(), stdout: json, stderr: '' },
+    { error: Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }), stdout: '', stderr: '' },
+    { error: exit({ killed: true, signal: 'SIGTERM' }), stdout: json, stderr: '' },
+    { error: exit(), stdout: 'not json', stderr: '' },
+  ];
+  const a = fixture({ execute: async () => replies.shift() });
+  assert.deepEqual(await a.status('claude', 'default'), { status: 'logged-out', email: '' });
+  for (let i = 0; i < 3; i++) assert.equal((await a.status('claude', 'default')).status, 'unknown');
+});
 test('busy, default confirmation and an in-progress logout protect both auth and starts', async () => {
   let busy = true, resolve, calls = 0;
   const a = fixture({ busy: () => busy, execute: () => { calls++; return new Promise(r => { resolve = r; }); } }), x = a.add('codex', 'one');
