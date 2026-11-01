@@ -2,7 +2,7 @@
 
 [繁體中文版](README.zh-TW.md) — `HUB_LANG=zh-TW`（未設定は日本語）。
 
-**Project Hub 4.125は正式版です。** 現在の配布版は [Mac 4.125.9](https://github.com/kieiken/project-hub/releases/tag/v4.125.9) と [Windows 4.125.2](https://github.com/kieiken/project-hub/releases/tag/v4.125.2) です。使ってみた感想、不具合の報告、Pull Request を歓迎します。送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
+**Project Hub 4.125は正式版です。** 現在の配布版は [Mac 4.126.41](https://github.com/kieiken/project-hub/releases/tag/v4.126.41) と [Windows 4.125.2](https://github.com/kieiken/project-hub/releases/tag/v4.125.2) です。使ってみた感想、不具合の報告、Pull Request を歓迎します。送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
 
 このリポジトリの公開ソースは4.125.0時点のもので、配布アプリの版とは異なります。
 
@@ -28,7 +28,7 @@
 
 ## 前提
 
-- macOS。Windows 11 x64 の試用は、下の「Windows 版」を参照してください
+- macOS。Windows 11 x64 は、下の「Windows 版」を参照してください
 - Node.js 22 以上、Git
 - 使う AI の CLI（Claude Code / Codex / GeminiのAgy CLI）を入れて、ログインしておく
 - 作業画面の部品（node-pty）とアプリ（Project Hub.app）を作るには、Apple の開発ツールが必要
@@ -49,7 +49,9 @@ bash hub/setup.sh
 
 使い方・更新のしかたは [hub/README.md](hub/README.md) を見てください。
 
-## Windows 版（限定試用）
+## Windows 版
+
+Windows 11 x64 向けの正式版 4.125.2 を配布しています。Mac だけで使える隔離実行など、Windows では使えない機能もあります。
 
 Windows 11 x64 向けに、ブラウザで開く方法と、WebView2 を使う未署名の専用窓を用意しています。準備と起動の手順は [Windows 専用窓の案内](hub/app/windows/README.md) を読んでください。準備済みのフォルダでは `hub/start-window.cmd` で専用窓、`hub/start.cmd` でブラウザ版を開きます。普通の権限で使い、管理者として起動しないでください。Mac 用の `setup.sh` は使いません。
 
