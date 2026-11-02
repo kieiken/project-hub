@@ -50,7 +50,7 @@ function worker(dir){
  const req=read(dir,'request.json');if(!req)process.exit(1);
  try{const fd=fs.openSync(path.join(dir,'started-once'),'wx',0o600);fs.closeSync(fd);}catch{process.exit(1);}
  const fd=fs.openSync(path.join(dir,'out.jsonl'),'a',0o600),decoder=new StringDecoder('utf8');let n=0,rest='',err='',ended=false,timer;
- const line=l=>{fs.writeSync(fd,JSON.stringify({n:++n,line:l})+'\n');fs.fsyncSync(fd);};
+ const line=l=>{fs.writeSync(fd,JSON.stringify({n:++n,line:l,at:Date.now()})+'\n');fs.fsyncSync(fd);};
  const chunk=d=>{rest+=d;const parts=rest.split('\n');rest=parts.pop();for(const l of parts)line(l);};
  let owned;let cli;
  const stop=signal=>{if(owned)return owned.signal(signal);};const end=(code,signal,error)=>{if(ended)return;ended=true;clearInterval(timer);chunk(decoder.end());if(rest)line(rest);fs.closeSync(fd);atomic(dir,'stderr.json',{text:err});atomic(dir,'exit.json',{code,signal,error});};

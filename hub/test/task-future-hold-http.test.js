@@ -10,7 +10,7 @@ const {IntegrateAuto}=require('../lib/integrate-auto'),tick=IntegrateAuto.protot
 const {Store}=require('../lib/store'),hold=require('../lib/task-future-hold'),store=new Store(root);
 const p=store.createProject({name:'Fixture'}).project,parent=store.createTask(p.id,{title:'親'}),child=store.createTask(p.id,{title:'将来案',parent:parent.id});
 const runtime=require('../server'),server=runtime.server;let base;
-test.before(async()=>{await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;});
+test.before(async()=>{await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));await require('../server').restoreReady;base='http://127.0.0.1:'+server.address().port;});
 test.after(async()=>{runtime.chats.running.clear();server.closeAllConnections();await new Promise(r=>server.close(r));IntegrateAuto.prototype.tick=tick;fs.rmSync(tmp,{recursive:true,force:true});});
 const args=(held,task=child.id)=>{const t=store.readTask(store.taskFile(p.id,task));return {project:p.id,task,held,before:Boolean(t.futureHold),revision:t.futureHoldRevision||null,expectedHash:t.completionHash,confirm:true};};
 async function post(body,authorized=true){const r=await fetch(base+'/api/task/future-hold',{method:'POST',headers:{...(authorized?{'X-Hub':'1'}:{}),'Content-Type':'application/json',Connection:'close'},body:JSON.stringify(body)});return {status:r.status,out:await r.json()};}

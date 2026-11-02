@@ -49,6 +49,12 @@ test('invalid data, IDs, assets, links and names preserve the previous installed
     docs: dir => write(path.join(dir, 'docs/README.md'), 'Missing changelog'),
     html: dir => write(path.join(dir, 'ui.json'), { 'あなたの番': '<img src=x onerror="alert(1)">' }),
     incompleteHtml: dir => write(path.join(dir, 'ui.json'), { 'あなたの番': '<img src=x onerror="alert(1)"' }),
+    borrowedSlot: dir => write(path.join(dir, 'ui.json'), { 'あなたの番': '${2}' }),
+    composedTag: dir => write(path.join(dir, 'ui.json'), { '件数：${0}': '<${0}' }),
+    internalMarker: dir => write(path.join(dir, 'ui.json'), { 'あなたの番': '\uE0002\uE001' }),
+    graphemeMarkup: dir => write(path.join(dir, 'native.json'), { '原文': '<\u0338img src=x onerror=alert(1)>' }),
+    nativeMarkup: dir => write(path.join(dir, 'native.json'), { 'あなたの番': '<img src=x onerror="alert(1)">' }),
+    nativeComposedTag: dir => write(path.join(dir, 'native.json'), { '<p>${0}</p>': '<p><${0}</p>' }),
   };
   for (const [name, corrupt] of Object.entries(invalid)) await t.test(name, t => {
     const f = fixture(t); packs.importPack(f.root, f.source);

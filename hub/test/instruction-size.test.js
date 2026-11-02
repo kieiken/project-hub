@@ -29,6 +29,84 @@ const options = { ai: 'claude', model: 'Fable 5.1', rows: [], text: 'unique-curr
 const git = args => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 const stateFile = path.join(root, '_hub/limits.json');
 
+test('節の索引だけが会話依頼文に増え、固定規則・その他の依頼文・端末用は不変', () => {
+  const file = store.taskFile(p.id, t.id), original = fs.readFileSync(file, 'utf8');
+  const { taskReadIndex, MAX_BYTES } = require('../lib/task-read-index');
+  const raw = original.split('## 手順')[0] + '## 最新の再開要約\nsummary fixture\n## やったこと\ndone\n## 次にやること\nnext\n## 手順\n### latest\n- [ ] pending\n## 成果\nresult\n';
+  try {
+    fs.writeFileSync(file, raw + '## 成果\n'); // Duplicate: no advisory, same existing prompt inputs.
+    const before = prompt(), terminal = taskPrompt(p, t, file, dir, 'terminal');
+    const full = fs.readFileSync(path.join(dir, '.ai/chat/existing.rules.md'), 'utf8');
+    fs.writeFileSync(file, raw);
+    const after = prompt(), index = taskReadIndex(raw, { task: t.id, summaryIncluded: true });
+    assert.ok(index);
+    assert.equal(after.replace('\n' + index, ''), before);
+    assert.ok(Buffer.byteLength(after) - Buffer.byteLength(before) <= MAX_BYTES + 1);
+    assert.equal(instructions.split(after).fixed, instructions.split(before).fixed);
+    assert.ok(instructions.split(after).dynamic.endsWith(index));
+    assert.equal(fs.readFileSync(path.join(dir, '.ai/chat/existing.rules.md'), 'utf8'), full);
+    assert.equal(taskPrompt(p, t, file, dir, 'terminal'), terminal);
+    assert.doesNotMatch(terminal, /節の行範囲/);
+    // Incomplete summaries retain their existing warning; never claim rereading is unnecessary.
+    fs.writeFileSync(file, raw.replace('summary fixture', '承認'.repeat(2100)));
+    const incomplete = prompt();
+    assert.match(incomplete, /重要情報だけで要約上限/);
+    assert.match(incomplete, /節の行範囲/);
+    assert.doesNotMatch(incomplete, /再開要約は上記に含むため再読不要/);
+  } finally { fs.writeFileSync(file, original); }
+});
+
+test('1回の案内省略はdynamicだけを除き、既定の依頼文と端末・固定規則・短縮送信を保つ', () => {
+  const file = store.taskFile(p.id, t.id), original = fs.readFileSync(file, 'utf8');
+  const raw = original.split('## 手順')[0] + '## 最新の再開要約\nsummary\n## やったこと\ndone\n## 次にやること\nnext\n## 手順\n### latest\n- [ ] pending\n## 成果\nresult\n';
+  const controlled = value => taskPrompt(p, t, file, dir, 'chat', undefined, { readIndex: value });
+  try {
+    fs.writeFileSync(file, raw);
+    const normal = prompt(), terminal = taskPrompt(p, t, file, dir, 'terminal');
+    const full = fs.readFileSync(path.join(dir, '.ai/chat/existing.rules.md'), 'utf8');
+    const omitted = controlled(false), a = instructions.split(normal), b = instructions.split(omitted);
+    const index = require('../lib/task-read-index').taskReadIndex(raw, { task: t.id, summaryIncluded: true });
+    assert.ok(index);
+    assert.equal(omitted, normal.replace('\n' + index, ''));
+    assert.equal(controlled(true), normal);
+    assert.equal(controlled(undefined), normal);
+    assert.equal(prompt(), normal); // Never saved to task/meta or the next request.
+    assert.equal(a.fixed, b.fixed); assert.equal(a.hash, b.hash);
+    assert.doesNotMatch(b.dynamic, /節の行範囲/);
+    assert.equal(taskPrompt(p, t, file, dir, 'terminal', undefined, { readIndex: false }), terminal);
+    assert.equal(fs.readFileSync(path.join(dir, '.ai/chat/existing.rules.md'), 'utf8'), full);
+    const first = instructions.select(normal, { meta: {}, ai: 'codex', sid: 'index-control', resume: false });
+    const without = instructions.select(omitted, { meta: { rulesSent: { codex: first.rules } }, ai: 'codex', sid: 'index-control', resume: true });
+    assert.equal(without.short, true); assert.match(without.fixed, /【決まり】前回と同じ/);
+    const restored = instructions.select(normal, { meta: { rulesSent: { codex: without.rules } }, ai: 'codex', sid: 'index-control', resume: true });
+    assert.equal(restored.short, true); assert.match(restored.prefix, /節の行範囲/);
+  } finally { fs.writeFileSync(file, original); }
+});
+
+test('作業記録が1行増えても固定hashは同じで、再開時は短い規則と更新済み索引を送る', () => {
+  const file = store.taskFile(p.id, t.id), original = fs.readFileSync(file, 'utf8');
+  const raw = original.split('## 手順')[0] + '## 最新の再開要約\nsummary fixture\n## やったこと\ndone\n## 次にやること\nnext\n## 手順\n### latest\n- [ ] pending\n## 成果\nresult\n';
+  try {
+    fs.writeFileSync(file, raw);
+    const first = prompt(), a = instructions.split(first);
+    const terminal = taskPrompt(p, t, file, dir, 'terminal');
+    const sent = instructions.select(first, { meta: {}, ai: 'codex', sid: 'index-session', resume: false });
+    fs.writeFileSync(file, raw.replace('done\n', 'done\n\n'));
+    const second = prompt(), b = instructions.split(second);
+    assert.equal(a.hash, b.hash);
+    assert.equal(a.fixed, b.fixed);
+    assert.doesNotMatch(b.fixed, /節の行範囲/);
+    assert.match(b.dynamic, /節の行範囲/);
+    assert.match(b.dynamic, /sed -n '[\d,]+p' '\.ai\/tasks\/existing\.md'/);
+    assert.notEqual(a.dynamic, b.dynamic);
+    const resumed = instructions.select(second, { meta: { rulesSent: { codex: sent.rules } }, ai: 'codex', sid: 'index-session', resume: true });
+    assert.equal(resumed.short, true);
+    assert.match(resumed.fixed, /【決まり】前回と同じ/);
+    assert.ok(resumed.prefix.endsWith(b.dynamic));
+    assert.equal(taskPrompt(p, t, file, dir, 'terminal'), terminal);
+  } finally { fs.writeFileSync(file, original); }
+});
+
 test('確認方針は通常・自由対話の会話/ターミナルと全文へ一回届き、旧版の再開時は更新される', () => {
   const roleFile = path.join(root, '_hub/roles.yaml'), beforeRoles = fs.readFileSync(roleFile);
   const beforeLimits = fs.existsSync(stateFile) ? fs.readFileSync(stateFile) : null;
@@ -112,7 +190,9 @@ test('前置きは基点1回・既存指示を40%以上削減、新しい必須�
   assert.match(copyText, /［本体に取り込む］がある/);
   console.log(JSON.stringify({ beforeChars: before, afterChars: after, reduction: 1 - after / before, copyBeforeChars: baseline.copyPrompt.length, copyAfterChars: copyText.length, fixedChars: turn.fixed.length }));
   // 比較元にない必須規則だけを各一回追加し、既存指示の上限と重複禁止を保つ。
-  const addedRule = instructions.SEND_TEXT_RULE.length + instructions.WORKFLOW_RULE.length + chat.PLAIN_CHOICE_RULE.length + 3;
+  const ownerRule = '（ローカル認証は curl -H @"$HUB_HEADERS" を使用。秘密を本文に書かない）';
+  assert.equal(text.split(ownerRule).length - 1, 1);
+  const addedRule = instructions.SEND_TEXT_RULE.length + instructions.WORKFLOW_RULE.length + chat.PLAIN_CHOICE_RULE.length + ownerRule.length + 3;
   assert.equal(text.split(chat.PLAIN_CHOICE_RULE).length - 1, 1);
   assert.equal(text.split(instructions.SEND_TEXT_RULE).length - 1, 1);
   assert.equal(copyText.split(instructions.SEND_TEXT_RULE).length - 1, 1);
@@ -131,6 +211,17 @@ test('前置きは基点1回・既存指示を40%以上削減、新しい必須�
   }
   const mtime = fs.statSync(path.join(dir, '.ai/chat/existing.rules.md')).mtimeMs;
   prompt(); assert.equal(fs.statSync(path.join(dir, '.ai/chat/existing.rules.md')).mtimeMs, mtime);
+});
+
+test('固定指示の委任例は実際のproject・taskと必須ai・model・textを含む', () => {
+  const fixed = instructions.split(prompt()).fixed;
+  const line = fixed.split('\n').find(line => line.startsWith('【委任】'));
+  const example = JSON.parse(line.match(/例(\{[^\n]+\})）/)[1]);
+  assert.deepEqual(example, { project: p.id, task: t.id, ai: 'codex', model: 'gpt-6.1-sol', text: '差分' });
+  // The fallback uses the ledger folder name; JSON serialization must escape IDs.
+  const unusual = instructions.packet({ pdir: dir, task: 'task"quote', policy: '', port: 4545 });
+  const fallback = JSON.parse(instructions.split(unusual).fixed.match(/例(\{[^\n]+\})）/)[1]);
+  assert.deepEqual(fallback, { ...example, project: path.basename(dir), task: 'task"quote' });
 });
 
 test('同じセッションは短文とコピー規則、版・session・5番目・圧縮・失敗後に復元', () => {

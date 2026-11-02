@@ -105,13 +105,14 @@ function renderTurn(list) {
   const reply = list.filter(({ p, t }) => notificationKind(p, t) === 'reply');
   const work = list.filter(({ p, t }) => notificationKind(p, t) === 'work');
   const done = list.filter(({ p, t }) => notificationKind(p, t) === 'done');
-  const cur = turnTab === 'done' ? done : turnTab === 'work' ? work : reply;
+  const results = list.filter(({ p, t }) => notificationKind(p, t) === 'results');
+  const cur = turnTab === 'done' ? done : turnTab === 'work' ? work : turnTab === 'results' ? results : reply;
   $('#main').innerHTML = UI.template`<div class="view"><div class="ph"><h2>あなたの番</h2>
-      <div class="seg turn-tabs" role="tablist"><button class="${turnTab === 'reply' ? 'on' : ''}" data-turn-tab="reply" type="button" role="tab" aria-selected="${turnTab === 'reply'}">返事待ち（${reply.length}）</button><button class="${turnTab === 'work' ? 'on' : ''}" data-turn-tab="work" type="button" role="tab" aria-selected="${turnTab === 'work'}">作業中（${work.length}）</button><button class="${turnTab === 'done' ? 'on' : ''}" data-turn-tab="done" type="button" role="tab" aria-selected="${turnTab === 'done'}">完了（${done.length}）</button></div>
-      <span class="small">${turnTab === 'done' ? UI.text('AI が終わったと言っている作業。中身を見て、完了に移すか続けるかを決めます') : turnTab === 'work' ? UI.text('AIや成果整理が動いている、または指示が順番待ちの作業') : UI.text('返事待ち・上限で止まっている作業と、AI が入力や選択を待っている作業')}</span><span class="sp"></span>
+      <div class="seg turn-tabs" role="tablist"><button class="${turnTab === 'reply' ? 'on' : ''}" data-turn-tab="reply" type="button" role="tab" aria-selected="${turnTab === 'reply'}">返事待ち（${reply.length}）</button><button class="${turnTab === 'work' ? 'on' : ''}" data-turn-tab="work" type="button" role="tab" aria-selected="${turnTab === 'work'}">作業中（${work.length}）</button><button class="${turnTab === 'results' ? 'on' : ''}" data-turn-tab="results" type="button" role="tab" aria-selected="${turnTab === 'results'}">成果確認（${results.length}）</button><button class="${turnTab === 'done' ? 'on' : ''}" data-turn-tab="done" type="button" role="tab" aria-selected="${turnTab === 'done'}">完了（${done.length}）</button></div>
+      <span class="small">${turnTab === 'done' ? UI.text('AI が終わったと言っている作業。中身を見て、完了に移すか続けるかを決めます') : turnTab === 'work' ? UI.text('AI・成果確認・成果整理が動いている、または指示が順番待ちの作業') : turnTab === 'results' ? UI.text('成果の記録に確認が必要な作業。内容を開いて、整理を頼むか確認します') : UI.text('返事待ち・上限で止まっている作業と、AI が入力や選択を待っている作業')}</span><span class="sp"></span>
       ${turnTab === 'reply' && reply.length > 1 ? UI.template`<button class="btn plain sm" id="turn-answer-all" type="button" title="AI には送らず、すべての返事待ちの表示を消します。AI は続きを始めません。">すべて送らずに消す（${reply.length}）</button>` : ''}</div>
     ${turnTab === 'reply' && cur.length ? UI.html('<p class="small">［送らずに消す］は質問と返事待ちの表示だけを消します。AI には送らず、続きを始めません。</p>') : ''}
-    ${cur.length ? UI.template`<div class="card">${cur.map(({ p, t }) => taskRow(p, t, true, turnTab)).join('')}</div>` : UI.template`<p class="note">${turnTab === 'done' ? UI.text('完了に移すものはありません。') : turnTab === 'work' ? UI.text('作業中のものはありません。') : UI.text('返事が必要なものはありません。')}</p>`}</div>`;
+    ${cur.length ? UI.template`<div class="card">${cur.map(({ p, t }) => taskRow(p, t, true, turnTab)).join('')}</div>` : UI.template`<p class="note">${turnTab === 'done' ? UI.text('完了に移すものはありません。') : turnTab === 'work' ? UI.text('作業中のものはありません。') : turnTab === 'results' ? UI.text('成果の確認が必要なものはありません。') : UI.text('返事が必要なものはありません。')}</p>`}</div>`;
 }
 
 function splitProject(p) {
@@ -225,9 +226,9 @@ function taskRow(p, t, showProject, tab) {
   const kind = notificationKind(p, t);
   const status = t.question ? UI.text('返事待ち')
     : t.state === '返事待ち' || t.state === '上限で停止' ? UI.label(t.state)
-    : kind === 'reply' ? t.resultsPending ? UI.text('成果整理') : t.chatQueueHeld ? WORKING(p,t) ? UI.text('作業中・指示保留') : UI.text('停止保留') : UI.text('返事待ち')
-    : kind === 'work' ? UI.text('作業中') : kind === 'done' ? UI.text('完了') : '';
-  const badge = status ? UI.template`<span class="pill task-status ${kind === 'work' ? 'busy' : kind === 'done' ? 'confirm' : 'needs'}">${status}</span>` : '';
+    : kind === 'reply' ? t.chatQueueHeld ? WORKING(p,t) ? UI.text('作業中・指示保留') : UI.text('停止保留') : UI.text('返事待ち')
+    : t.resultsPending ? resultsNotice(p,t).label : kind === 'work' ? UI.text('作業中') : kind === 'done' ? UI.text('完了') : '';
+  const badge = status ? UI.template`<span class="pill task-status ${kind === 'work' ? 'busy' : kind === 'done' ? 'confirm' : kind === 'results' ? 'results' : 'needs'}">${status}</span>` : '';
   const k = `data-p="${esc(p.id)}" data-t="${esc(t.id)}"`;
   const pending = CONFIRM(p, t) && tab !== 'reply';
   const action = tab === 'work' || kind === 'work' ? '' : t.resultsPending || t.chatQueueHeld ? completionButtons(p,t) : tab === 'reply' ? UI.template`<button class="btn sm" data-act="answered" ${k} type="button" title="AI には送りません。この質問と返事待ちの表示だけを消します。AI は続きを始めません。">送らずに消す</button>`
@@ -243,11 +244,22 @@ function pendingBar(p, t) {
   return UI.template`<button class="btn sm" data-act="taskcomplete" ${k} type="button">完了に移す</button><button class="btn plain sm" data-act="taskcontinue" ${k} type="button">まだ続ける</button>`;
 }
 
+// 一覧・ツリー・作業画面で、検査と整理の実稼働を同じ条件で示す。
+function resultsNotice(p, t) {
+  if (t.resultsPending.auto === 'running') return {label:UI.text('成果整理中'),text:UI.text('手順は済みです。AIが成果の記録を整えています'),active:true};
+  if (t.resultsPending.code === 'checking') return {label:UI.text('成果確認中'),text:UI.text('成果を確認しています。確認が終わるまで完了には移せません'),active:true};
+  if (WORKING(p,t)) return {label:UI.text('作業中'),text:UI.text('AIが作業中、または指示が順番待ちです。成果の確認は終了後に行います'),active:true};
+  return {label:UI.text('成果確認'),text:UI.text('成果の記録に確認が必要です。成果整理は現在動いていません'),active:false};
+}
+
 function completionButtons(p, t) {
   const k = `data-p="${esc(p.id)}" data-t="${esc(t.id)}"`;
   if (t.chatQueueHeld) return UI.html('<div class="wq">停止前の未処理の指示が保留中です。作業画面の待ち指示を確認してください。</div>');
   if (t.question && t.state !== '完了') return ''; // 質問がある間は、まず答える（完了の操作は出さない）
-  if (t.resultsPending) return UI.template`<div class="wq"><span>${t.resultsPending.auto === 'running' ? UI.text('手順は済みです。AIが成果の記録を整えています') : UI.text('成果の記録が整っていません：') + esc(t.resultsPending.reason)}</span>${t.resultsPending.detail && t.resultsPending.auto !== 'running' ? UI.template`<div class="small">${esc(t.resultsPending.detail)}</div>` : ''}${t.resultsPending.auto === 'running' ? '' : UI.template`<button class="btn sm" data-act="resultsorganize" ${k} type="button">成果の整理を頼む</button>`}</div>`;
+  if (t.resultsPending) {
+    const notice = resultsNotice(p,t);
+    return UI.template`<div class="wq"><span>${notice.text}</span>${t.resultsPending.reason ? UI.template`<div class="small">${esc(t.resultsPending.reason)}</div>` : ''}${t.resultsPending.detail && !notice.active ? UI.template`<div class="small">${esc(t.resultsPending.detail)}</div>` : ''}${notice.active ? '' : UI.template`<button class="btn sm" data-act="resultsorganize" ${k} type="button">成果の整理を頼む</button>`}</div>`;
+  }
   if (t.completionPending) return UI.template`<div class="wq"><span>AI が手順をすべて済にしました。完了に移しますか？</span><button class="btn sm" data-act="taskcomplete" ${k} type="button">完了に移す</button><button class="btn plain sm" data-act="taskcontinue" ${k} type="button">まだ続ける</button>
     ${t.done ? UI.template`<div class="small done-note"><b>やったこと：</b>${linkify(t.done.length > 400 ? t.done.slice(0, 400) + '…' : t.done)}</div>` : ''}</div>`;
   return UI.template`<button class="btn plain sm" data-act="${t.state === '完了' ? 'taskcontinue' : 'taskcomplete'}" ${k} type="button">${t.state === '完了' ? UI.text('再開する') : UI.text('完了に移す')}</button>${t.state === '完了' ? UI.template`<button class="btn plain sm" data-act="tasktidy" ${k} type="button">片付け…</button>` : ''}`;
@@ -315,7 +327,7 @@ function quickControls(p) {
 function drawQuick(p) {
   if (view.kind !== 'project' || view.project !== p.id) return;
   const thumbs = $('#quick-images'), controls = $('#quick-controls'), d = quickDraft(p);
-  if (thumbs) thumbs.innerHTML = d.images.map((x, i) => UI.template`<span class="quick-image"><img src="${esc(x.url)}" alt="${esc(x.name)}"><button type="button" data-quick-remove="${i}" aria-label="${esc(x.name)}を取り消す">×</button><small title="${esc(x.name)}">${esc(x.name)}</small></span>`).join('');
+  if (thumbs) thumbs.innerHTML = d.images.map((x, i) => UI.template`<span class="quick-image"><img src="${esc(globalThis.HubLocalAuth?.url(x.url) || x.url)}" alt="${esc(x.name)}"><button type="button" data-quick-remove="${i}" aria-label="${esc(x.name)}を取り消す">×</button><small title="${esc(x.name)}">${esc(x.name)}</small></span>`).join('');
   if (controls) controls.innerHTML = quickControls(p);
 }
 

@@ -91,6 +91,8 @@ class IntegrateAuto {
     return [...out,...(this.active||this.integrate.active?[{kind:'integration',message:lt('統合の処理が進行中です')}]:[])];
   }
   startWaiting(b){ return this.waiting(b); }
+  waitingAsync(b){return Promise.resolve(this.waiting(b));}
+  previewAsync(b){return require('./integration-read-worker').integration(this.integrate,this,b);}
   preview(b){
     const prior=this.integrate.readLane(b.project,b.task,b.sibling),fresh=b.simple&&(!prior||closed(prior));
     const waiting=this.startWaiting(fresh?{...b,selected:[]}:{...b,id:prior?.id});
@@ -102,6 +104,7 @@ class IntegrateAuto {
       if(this.abandon&&!d.sibling)d.abandon=this.abandon.status(b.project,b.task);
       const r=this.integrate.read(b.project,b.task,d.id),status=this.resumeStatus(r,b.reviewSupplement);
       d.resumeAllowed=status.allowed;d.resumeMessage=status.message;
+      if(status.organizeRecovery?.length){const x=this.integrate.tokens.get(d.token);if(x)x.value.organizeRecoveryHash=createHash('sha256').update(JSON.stringify(status.organizeRecovery)).digest('hex');}
       if(!status.allowed){d.blockers=[...(d.blockers||[]),status.message];this.integrate.tokens.delete(d.token);delete d.token;}
       else if(b.reviewSupplement){
         const spec=require('./integration-review-supplement').descriptor(b.reviewSupplement,r),x=this.integrate.tokens.get(d.token);
@@ -136,7 +139,7 @@ class IntegrateAuto {
     try{require('./task-future-hold').assertRecord(this.integrate,r);}catch(e){return {allowed:false,message:e.message,retry:[]};}
     try{require('./task-continuation').assertNoArchive(this.integrate.dir,r);}catch(e){return {allowed:false,message:e.message,retry:[]};}
     try{require('./integration-assignment').validate(r);}catch(e){return {allowed:false,message:e.message};}
-    const retry=[],reviewRecovery=[],questionRecovery=[],evidenceRecovery=[];
+    const retry=[],reviewRecovery=[],questionRecovery=[],evidenceRecovery=[],organizeRecovery=[];
     const blocked=message=>({allowed:false,message,retry:[]});
     if(supplement){try{const spec=require('./integration-review-supplement').descriptor(supplement,r);if(r.auto.attempts[spec.attempt]?.phase!=='review')throw Error('Supplemented review is not awaiting repair');}catch(e){return blocked(e.message);}}
     if(r?.auto?.main?.state==='intent')return blocked(lt('本体取り込みの結果が不明です。再送はしません'));
@@ -148,7 +151,13 @@ class IntegrateAuto {
       if(row){
         if(row.error)return blocked(row.error);
         if(a.savedResults){try{this.verifySavedReview(r,a);}catch(e){return blocked(e.message);}}
-        if(a.phase==='organize'&&!row.asks?.length&&this.integrate.simple?.organizedItem){try{this.integrate.simple.organizedItem(r,a,row);}catch(e){return blocked(e.message);}}
+        if(a.phase==='organize'&&!row.asks?.length&&this.integrate.simple?.organizedItem){try{this.integrate.simple.organizedItem(r,a,row);}catch(e){
+          try{
+            const proof=require('./integration-organize-recovery').repair(this.integrate,r,k,a,row);
+            if(!this.abandon)throw e;this.abandon.inspect(r.project,r.task);
+            organizeRecovery.push({k,proof});continue;
+          }catch(failure){return blocked(e.message+' / '+failure.message);}
+        }}
         if(a.phase==='order'&&!row.asks?.length&&this.integrate.simple?.orderHead){try{this.integrate.simple.orderHead(r,k,row);}catch(e){return blocked(e.message);}}
         if(row.asks?.length){
           const proof=a.phase==='code'&&this.questionResolution?.(r,k,a,row),current=require('./integration-safety').target(this.integrate,{target:r.target,p:this.integrate.store.readProject(r.project)});
@@ -177,7 +186,7 @@ class IntegrateAuto {
     }
     if(supplement&&!evidenceRecovery.some(x=>x.k===supplement.attempt&&x.proof.artifactRecovery))return blocked('Supplement requires a closed, failed empty review');
     if(retry.length&&this.integrate.simple?.validate){try{this.integrate.simple.validate(r,{notSent:retry.map(x=>x.k)});}catch(e){return blocked(e.message);}}
-    return {allowed:true,retry,reviewRecovery,questionRecovery,evidenceRecovery,message:retry.length?lt('委任は開始前に拒否されていました。修正済みの担当で再開できます'):lt('保存された受付・終了記録から続けます')};
+    return {allowed:true,retry,reviewRecovery,questionRecovery,evidenceRecovery,organizeRecovery,message:organizeRecovery.length?'整理AIは正常終了しましたが成果・残件の検査で停止しました。［再開］で正しい形式を指定した整理を一度だけ新しく依頼します。対象や残す選択を変える場合は［中止して選び直す］を使ってください':retry.length?lt('委任は開始前に拒否されていました。修正済みの担当で再開できます'):lt('保存された受付・終了記録から続けます')};
   }
   async dispatchAttempt(r,a,k,request){
     sibling.assert(this.integrate,r);
@@ -213,8 +222,16 @@ class IntegrateAuto {
     if(b.reviewSupplement&&JSON.stringify(b.reviewSupplement)!==JSON.stringify(supplement))throw Error('Review supplement differs from preview');
     const status=this.resumeStatus(this.integrate.read(b.project,b.task,token?.id),supplement);
     if(!status.allowed)throw Object.assign(Error(status.message),{code:'INTEGRATION_DELIVERY_BLOCKED'});
+    if((token?.organizeRecoveryHash||null)!==(status.organizeRecovery.length?createHash('sha256').update(JSON.stringify(status.organizeRecovery)).digest('hex'):null))throw Error('確認中に整理の検査停止の証拠が変わりました');
     if(supplement&&token.reviewSupplementProofHash!==createHash('sha256').update(JSON.stringify(status.evidenceRecovery)).digest('hex'))throw Error('Review supplement differs from preview');
     const r=this.integrate.resumeRecord(b),head=require('./integration-safety').target(this.integrate,{target:r.target,p:this.integrate.store.readProject(r.project)}).head;
+    for(const {k,proof} of status.organizeRecovery){
+      const recovery=require('./integration-organize-recovery'),a=r.auto.attempts[k];
+      const fresh=recovery.repair(this.integrate,r,k,a,this.savedCompletion(r,k,'organize'));
+      if(JSON.stringify(fresh)!==JSON.stringify(proof))throw Error('整理の検査停止の証拠が変わりました');
+      const next=recovery.next(r,k);a.phase='superseded';a.supersededBy=next;a.organizeFailure=proof;
+      r.auto.attempts[next]={phase:'organize',project:a.project,task:a.task,at:stamp(),organizeRepair:{previous:k,proof,by:'human',at:stamp()},organizeRepairReady:true};
+    }
     for(const {k,proof} of status.evidenceRecovery){
       const a=r.auto.attempts[k],i=r.items.find(i=>i.project===a.project&&i.task===a.task),row=this.savedCompletion(r,k,'review'),fresh=proof.artifactRecovery?require('./integration-review-supplement').recovery(this.integrate,r,i,a,k,row,supplement):require('./integration-review-results').recovery(this.integrate,r,i,a,k,row);
       if(JSON.stringify(fresh)!==JSON.stringify(proof))throw Error('Saved result review evidence changed');

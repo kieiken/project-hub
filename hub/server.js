@@ -18,9 +18,10 @@ const ROOT = expandHome(process.env.HUB_ROOT || path.join(os.homedir(), 'Documen
 // do not implement this lease; trial selection also checks running old servers.
 const dataUse = require.main === module ? require('./lib/workspace-use').acquire([ROOT, path.join(os.homedir(), 'Documents', 'freetalk')].filter(p => p === ROOT || fs.existsSync(p))) : null;
 if (dataUse) process.once('exit', () => dataUse.release());
+const localAuth = new (require('./lib/local-auth').LocalAuth)({ root: ROOT });
 const move = new (require('./lib/move').Move)({ root: ROOT, version: require('./package.json').version });
 if (require.main === module && move.needsStartup()) {
-  module.exports = { move, server: require('./lib/move-boot').serve(move, { port: Number(process.env.HUB_PORT || 4545), version: require('./package.json').version, entry: __filename }) };
+  module.exports = { move, server: require('./lib/move-boot').serve(move, { port: Number(process.env.HUB_PORT || 4545), version: require('./package.json').version, entry: __filename, auth: localAuth }) };
   return;
 }
 require('./lib/store').loadMovePathMap(ROOT);
@@ -53,8 +54,8 @@ const remoteLib = require('./lib/remote');
 const { guidance } = require('./lib/guidance');
 const instructions = require('./lib/instructions');
 const { AsyncLocalStorage } = require('async_hooks');
-let webchat;
-const webchatActive = (project, task) => Boolean(webchat?.busy().some(j => j.project === project && (!task || [j.task, j.parent].includes(task))));
+let webchat, museDirect;
+const webchatActive = (project, task) => Boolean([...(webchat?.busy() || []),...(museDirect?.busy() || [])].some(j => j.project === project && (!task || [j.task, j.parent].includes(task))));
 
 const PORT = Number(process.env.HUB_PORT || 4545);
 let conversationHistory;
@@ -65,7 +66,8 @@ const accounts = new (require('./lib/accounts').Accounts)({ file: path.join(ROOT
 launch.setAccounts(accounts);
 function limitModels() { return limitEngine.limitModels(); }
 const limitEvidence = new ModelLimits(path.join(ROOT, '_hub', 'limits.json'), { models: limitModels,
-  creditPolicy: rolesData, creditState: (ai, account) => usage.creditState(ai, account) });
+  creditPolicy: rolesData, creditState: (ai, account) => usage.creditState(ai, account),
+  onCreditDecision: (o, decision) => record('credit-priority-decision', o, decision) });
 const usage = new Usage({ dry: DRY, accounts, resetFile:path.join(ROOT, '_hub', 'reset-ticket-attempts.json'),
   onReset:account => limitEvidence.clearAccount('codex', account),
   beforeRead: (ai, account) => accounts.available(ai, account), observe: snapshot => {
@@ -74,7 +76,8 @@ const usage = new Usage({ dry: DRY, accounts, resetFile:path.join(ROOT, '_hub', 
 // Private role-review requests cannot use paid-credit overrides. Without that
 // optional hook, ordinary conversations retain their existing limit policy.
 function roleReviewLimit(request) { return limitEngine.roleReviewLimit(request); }
-async function refreshLimitEvidence(request) { return limitEngine.refreshLimitEvidence(request); }
+function startCreditCheck(request) { return limitEngine.startCreditCheck(request); }
+async function refreshLimitEvidence(request, earlyCreditCheck) { return limitEngine.refreshLimitEvidence(request, earlyCreditCheck); }
 const PUBLIC = path.join(__dirname, 'public');
 const bootModules=require('./lib/runtime-generation').preload(__filename,{optional:[path.join(__dirname,'lib/license/owner-edition'),path.join(__dirname,'paid')]});
 const extensionUI = extensions.uiSource(), extensionCSS = extensions.uiSource('style');
@@ -164,6 +167,7 @@ const readVersion = () => {
 const VERSION = readVersion();
 const BOOT_HEAD=gitw.savedHead(__dirname)||null;
 const HUB_INSTANCE = crypto.randomUUID();
+localAuth.instance = HUB_INSTANCE;
 function changelog(n) {
   let text = '';
   const pack = activePack(['docs']);
@@ -386,7 +390,7 @@ gpt.gptChildren = new (require('./lib/gpt-children').GptChildren)({ store, chat,
     if (chats.queue(p.id, t.id).length) { const e = Error(lt('AI・整理・確認が動いています')); e.status = 409; throw e; }
     assertWorkspaceIdle(p, t, false, false, owner, true);
   } });
-webchat = extensions.create('webchat', { root: ROOT, gpt, store, chat, assertIdle: assertConversationIdle, onSettled: dispatchAfterWebchat,
+webchat = extensions.create('webchat', { root: ROOT, gpt, store, chat, admit:action=>chats.withStrictHandoff(action), assertIdle: assertConversationIdle, onSettled: dispatchAfterWebchat,
   onReply: (p,t,row) => {
     if (p.kind !== 'freetalk' && row.asks?.length) {
       try { store.updateTask(p.id,t.id,{state:'返事待ち',question:row.asks.map(a=>a.question).filter(Boolean).join(' / ').slice(0,300)}); }
@@ -432,6 +436,7 @@ const updateBlockers = () => {
     out.push({kind,project:project||'',task:task||'',message:label ? label+'：'+message : message});
   };
   for(const j of webchat?.busy() || []) add('webchat',j.project,j.task,lt('Chat／Proの自動送信が進行中です'));
+  for(const j of museDirect?.busy() || []) add('muse',j.project,j.task,lt('Museへの送信と結果の受信が進行中です'));
   if(webchat?.control)add('webchat-control','','',lt('Chat／Proの操作が進行中です'));
   if(appShell.rebuilding)add('rebuild','','',lt('アプリの作り直しが進行中です'));
   if(aiTools.isOperating())add('cli','','',lt('AI CLIの操作が進行中です'));
@@ -451,9 +456,9 @@ const updateBlockers = () => {
     return out.findIndex(y=>y.kind===x.kind&&y.project===x.project&&y.task===x.task&&(x.kind!=='background'||y.pid===x.pid))===n;
   });
 };
-const updateRuntimeBusy = () => restartControl?.committed || executionGate.barrier || executionGate.leases.size>0 || discussion?.active() || Boolean(webchat?.busy().length || webchat?.control) || appShell.rebuilding || aiTools.isOperating() || sessions.list().some(x => x.running) || chats.running.size > 0 || procwatch.list().some(x => x.project) ||
+const updateRuntimeBusy = () => restartControl?.committed || executionGate.barrier || executionGate.leases.size>0 || discussion?.active() || Boolean(webchat?.busy().length || webchat?.control || museDirect?.busy().length) || appShell.rebuilding || aiTools.isOperating() || sessions.list().some(x => x.running) || chats.running.size > 0 || procwatch.list().some(x => x.project) ||
   store.listProjects().some(p => maintenance.locked(p.id) || github.locked(baseOf(p)));
-const updateBusy = (handoffErrors) => restartControl?.committed || (handoffErrors ?? chats.handoffErrors()).length>0 || taskIntegrate.active || integrateAuto.active || updateRuntimeBusy() || [...chats.queues.values()].some(q => q.length > 0) || store.listProjects().some(p => p.tasks.some(t => chats.queue(p.id, t.id).length > 0));
+const updateBusy = (handoffErrors) => restartControl?.committed || taskIntegrate.active || integrateAuto.active || updateRuntimeBusy() || [...chats.queues.values()].some(q => q.length > 0) || store.listProjects().some(p => p.tasks.some(t => chats.queue(p.id, t.id).length > 0)) || (handoffErrors ?? chats.guardErrors()).length>0;
 const updateSource = process.env.HUB_UPDATE_SOURCE || '';
 // Translation is opt-in and requires an optional pack in the update source.
 const translationReady = fs.existsSync(path.join(updateSource, 'hub/lib/locale.js')) && Boolean(loadPack({ dir: path.join(updateSource, 'langpacks/zh-TW'), warn: false }));
@@ -461,6 +466,8 @@ const automation = process.env.HUB_AUTO_TRANSLATE === '1' && process.env.HUB_TRA
   ? require('./lib/app-update-workflow').createAutomation({ root: ROOT, env: process.env }) : {};
 const appUpdate = new (require('./lib/app-update').AppUpdate)({ root: ROOT, source: updateSource,
   appPath: process.env.HUB_UPDATE_APP || '', version: VERSION, hubPath: __dirname, license, env: process.env, dry: DRY, busy: updateBusy, ownerEdition: license.owner, ...automation });
+appUpdate.strictBusy=()=>chats.withStrictHandoff(()=>updateBusy());
+move.strictBusy=()=>chats.withStrictHandoff(()=>move.busy());
 move.edition = license.owner ? 'owner' : 'public';
 move.busy = () => updateBusy() || appUpdate.running || appUpdate.applying() || activeRequests > 0 || taskHistory.activeWrites.size > 0 || freetalkHistory.activeWrites?.size > 0 || restartBlockers().length > 0;
 move.barrier = on => { executionGate.barrier = on; };
@@ -546,6 +553,8 @@ const taskTransfer = new (require('./lib/task-transfer').TaskTransfer)({store,re
   integration:(p,t)=>gitw.integrationReceipt(baseOf(p),lastMerge(p.id,t.id),t),
   notify:(project,task,id)=>{const p=store.readProject(project);const row=p&&chat.read(p.dir,task).find(x=>x.handoff===id||x.offer===id||x.partialReceipt===id);if(row)chats.emit(project,task,{type:'row',row});chatEnded(project,task);}
 });
+// Display workers receive the record only; its Git validation stays off the HTTP loop.
+taskTransfer.integrationRead=(p,t)=>({dir:baseOf(p),record:lastMerge(p.id,t.id),task:t});
 const taskIntegrate = new (require('./lib/task-integrate').TaskIntegrate)({store,transfer:taskTransfer,removal,baseOf});
 const projectNotes = new (require('./lib/project-notes').ProjectNotes)({store,busy:project=>updateBusy()||maintenance.locked(project)});
 const mainMergeTokens=new Map();
@@ -555,14 +564,14 @@ async function internalResult(call){
   let status,body;const response={writeHead:code=>{status=code;},end:text=>{body=JSON.parse(text);}};
   await call(response);if(status!==200||!body?.ok)throw Object.assign(Error(body?.error||lt('正式操作の結果を確認できません')),{delivery:body?.delivery});return body;
 }
-const integrationBlockers = (b,{op}={}) => {
+const integrationBlockers = (b,{op,gitState}={}) => {
   if(!['receipt','main-merge'].includes(op))throw Error('統合操作の種類を確認できません');
   if(!b?.project)return [...(appUpdate.applying()?[{kind:'update',message:lt('Hubの更新が進行中です')}]:[]),...(restartControl?.committed?[{kind:'restart',message:lt('再起動を開始しています')}]:[])];
   const record=op==='receipt'&&taskIntegrate.read(b.project,b.task,b.id||taskIntegrate.tokens.get(b.token)?.value?.id),all=store.listProjects();
   let selected=b.selected||record&&!require('./lib/task-continuation').closed(record)&&record.items;
   if(!selected&&op==='receipt'){const a=taskIntegrate.ancestor(b.project,b.task,{allowBusy:true});selected=all.flatMap(p=>p.tasks.filter(t=>taskIntegrate.simple.related(a,p,t)).map(t=>({project:p.id,task:t.id})));}
-  const p=all.find(p=>p.id===b.project),t=p?.tasks.find(t=>t.id===b.task),target=op==='main-merge'&&t&&gitw.mainOf(expandHome(t.workdir));
-  const paths=target?gitw.changedBetween(target,gitw.inspect(target,{readOnly:true}).head,gitw.inspect(expandHome(t.workdir),{readOnly:true}).head):[];
+  const p=all.find(p=>p.id===b.project),t=p?.tasks.find(t=>t.id===b.task),target=op==='main-merge'&&t&&(gitState?gitState.target:gitw.mainOf(expandHome(t.workdir)));
+  const paths=gitState?gitState.paths:target?gitw.changedBetween(target,gitw.inspect(target,{readOnly:true}).head,gitw.inspect(expandHome(t.workdir),{readOnly:true}).head):[];
   const gatedDirs=[target||t&&(expandHome(t.workdir)||baseOf(p)),...(Array.isArray(selected)?selected:[]).map(c=>{const q=all.find(p=>p.id===c.project),x=q?.tasks.find(t=>t.id===c.task);return q&&(expandHome(x?.workdir)||baseOf(q));})].filter(Boolean);
   const executionWaiting=gatedDirs.some(dir=>executionGate.busy(dir));
   return require('./lib/integration-safety').blockers({op,target,paths,b:{...b,selected},all,baseOf,expand:expandHome,activities:updateBlockers(),global:[
@@ -571,6 +580,13 @@ const integrationBlockers = (b,{op}={}) => {
     ...(appUpdate.applying()?[{kind:'update',message:lt('Hubの更新が進行中です')}]:[]),
     ...(restartControl?.committed?[{kind:'restart',message:lt('再起動を開始しています')}]:[])]});
 };
+async function integrationBlockersAsync(b,{op}={}){
+ if(op!=='main-merge')return integrationBlockers(b,{op});
+ const p=store.readProject(b.project),t=p?.tasks.find(t=>t.id===b.task),dir=t&&expandHome(t.workdir);
+ const target=dir&&await gitw.mainOfAsync(dir);let paths=[];
+ if(target){const main=await gitw.inspectAsync(target),source=await gitw.inspectAsync(dir);if(!main||!source)throw Error('統合対象の保存状態を確認できません');paths=(await gitw.readAsync(target,['diff','--name-only','-z',main.head,source.head])).split('\0').filter(Boolean);}
+ return integrationBlockers(b,{op,gitState:{target,paths}});
+}
 taskIntegrate.consultationWait=b=>integrationBlockers(b,{op:'receipt'});
 const integrateAuto=new (require('./lib/integrate-auto').IntegrateAuto)({integrate:taskIntegrate,busy:b=>Boolean(stopControl.held(b)||integrationBlockers(b,{op:'receipt'}).length>0),waitStatus:b=>integrationBlockers(b,{op:'receipt'}),
   dispatch:async request=>{
@@ -654,9 +670,10 @@ const resultsGate = new (require('./lib/results-gate').ResultsGate)({store,trans
 
 
 // iPhone で開くアドレス（Tailscale の Mac の名前）。tailscale が無い・止まっている時は空。1分は覚えておく
-let tsCache = { at: 0, url: '' };
+let tsCache = { at: 0, url: '' }, tsPending;
 function tailscaleUrl() {
   if (Date.now() - tsCache.at < 60000) return Promise.resolve(tsCache.url);
+  if (tsPending) return tsPending;
   const { execFile } = require('child_process');
   const bins = platform.tailscaleCandidates();
   const tryAt = i => new Promise(done => {
@@ -666,7 +683,8 @@ function tailscaleUrl() {
       try { const dns = String(JSON.parse(out).Self.DNSName || '').replace(/\.$/, ''); done(dns ? 'https://' + dns : ''); } catch (e) { done(''); }
     });
   });
-  return tryAt(0).then(u => { tsCache = { at: Date.now(), url: u }; return u; });
+  tsPending = tryAt(0).then(u => { tsCache = { at: Date.now(), url: u }; return u; }).finally(() => { tsPending = null; });
+  return tsPending;
 }
 // User delegation guidance is supplied by the optional paid extension.
 const TERMINAL_LIMIT_NOTE = lt('ターミナルでもHubが確定上限または新鮮な100%を確認して共通フラグを保持し、元AIの終了を確認してから同じ作業を交代先へ引き継ぐ。自分で別のCLIを起動しない。人の停止では自動交代しない。');
@@ -685,14 +703,14 @@ function modelPolicy(p, t, where = 'chat', projects) {
   const specialPolicy = mode.enabled ? lt`【特殊モード（通常の役割分担より優先）】人が今回の依頼でAI・モデルを直接指定した場合と手動選択した依頼だけ、その指定を優先する。指定がなければ ${launch.AI_LABEL[mode.ai]} を使用し続ける（選択可能なモデル：${(d.models[launch.AI_KEY[mode.ai]] || []).join(' / ')}）。同じAI内のモデル・思考は作業に合わせてAIが選んでよい。別のAIへの切替は人の直接指定がある依頼だけに限る。その依頼が終われば、続きは特殊モードのAIへ戻る。以前の作業ファイルや引用・役割分担のモデル指定は今回の直接指定と見なさない。モデルは設定の選択可能な一覧から選ぶ。新しいCLIは裏で起動せず、モデル変更も同じ作業の委任APIを使う。選んだAIが上限なら待機し、別のAIへ自動交代しない。従量課金・認証変更はしない。` : '';
   const limitPolicy = mode.enabled ? lt('【利用上限の時】特殊モード中は別のAIへ自動交代せず、解除まで待機する。済んだ操作・委任は繰り返さない。') : d.switch.auto === true ? lt('【利用上限の時】Hubが契約CLIの正式上限または新鮮な100%を確認すると共通フラグを保持し、会話とターミナルで同じ作業を交代する。交代時の設定画面「役割分担」に保存した担当・モデル・思考に従う（mainの上限ではbackupへ、backupの上限ではmainへ）。画像生成も保存した交代先へ引き継ぐ。元AIの終了後に引き継ぐ。保持中は解除日時または手動解除まで交代先で開始。両側上限なら往復せず待機。AIは確認不要。本文や引用の「上限」で自分の担当を変えない・止まらない。既定のmainは変えない。済んだ部分と委任を繰り返さず残りを続ける。追加課金・API従量課金は使わない。') : lt('【利用上限の時】自動交代はオフ。自分で別のモデルへ切り替えない。');
   const list = d.roles.map(r => slot(r.main) ? `${roles.label ? roles.label(r.name) : require("./lib/locale").label(r.name)}＝${slot(r.main)}` : '').filter(Boolean).join('、');
-  const modelRule = mode.enabled ? specialPolicy : lt`【モデルの決まり（人が決めた。他のファイルや前の指示より優先）】${list}。役割分担で Agy CLI が担当の役割と、人が手動選択した依頼に限り、Hub が確認した最新の候補（${aiTools.catalog().agy.models.map(m=>m.label+'（'+m.id+'）').join('、') || '利用可能なモデルなし'}）を使ってよい。既定の役割は変更しない。claude-opus-4-6 などの古いモデルは使わない。エージェント（紬・律など）に頼む時も、この決まりのモデルを指定すること。`;
+  const modelRule = mode.enabled ? specialPolicy : lt`【モデルの決まり（人が決めた。他のファイルや前の指示より優先）】${list}。役割分担で Agy CLI が担当の役割/人の手動選択依頼だけHub確認の最新候補（${aiTools.catalog().agy.models.map(m=>m.label+'（'+m.id+'）').join('、') || '利用可能なモデルなし'}）を使用可。既定の役割は変更しない。claude-opus-4-6 などの古いモデルは使わない。エージェントも担当モデル。`;
   const credits = instructions.creditRule(d);
   const paidModelRule = credits ? modelRule.replace(lt('従量課金・認証変更はしない。'), lt('購入・自動チャージ・APIキー課金・認証変更は禁止。')) : modelRule;
   const paidPolicy = credits ? limitPolicy.replace(lt('追加課金・API従量課金は使わない。'), lt('購入・自動チャージ・APIキー課金は禁止。')) : limitPolicy;
   return `${paidModelRule}\n${paidPolicy}${credits ? '\n' + credits : ''}\n${instructions.WORKFLOW_RULE}\n${delegateRule(p, t)}\n\n${p.kind === 'freetalk' ? '自由対話の会話画面。新しい話題は人が［新しい話題］から作る。手順・完了・統合・取り込みの操作はありません。' : guidance(p, resultsGate.decorate(p,t,projects || store.listProjects()), { where, projects: projects || (t.kind === 'derived' && t.derivedFrom?.includes('/') && !t.derivedFrom.startsWith(p.id + '/') ? store.listProjects() : [p]), copy: inWork(p, t) && !copyMissing(p, t), copyMissing: copyMissing(p, t) })}`;
 }
 
-function taskPrompt(p, t, file, dir, where = 'chat', startup) {
+function taskPrompt(p, t, file, dir, where = 'chat', startup, { readIndex = true } = {}) {
   if (p.kind === 'freetalk') return [modelPolicy(p, t, where), freetalk.prompt(p, t)].join('\n\n');
   const issuesRule = lt`【問題点を短くまとめる決まり】PROJECT.md の issues を足す・変える時は、同じプロジェクトの .ai/issues-summary.json も更新する（他プロジェクトには書かない）。保存形式は {"items":[{"hash":"原文のsha256先頭16文字","title":"30字までの問題名","state":"未解決/確認待ち/判断待ち/解決済み/履歴のいずれか","next":"50字までの次の対応（無ければ空）","who":"人/AI/空のいずれか"}]}。原文は文字列ならそのまま、オブジェクトなら text。hash は Node の require('node:crypto').createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16) で計算する（text は原文そのもの。空白・改行を変えない）。問題名と次の対応に作業ID・commit・テスト件数を入れない。新しい状態の項目を足したら、同じ件の古い項目は「履歴」にする。確かめていない事は「確認待ち」にし、不具合・解決と断定しない。原文は消さない。`;
   const rel = dir && path.relative(workRoot(p), dir);
@@ -713,11 +731,12 @@ function taskPrompt(p, t, file, dir, where = 'chat', startup) {
   const context = lt`この作業は${t.kind === 'derived' ? lt('派生作業') : lt('本作業')}。${source ? '派生元の作業ファイル: ' + store.taskFile(source.project.id,source.task.id) + '。' : ''}${sameRefs.length ? '同じ大きなプロジェクト内の参照（読むだけ）: '+sameRefs.join(' / ')+'。' : ''}`;
   const look = refs.length || rels.length ? lt`参考にしてよい場所（読むだけ。書き換えない）: ${[...refs, ...rels].join(' / ')}。` : '';
   if (where !== 'terminal') {
-    const resumeView=require('./lib/text-budget').summaryView(fs.readFileSync(file,'utf8')),resumeSummary=resumeView.text;
+    const taskRaw=fs.readFileSync(file,'utf8'),resumeView=require('./lib/text-budget').summaryView(taskRaw),resumeSummary=resumeView.text;
+    const index=readIndex===false?'':require('./lib/task-read-index').taskReadIndex(taskRaw,{task:t.id,summaryIncluded:!!resumeSummary&&!resumeView.incomplete});
     const pastIndex=taskHistory.indexFile(p.id,t.id),past=pastIndex?lt`過去の会話の目次：台帳/${path.relative(p.dir,pastIndex).split(path.sep).join('/')}（全文を読まず、必要な話題だけ開く。根拠は保管先の原文の行番号で確認）\n`:'';
-    const read = past+(resumeView.warning?resumeView.warning+'\n':'')+(resumeSummary?lt`最新の再開要約：\n${resumeSummary}\n読む：作業ファイルの最新の再開要約・手順・成果。昔の詳細と保管会話は必要箇所だけ。\n`:'')+lt`作業「${String(t.title).replace(/[\r\n]+/g, ' ')}」（作業ID ${t.id}）の続きを。読む：台帳/.ai/rules.md・台帳/PROJECT.md・台帳/.ai/tasks/${t.id}.md${resumeSummary?'の最新の再開要約・手順・成果（過去全文を読み直さない）':''}。区切りで更新、実施した手順だけ[x]（無ければ3〜5個）。workdir・state・questionは書き換えない（Hub管理）。`;
-    return instructions.packet({ pdir: p.dir, project: p.id, task: t.id, roleData: executionRoles(), policy: modelPolicy(p, t, where, all), issues: issuesRule, port: PORT, contextRule: launch.CONTEXT_RULE, askRule: chat.ASK_RULE,
-      common: [dir ? `cwd=${dir === p.dir ? '台帳' : '台帳/' + path.relative(p.dir, dir).split(path.sep).join('/')}。${rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? lt('専用の作業用コピー。ここだけで作業。本体には触らない（取り込みは人の［本体に取り込む］）。') : lt('本体。コピーは使わず、ここで作業してよい（Hub指定）。')}` : '', look, context, read,require('./lib/chat-continuation').prompt(p.dir,t.id,PORT)].filter(Boolean).join('\n') });
+    const read = past+(resumeView.warning?resumeView.warning+'\n':'')+(resumeSummary?lt`最新の再開要約：\n${resumeSummary}\n読む：作業ファイルの最新の再開要約・手順・成果。昔の詳細と保管会話は必要箇所だけ。\n`:'')+lt`作業「${String(t.title).replace(/[\r\n]+/g, ' ')}」（作業ID ${t.id}）の続きを。読む（台帳内）：.ai/rules.md・PROJECT.md・.ai/tasks/${t.id}.md${resumeSummary?'の最新の再開要約・手順・成果（過去全文を読み直さない）':''}。区切りで更新・実施手順のみ[x]（無ければ3〜5個）。workdir・state・questionは書き換えない（Hub管理）。`;
+    return instructions.packet({ pdir: p.dir, project: p.id, task: t.id, dynamic: index, roleData: executionRoles(), policy: modelPolicy(p, t, where, all), issues: issuesRule, port: PORT, contextRule: launch.CONTEXT_RULE, askRule: chat.ASK_RULE,
+      common: [dir ? `cwd=${dir === p.dir ? '台帳' : '台帳/' + path.relative(p.dir, dir).split(path.sep).join('/')}。${rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? lt('作業用コピー限定。本体には触らない（人が［本体に取り込む］）。') : lt('本体。コピーは使わず、ここで作業してよい（Hub指定）。')}` : '', look, context, read,require('./lib/chat-continuation').prompt(p.dir,t.id,PORT)].filter(Boolean).join('\n') });
   }
   const resumeView=require('./lib/text-budget').summaryView(fs.readFileSync(file,'utf8'));
   return [resumeView.text&&lt`最新の再開要約：\n${resumeView.text}`,resumeView.warning,modelPolicy(p, t, where, all), where === 'terminal' ? TERMINAL_HANDOFF_NOTE + '\n' + (modelView.special().enabled ? lt('特殊モード中は別のAIへ自動交代せず、解除まで待機する。') : TERMINAL_LIMIT_NOTE) : '', where === 'terminal' && startup ? launch.startupInfo(startup.ai, startup.model, undefined, codexFastFor(p.id, t.id)) : '', launch.CONTEXT_RULE, copy, look, context, issuesRule,require('./lib/chat-continuation').prompt(p.dir,t.id,PORT), lt`作業「${String(t.title).replace(/[\r\n]+/g, ' ')}」（作業ID ${t.id}）の続きをしてください。${require('./lib/task-history').latest(fs.readFileSync(file,'utf8'))?'作業ファイルは先頭の最新の再開要約・手順・成果から再開し、旧全文や保管会話は必要箇所だけ参照する。':''}まず次の3つを読むこと: ${path.join(p.dir, '.ai', 'rules.md')} / ${path.join(p.dir, 'PROJECT.md')} / ${file}。区切りごとに作業ファイルを更新し、「## 手順」の終わった所を [x] にすること（手順が無ければ3〜5個書く）。作業ファイルの先頭の workdir・state・question の行は Hub が管理する：書き換えない（特に、取り込み済みの後に古い内容で書き戻さない）。`].filter(Boolean).join('\n\n');
@@ -775,15 +794,19 @@ const freetalkHistory = new FreetalkHistory(freetalk, task => {
   return '';
 });
 const freetalkAttachments = new (require('./lib/freetalk-attachments').FreetalkAttachments)(freetalk);
-const taskHistory = new (require('./lib/task-history').TaskHistory)({store,
-  busy:(project,task,{history=true}={})=>{
+const taskHistory = new (require('./lib/task-history').TaskHistory)({store,record,
+  busy:(project,task,{history=true,bodyPreview}={})=>{
     if(discussion?.active(project,task))return {code:'target-ai',message:'話し合いが進行中です。停止または完了後に整理してください'};
     const all=store.listProjects(),own=all.find(p=>p.id===project)?.tasks.find(t=>t.id===task),wd=own?.workdir&&path.resolve(expandHome(own.workdir));
     const shared=wd&&all.some(p=>p.tasks.some(t=>!(p.id===project&&t.id===task)&&t.workdir&&path.resolve(expandHome(t.workdir))===wd));
     const external=procwatch.list().some(x=>x.project===project&&(x.task===task||!x.task&&wd&&!shared&&x.cwd&&path.resolve(x.cwd)===wd));
     if(webchat?.busy().some(j=>j.project===project&&j.task===task)||chats.busy(project,task)||chats.queue(project,task).length||sessions.list().some(x=>x.running&&x.project===project&&x.task===task)||external)return {code:'target-ai',message:lt('この作業のAIが作業中です。作業が終わってから、もう一度［要約して続ける］を押してください')};
     const blocker=historyBlockers(project)[0];if(blocker)return {code:blocker.kind,message:blocker.message};
-    if(history&&textBudget.pending(project).some(x=>x.j.task===task))return lt('本文整理の復旧が必要です');
+    if(history){
+      // Display-only snapshot. Mutation callers omit this context and retain full reads.
+      if(bodyPreview&&textBudget.journalKey()!==bodyPreview.key)throw Error('本文整理の確認中に記録が変わりました');
+      if((bodyPreview?bodyPreview.pending:textBudget.pending(project)).some(x=>x.j.task===task))return lt('本文整理の復旧が必要です');
+    }
     if(!history&&shared)return lt('他の作業も同じ作業場所を使っています');
     const integration=history?taskIntegrate.historyBlocker(project,task):taskIntegrate.pending().some(r=>r.project===project&&r.task===task)&&lt('統合・引渡しの続きが残っています');
     if(integration)return integration;
@@ -854,8 +877,8 @@ async function autoStep(project,task){
     }});
     if(captured.statusCode!==200){
       if(taskHistory.autoJob(project,task)?.stage==='cancelled')return;
-      const error=String(JSON.parse(captured.body||'{}').error||'');
-      if(/上限中|待機/.test(error)||error===lt('AI の更新・モデル再取得が進行中です')){taskHistory.setAuto(project,task,{stage:'reserved',delegated:false,reason:error});return;}
+      const failure=JSON.parse(captured.body||'{}'),error=String(failure.error||'');
+      if(['HUB_LIMIT_WAIT','HUB_AI_MAINTENANCE'].includes(failure.code)){taskHistory.setAuto(project,task,{stage:'reserved',delegated:false,reason:error});return;}
       taskHistory.setAuto(project,task,{delegated:false,error});return taskHistory.autoFinish(project,task,{});
     }
     return;
@@ -929,10 +952,38 @@ function bodyNoticeState(){
   try{for(const p of store.listProjects()){if(p.kind==='freetalk')continue;for(const task of textBudget.state(p.id).tasks){const warnings=textBudget.summaryWarnings(p.id,task);if(warnings.length){const key=p.id+' / '+task;notices.set(key,[notices.get(key),...warnings].filter(Boolean).join(' '));}}}}catch(e){notices.set('本文整理',e.message);}
   return [...notices].map(([scope,message])=>({scope,message}));
 }
-const bodyTimer=setInterval(()=>{
-  textBudget.maintainEnabled(() => updateBusy() || appUpdate.applying(), (scope, warnings) => {
-    if(warnings.length)bodyNotices.set(scope,warnings.join(' '));else bodyNotices.delete(scope);
-  });
+let bodyChecking=false,bodyClosed=false;
+const bodyTimer=setInterval(async()=>{
+  if(bodyChecking||bodyClosed)return;bodyChecking=true;
+  try{
+    // Cheap live busy checks first. A failed save is scanned off-thread during
+    // periodic preflight; real writes await a fresh strict worker verdict.
+    const busy=()=>updateBusy([])||appUpdate.applying();
+    const errors=busy()?null:await chats.handoffErrorsAsync();
+    if(bodyClosed)return;
+    let globalWarning=false;
+    const notice=(scope,warnings)=>{
+      if(scope==='本文整理'&&warnings.length)globalWarning=true;
+      if(warnings.length)bodyNotices.set(scope,warnings.join(' '));else bodyNotices.delete(scope);
+    };
+    // Worker reads must finish before the permit: it expires across any await.
+    await textBudget.prepareMaintenance(notice);
+    if(bodyClosed)return;
+    const maintain=()=>{
+      textBudget.maintainEnabled(() => bodyClosed || busy() || errors?.length>0 || updateBusy(),notice);
+      // Both read and maintenance passes completed without a global failure.
+      // Keep individual scope warnings and durable summary conflicts intact.
+      if(!globalWarning)bodyNotices.delete('本文整理');
+    };
+    if(busy()||errors?.length)maintain();else{
+      try{await chats.withStrictHandoff(maintain,undefined,false,{background:true});}
+      catch(e){
+        // Only this background check may defer state churn to the next tick.
+        // The strict guard still refuses the action; user operations keep errors.
+        if(e.message!=='確認中に実行状態が変わりました。少し待ってから操作し直してください')throw e;
+      }
+    }
+  }catch(e){bodyNotices.set('本文整理',e.message);}finally{bodyChecking=false;}
 },15000);bodyTimer.unref();
 const { FreetalkLifecycle } = require('./lib/freetalk-lifecycle');
 const freetalkLifecycle = new FreetalkLifecycle(freetalkHistory, () => {
@@ -1015,7 +1066,7 @@ freetalkSweep.unref();
 const restartBlockers = (handoffErrors) => {
   const out=updateBlockers().filter(x=>x.kind!=='queue'&&!(x.kind==='chat'&&chats.handoffSafe(x.project,x.task))&&!(x.kind==='background'&&chats.supervisedPid(x.pid)));
   const add=(kind,message)=>out.push({kind,message:lt(message)});
-  for(const e of handoffErrors ?? chats.handoffErrors())out.push({kind:'chat-handoff',project:e.project,task:e.task,stage:e.stage,run:e.run,message:lt('会話の終了保存が未解決です。自動では再処理しません')});
+  for(const e of handoffErrors ?? chats.guardErrors())out.push({kind:'chat-handoff',project:e.project,task:e.task,stage:e.stage,run:e.run,message:lt('会話の終了保存が未解決です。自動では再処理しません')});
   if(webchat?.control)add('webchat-control','Chat／Proの操作が進行中です');
   if(taskIntegrate.active || integrateAuto.active)add('integration','統合の処理が進行中です');
   if([...executionGate.leases.values()].some(l=>l.kind==='verification'))add('verification','開発場所の検証と子プロセスの終了確認が進行中です');
@@ -1026,17 +1077,20 @@ const restartBlockers = (handoffErrors) => {
   return out;
 };
 restartControl = new (require('./lib/restart-control').RestartControl)({
-  blockers:restartBlockers,
+  blockers:restartBlockers,admit:action=>chats.withStrictHandoff(action),
   verify:()=>{mainMergeFlow?.verifyRestart();for(const p of store.listProjects())for(const t of p.tasks)chats.queue(p.id,t.id);chats.verifyQueues();},
   execute:()=>{
     record('restart', {}, {from:VERSION,to:readVersion()});
     if(DRY)return;
-    setTimeout(()=>{
-      try{emergencyRestart?.verifyCommitted();mainMergeFlow?.verifyRestart();chats.detachForRestart();stopControl.cleanExit();}catch(e){restartControl.committed=false;restartControl.error=e.message;emergencyRestart?.fail(e.message);record('restart-handoff-error',{}, {error:e.message});return;}
+    setTimeout(async()=>{
+      let ownerRestart;
+      try{await chats.withStrictHandoff(()=>{emergencyRestart?.verifyCommitted();mainMergeFlow?.verifyRestart();if(restartBlockers().length)throw Error('再起動の直前に状態が変わりました');ownerRestart=localAuth.restartEnv();chats.detachChecked();stopControl.cleanExit();});}catch(e){if(localAuth.preserve)try{localAuth.cancelRestart();}catch{}restartControl.committed=false;restartControl.error=e.message;emergencyRestart?.fail(e.message);record('restart-handoff-error',{}, {error:e.message});return;}
       server.close();
       if(process.platform==='win32' && process.env.HUB_WINDOW_LAUNCH) { process.exit(42); return; } // Owned native window/launcher performs the relaunch.
       const nextHub=appUpdate.restartNeeded ? appUpdate.nextHub() : __dirname;
-      const child=require('node:child_process').spawn(process.execPath,[path.join(nextHub,'server.js')],{cwd:nextHub,env:{...process.env,HUB_UPDATE_SOURCE:appUpdate.source,HUB_UPDATE_CONFIRM:appUpdate.data.pendingConfirm?.token || '',HUB_RESTART_WAIT:'1'},detached:true,stdio:['ignore','inherit','inherit']});
+      const restartEnv={...process.env,...ownerRestart,HUB_UPDATE_SOURCE:appUpdate.source,HUB_UPDATE_CONFIRM:appUpdate.data.pendingConfirm?.token || '',HUB_RESTART_WAIT:'1'};
+      delete restartEnv.HUB_AUTH_RESTART;
+      const child=require('node:child_process').spawn(process.execPath,[path.join(nextHub,'server.js')],{cwd:nextHub,env:restartEnv,detached:true,stdio:['ignore','inherit','inherit']});
       child.unref();process.exit(0);
     },200);
   }
@@ -1123,6 +1177,7 @@ const DOC_EXTENSIONS = new Set(['.docx', '.doc', '.rtf', '.odt']);
 function viewInfo(target) {
   try {
     const real = fs.realpathSync(target);
+    if (localAuth.protect(real)) return { status: 403 };
     // macOSの /var → /private/var 等も同じルートとして比較する。
     const roots = placeRoots().map(d => { try { return fs.realpathSync(d); } catch { return d; } });
     if (!insidePlaceRoots(real, roots)) return { status: 404 };
@@ -1148,10 +1203,35 @@ function documentHtml(fd, info, size) {
 
 const stateOffers = new (require('./lib/state-offers').StateOffers)({transfer:taskTransfer,removal,baseOf});
 
+const museSettings = new (require('./lib/muse-settings').MuseSettings)({root:ROOT});
+museDirect = new (require('./lib/muse-direct').MuseDirect)({muse:museSettings,
+  probe:b=>{
+    stopControl.assert(b);
+    if(restartControl?.committed||appUpdate.applying()||executionGate.barrier)throw Error('停止・更新中です。終わってから送ってください。');
+    const p=store.readProject(b.project),t=p?.tasks.find(x=>x.id===b.task);
+    if(!t||t.state==='完了')throw Error('作業または会話が変わりました。新しい会話を開いてください。');
+    if(p.kind==='freetalk') {
+      freetalkHistory.idle(b.task);
+      if(freetalkHistory.state(b.task).generation!==b.generation)throw Error('作業または会話が変わりました。新しい会話を開いてください。');
+    } else if(taskHistory.organizing(b.project,b.task)||taskHistory.state(b.project,b.task).generation!==b.generation)throw Error('作業または会話が変わりました。新しい会話を開いてください。');
+    if(chats.busy(b.project,b.task)||chats.queue(b.project,b.task).length||webchatActive(b.project,b.task))throw Error('前の処理が終わってからMuseへ送ってください。');
+    assertWorkspaceIdle(p,t,false);
+  },emit:(p,t,ev)=>chats.emit(p,t,ev)});
+const conversationSearch = new (require('./lib/conversation-search').ConversationSearch)(store.root);
 const routes = require('./lib/routes').createRoutes([
+  { name: 'musesettings', create: require('./lib/routes/muse-settings'), ctx: { send, PORT, fromRemote, muse: museSettings, direct:museDirect, launch, DRY, record,
+    approvalProbe: request => integrationAssignment(request),
+    approvalDispatch: async request => {
+      const assigned = integrationAssignment(request);
+      let status, body;
+      const response = {writeHead: code => {status = code;}, end: text => {body = JSON.parse(text);}};
+      await delegateRequest(assigned, response, {requestKey: request.requestKey});
+      if (status !== 200 || !body?.ok) throw Error('Muse continuation not confirmed');
+      return body;
+    } } },
   { name: 'queuecontrol', create: require('./lib/routes/queue-control'), ctx: { ROLES_FILE, chats, freetalkAttachments, fromRemote, fs, launch, limitIdentity, lt, modelError, permCmd, pickSpec, queueActions, queueEdit, queueEditable, getQueueRetreat: () => queueRetreat, record, requestAccount, roleHistory, getRoleReview: () => roleReview, roles, rolesData, send, store } },
   { name: 'terminalstart', create: require('./lib/routes/terminal-start'), ctx: { DRY, accountFor, accounts, aiTools, codexFastFor, crypto, fs, gitSnapshot, launch, license, licenseGuard, limitBackup, limitEvidence, limitIdentity, lt, modelError, modelView, path, permCmd, pickSpec, record, refreshLimitEvidence, requestAccount, getRestartControl: () => restartControl, rolesData, saveTerminalPending, send, sessions, startDir, store, taskPrompt, terminalBusy, terminalPending, transcript } },
-  { name: 'chatsend', create: require('./lib/routes/chat-send'), ctx: { DELEGATE_COMPLETED_ERROR, assertWorkspaceIdle, chat, chatEnded, chats, getDiscussion: () => discussion, extensions, freetalk, freetalkAttachments, fs, holdStoppedQueue, getIdeaDispatch: () => ideaDispatch, ideas, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, lt, modelError, modelPolicy, modelView, permCmd, pickSpec, queueActions, queueEdit, queueEditable, record, refreshLimitEvidence, removalReview, reqCtx, requestAccount, roles, rolesData, send, sessions, specialMode, start, startDir, stopControl, store, taskPrompt, verifyIntegrationReviewSend, getWebchat: () => webchat, webchatActive } },
+  { name: 'chatsend', create: require('./lib/routes/chat-send'), ctx: { DELEGATE_COMPLETED_ERROR, assertWorkspaceIdle, chat, chatEnded, chats, getDiscussion: () => discussion, extensions, freetalk, freetalkAttachments, fs, holdStoppedQueue, getIdeaDispatch: () => ideaDispatch, ideas, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, lt, modelError, modelPolicy, modelView, permCmd, pickSpec, queueActions, queueEdit, queueEditable, record, startCreditCheck, refreshLimitEvidence, removalReview, reqCtx, requestAccount, roles, rolesData, send, sessions, specialMode, start, startDir, stopControl, store, taskHistory, taskPrompt, verifyIntegrationReviewSend, getWebchat: () => webchat, webchatActive } },
   { name: 'ideaimage', create: require('./lib/routes/idea-image-upload'), ctx: { send, ideas } },
   { name: 'chatrecovery', create: require('./lib/routes/chat-recovery'), ctx: { send, chats, store } },
   { name: 'terminalio', create: require('./lib/routes/terminal-io'), ctx: { send, lt, sessions, setUnread, launch, modelError, store, pickSpec, limitIdentity, rolesData, record } },
@@ -1160,7 +1240,7 @@ const routes = require('./lib/routes').createRoutes([
   { name: 'rolesettings', create: require('./lib/routes/role-settings'), ctx: { send, lt, roleHistory, ROLES_FILE, roles } },
   { name: 'taskmanagement', create: require('./lib/routes/task-management'), ctx: { send, lt, store, fs, acceleration, chat, record, webchatActive, sessions, chats, emptyLib, removal } },
   { name: 'taskattachments', create: require('./lib/routes/task-attachments'), ctx: { send, lt, store, taskHistory, freetalk, freetalkAttachments, readRaw, MAX_UPLOAD, record, saveUpload, launch, sessions, path, fs } },
-  { name: 'taskintegration', create: require('./lib/routes/task-integration'), ctx: { send, lt, store, inWork, copyMissing, expandHome, gitw, mainMergeDelivery, getMainMergeFlow: () => mainMergeFlow, workRoot, mainMergeTokens, crypto, integrationBlockers, HUB_INSTANCE, lastMerge, record, taskIntegrate, launch, sessions, taskTransfer, setUnread, integrationFailure, integrationAbandon, integrateAuto, pruneUnread, resultsGate, executionRoles, delegateRequest } },
+  { name: 'taskintegration', create: require('./lib/routes/task-integration'), ctx: { send, lt, store, inWork, copyMissing, expandHome, gitw, mainMergeDelivery, getMainMergeFlow: () => mainMergeFlow, workRoot, mainMergeTokens, crypto, integrationBlockers, integrationBlockersAsync, HUB_INSTANCE, lastMerge, record, taskIntegrate, launch, sessions, taskTransfer, setUnread, integrationFailure, integrationAbandon, integrateAuto, pruneUnread, resultsGate, executionRoles, delegateRequest } },
   { name: 'taskbodywrite', create: require('./lib/routes/task-body-write'), ctx: { send, textBudget, record } },
   { name: 'taskcontinuation', create: require('./lib/routes/task-continuation'), ctx: { send, taskHistory, textBudget, autoTick, record } },
   { name: 'taskhistorywrite', create: require('./lib/routes/task-history-write'), ctx: { send, lt, taskHistory, autoTick, autoView, rolesData, delegateRequest } },
@@ -1168,15 +1248,16 @@ const routes = require('./lib/routes').createRoutes([
   { name: 'taskcopy', create: require('./lib/routes/task-copy-record'), ctx: { send, lt, store, copyMissing, lastMerge, record, inWork } },
   { name: 'taskprogress', create: require('./lib/routes/task-progress'), ctx: { send, lt, getDiscussion: () => discussion, webchatActive, chats, launch, sessions, resultsGate, store, record, reportChild, handoff } },
   { name: 'chatnote', create: require('./lib/routes/chat-note'), ctx: { send, lt, store, freetalk, chat, chats } },
-  { name: 'tasksettings', create: require('./lib/routes/task-settings'), ctx: { send, lt, store, fromRemote, record, chats, sessions, setUnread } },
+  { name: 'tasksettings', create: require('./lib/routes/task-settings'), ctx: { send, lt, store, fromRemote, record, chats, sessions, setUnread, taskHistory, chat } },
   { name: 'taskread', create: require('./lib/routes/task-read'), ctx: { send, lt, store, stepSummary, inWork, gitw, expandHome, workRoot, taskIntegrate } },
   { name: 'taskbody', create: require('./lib/routes/task-body-read'), ctx: { send, lt, textBudget, path, store, fs } },
-  { name: 'taskhistory', create: require('./lib/routes/task-history-read'), ctx: { send, taskHistory, autoView } },
-  { name: 'chatread', create: require('./lib/routes/chat-read'), ctx: { send, lt, store, setUnread, taskHistory, ideaRows, chat, chats, getWebchat: () => webchat, freetalkHistory } },
+  { name: 'taskhistory', create: require('./lib/routes/task-history-read'), ctx: { send, taskHistory, autoView, textBudget } },
+  { name: 'conversationsearch', create: require('./lib/routes/conversation-search'), ctx: { send, search: conversationSearch, PORT, fromRemote } },
+  { name: 'chatread', create: require('./lib/routes/chat-read'), ctx: { send, lt, store, record, setUnread, taskHistory, ideaRows, chat, chats, getWebchat: () => webchat, getMuseDirect: () => museDirect, freetalkHistory } },
   { name: 'freetalk', create: require('./lib/routes/freetalk'), ctx: { send, lt, freetalkHistory, freetalkAttachments, freetalk, specialMode, modelView, rolesData, freetalkLifecycle, chats, setUnread, cleanFreetalkMemory, startAutomaticFreetalk, delegateRequest } },
   { name: 'project', create: require('./lib/routes/project'), ctx: { send, projectNotes, store, expandHome, github, githubProject, fs, path, gitw, lt, handoff, sessions, chats, record, reportChild, activePack, __dirname } },
   { name: 'start', create: require('./lib/routes/start'), ctx: { store, start, send, fs, lt, readRaw, quickStart: (...args) => quickStart(...args) } },
-  { name: 'state', create: require('./lib/routes/state'), ctx: { gitw, __dirname, pruneUnread, getDiscussion: () => discussion, rolesData, modelView, stepSummary, chats, restartBlockers, extensions, stopControl, ROOT, HUB_INSTANCE, VERSION, readVersion, BOOT_HEAD, license, appUpdate, appShell, freetalkStatus, onboarding, aiUpdates, aiTools, updateBusy, getRestartControl: () => restartControl, bodyNoticeState, github, accounts, store, projectOrder, taskTransfer, stateOffers, taskIntegrate, launch, handoff, baseOf, githubProject, start, workRoot, copyMissing, chat, path, expandHome, fs, resultsGate, freetalkHistory, inWork, getWebchat: () => webchat, sessions, modelError, roles, unread, procwatch, acceleration, remote, gpt, crypto, fromRemote, getUpdateRestoreReady: () => updateRestoreReady, record, sendEncoded, lt } },
+  { name: 'state', create: require('./lib/routes/state'), ctx: { gitw, __dirname, pruneUnread, getDiscussion: () => discussion, rolesData, modelView, stepSummary, chats, restartBlockers, extensions, stopControl, ROOT, HUB_INSTANCE, VERSION, readVersion, BOOT_HEAD, license, appUpdate, appShell, freetalkStatus, onboarding, aiUpdates, aiTools, updateBusy, getRestartControl: () => restartControl, bodyNoticeState, github, accounts, store, projectOrder, taskTransfer, stateOffers, taskIntegrate, launch, handoff, baseOf, githubProject, start, workRoot, copyMissing, chat, path, expandHome, fs, resultsGate, freetalkHistory, inWork, getWebchat: () => webchat, getMuseDirect: () => museDirect, sessions, modelError, roles, unread, procwatch, acceleration, remote, gpt, crypto, fromRemote, getUpdateRestoreReady: () => updateRestoreReady, record, sendEncoded, lt } },
   { name: 'acceleration', create: require('./lib/routes/acceleration'), ctx: { send, acceleration, record } },
   { name: 'modelsettings', create: require('./lib/routes/model-settings'), ctx: { send, saveCliModels, record, launch, modelView, rolesData, modelError, roles, ROLES_FILE, lt } },
   { name: 'limits', create: require('./lib/routes/limits'), ctx: { send, usageSelection, accounts, usage, limitEvidence, record, usageWithLimit, lt, limitModels, getDiscussion: () => discussion } },
@@ -1252,7 +1333,9 @@ async function apiRequest(req, res, url) {
   // 生きているかだけ答える（ファイルを読まないので、台帳が大きくても・iCloud が遅くてもすぐ返る）
   if (routes.queuecontrol.receipt.matches(req, url)) return routes.queuecontrol.receipt.handle(req, res, url);
   if(req.method==='GET' && (url.pathname==='/api/ideas' || url.pathname.startsWith('/api/ideas/'))) return ideaAPI.handle(req,res,url,null,send);
-  if (req.method === 'GET' && url.pathname === '/api/ping') return send(res, 200, { ok: true, version: VERSION, pid: process.pid, runtimePath: __dirname, instance: HUB_INSTANCE, restored: updateRestoreReady, ...(process.platform === 'win32' && process.env.HUB_WINDOW_LAUNCH ? { windowLaunch: process.env.HUB_WINDOW_LAUNCH, windowRoot: ROOT } : {}), updateConfirm: process.env.HUB_UPDATE_CONFIRM || '' });
+  if (routes.remote.enrollment.matches(req,url)) return routes.remote.enrollment.handle(req,res,url);
+  if (routes.remote.forget.matches(req,url)) return routes.remote.forget.handle(req,res,url);
+  if (req.method === 'GET' && url.pathname === '/api/ping') return send(res, 200, { ok: true, version: VERSION, pid: process.pid, runtimePath: __dirname, instance: HUB_INSTANCE, restored: updateRestoreReady, ...(process.platform === 'win32' && process.env.HUB_WINDOW_LAUNCH ? { windowLaunch: process.env.HUB_WINDOW_LAUNCH, windowRoot: ROOT } : {}), updateConfirm: process.env.HUB_UPDATE_CONFIRM || '', ...localAuth.ping(url.searchParams.get('challenge')) });
   if (routes.rolesettings.history.matches(req, url)) return routes.rolesettings.history.handle(req, res, url);
   if (routes.taskintegration.wait.matches(req, url)) return routes.taskintegration.wait.handle(req, res, url);
   if (req.method === 'GET' && url.pathname === '/api/discussion') return extensions.route('discussion',req,res,url,null,send);
@@ -1268,6 +1351,7 @@ async function apiRequest(req, res, url) {
 
 
   // 会話画面：今までの会話と、書いている途中の返事を流す
+  if (req.method === 'GET' && routes.conversationsearch.access.matches(req, url)) return routes.conversationsearch.access.handle(req, res, url);
   if (routes.chatread.stream.matches(req, url)) return routes.chatread.stream.handle(req, res, url);
   if (routes.modelinfo.models.matches(req, url)) return routes.modelinfo.models.handle(req, res, url);
   if (/^\/api\/chatgpt\/plan(?:\/|$)/.test(url.pathname)) {
@@ -1279,6 +1363,7 @@ async function apiRequest(req, res, url) {
   if (routes.github.read.matches(req, url)) return routes.github.read.handle(req, res, url);
   if (req.method === 'GET' && url.pathname === '/api/webchat') return extensions.route('webchat',req,res,url,null,send);
   if (routes.mcpsettings.read.matches(req, url)) return routes.mcpsettings.read.handle(req, res, url);
+  if (routes.musesettings.read.matches(req, url)) return routes.musesettings.read.handle(req, res, url);
   // 外から使う（iPhone）の設定
   if (routes.remote.read.matches(req, url)) return routes.remote.read.handle(req, res, url);
   if (routes.information.read.matches(req, url)) return routes.information.read.handle(req, res, url);
@@ -1311,17 +1396,24 @@ async function apiRequest(req, res, url) {
   if (routes.taskattachments.upload.matches(req, url)) return routes.taskattachments.upload.handle(req, res, url);
 
   if (routes.start.upload.matches(req, url)) return routes.start.upload.handle(req, res, url);
-  const b = await readBody(req);
+  let b;
+  try { b = await readBody(req); }
+  catch (error) {
+    if (routes.conversationsearch.access.matches(req, url)) return send(res, 400, { error: lt('検索の形式が違います。') });
+    if (routes.musesettings.write.matches(req, url)) return send(res, 400, { error: lt('形式が違います。ログイン情報は設定画面に送らないでください。') });
+    throw error;
+  }
+  if (routes.conversationsearch.access.matches(req, url)) return routes.conversationsearch.access.handle(req, res, url, b);
   if(b?.origin==='hub-internal')return send(res,403,{error:lt('内部依頼の指定はHubからだけ受け付けます'),delivery:'not-sent'});
   req.historyWrite?.target(b?.project,b?.task);
-  if(b?.project&&b.task&&b.project!=='freetalk'&&taskHistory.organizing(b.project,b.task)&&/^\/api\/(chat(?:gpt)?\/|term\/|delegate$|task$|task\/(?:history\/(summary|rotate)$|(?:merge|integrate|absorb|handoff|receive|update|delete|decide|step|completion|copyclear|handup|results)(?:\/|$)))/.test(url.pathname))return send(res,409,{error:lt('会話を整理中です。終わると新しい会話で送れます（入力は残っています）')});
+  if(b?.project&&b.task&&b.project!=='freetalk'&&taskHistory.organizing(b.project,b.task)&&/^\/api\/(chat(?:gpt)?\/|muse\/(?:chat|read)$|term\/|delegate$|task$|task\/(?:history\/(summary|rotate)$|(?:merge|integrate|absorb|handoff|receive|update|delete|decide|step|completion|copyclear|handup|results)(?:\/|$)))/.test(url.pathname))return send(res,409,{error:lt('会話を整理中です。終わると新しい会話で送れます（入力は残っています）'),...(['/api/muse/chat','/api/muse/read'].includes(url.pathname)?{delivery:'not-sent'}:{})});
   if (routes.taskhistorywrite.auto.matches(req, url)) return routes.taskhistorywrite.auto.handle(req, res, url, b);
   if (routes.taskhistorywrite.cancel.matches(req, url)) return routes.taskhistorywrite.cancel.handle(req, res, url, b);
   if(url.pathname.startsWith('/api/ideas/')) return ideaAPI.handle(req,res,url,b,send);
   if(b?.project&&b.task&&!['/api/task/history/rotate','/api/task/continue','/api/task/continue/recover','/api/restart','/api/restart/cancel'].includes(url.pathname)&&b.project!=='freetalk'){
     const generation=taskHistory.state(b.project,b.task).generation;
-    const browserConversation=req.headers.origin&&generation>1&&/^\/api\/(chat(?:gpt)?\/|term\/|delegate$|task\/history\/summary$)/.test(url.pathname);
-    if((b.generation!==undefined||browserConversation)&&b.generation!==generation)return send(res,409,{error:lt('会話が切り替わりました。新しい会話を開いてください')});
+    const browserConversation=req.headers.origin&&generation>1&&/^\/api\/(chat(?:gpt)?\/|muse\/(?:chat|read)$|term\/|delegate$|task\/history\/summary$)/.test(url.pathname);
+    if((b.generation!==undefined||browserConversation)&&b.generation!==generation)return send(res,409,{error:lt('会話が切り替わりました。新しい会話を開いてください'),...(['/api/muse/chat','/api/muse/read'].includes(url.pathname)?{delivery:'not-sent'}:{})});
   }
   if (routes.taskhistorywrite.rotate.matches(req, url)) return routes.taskhistorywrite.rotate.handle(req, res, url, b);
   if (routes.taskcontinuation.recover.matches(req, url)) return routes.taskcontinuation.recover.handle(req, res, url, b);
@@ -1329,7 +1421,7 @@ async function apiRequest(req, res, url) {
   if (routes.taskhistorywrite.summary.matches(req, url)) return routes.taskhistorywrite.summary.handle(req, res, url, b);
   if (url.pathname === '/api/app/rebuild') {
     if (fromRemote()) return send(res, 403, { error: 'forbidden' });
-    if (appUpdate.running || appUpdate.applying() || updateBusy()) return send(res, 409, { error: appUpdate.idleMessage() });
+    if (appUpdate.running || appUpdate.applying() || await chats.withStrictHandoff(()=>updateBusy())) return send(res, 409, { error: appUpdate.idleMessage() });
     try { return send(res, 200, await appShell.rebuild()); }
     catch (error) { return send(res, error.status || 500, { error: error.message }); }
   }
@@ -1379,6 +1471,7 @@ async function apiRequest(req, res, url) {
   // 通常MCPの互換登録：~/.codex/config.toml に [mcp_servers.project-hub] を書き足す
   if (routes.mcpsettings.register.matches(req, url)) return routes.mcpsettings.register.handle(req, res, url, b);
   if (routes.mcpsettings.write.matches(req, url)) return routes.mcpsettings.write.handle(req, res, url, b);
+  if (routes.musesettings.write.matches(req, url)) return routes.musesettings.write.handle(req, res, url, b);
   if (routes.remote.logout.matches(req, url)) return routes.remote.logout.handle(req, res, url, b);
   if (routes.start.write.matches(req, url)) return routes.start.write.handle(req, res, url, b);
   if (routes.aiupdate.write.matches(req, url)) return routes.aiupdate.write.handle(req, res, url, b);
@@ -1439,7 +1532,7 @@ async function apiRequest(req, res, url) {
   if (routes.taskintegration.keep.matches(req, url)) return routes.taskintegration.keep.handle(req, res, url, b);
   if (routes.taskintegration.preview.matches(req, url)) return routes.taskintegration.preview.handle(req, res, url, b);
   if (routes.taskbodywrite.write.matches(req, url)) return routes.taskbodywrite.write.handle(req, res, url, b);
-  if (routes.project.archive.matches(req, url)) return routes.project.archive.handle(req, res, url, b);
+  if (routes.project.archive.matches(req, url)) return chats.withStrictHandoff(()=>routes.project.archive.handle(req, res, url, b));
   if (routes.taskintegration.resume.matches(req, url)) return routes.taskintegration.resume.handle(req, res, url, b);
   if (routes.taskintegration.apply.matches(req, url)) return routes.taskintegration.apply.handle(req, res, url, b);
   if (routes.taskintegration.organize.matches(req, url)) return routes.taskintegration.organize.handle(req, res, url, b);
@@ -1463,13 +1556,14 @@ async function apiRequest(req, res, url) {
   // 本体を止める（アプリが、許可のある自分から起動し直すため）。AI が動いている間は断る
   if (url.pathname === '/api/quit') {
     if ((b.reason === 'windows-window' || process.platform === 'win32' && process.env.HUB_WINDOW_LAUNCH && b.reason === 'update') && (process.platform !== 'win32' || !process.env.HUB_WINDOW_LAUNCH || b.windowLaunch !== process.env.HUB_WINDOW_LAUNCH || b.instance !== HUB_INSTANCE)) return send(res, 409, { error: '起動した専用窓と本体の一致を確認できません' });
-    if (updateBusy()) return send(res, 409, { error: appUpdate.idleMessage() });
+    if (await chats.withStrictHandoff(()=>updateBusy())) return send(res, 409, { error: appUpdate.idleMessage() });
     if (aiTools.isOperating()) return send(res, 409, { error: lt('AI の更新・モデル再取得が進行中です') });
     const busy = sessions.list().filter(x => x.running).length + chats.running.size;
     if (busy) return send(res, 409, { error: lt`動いている AI が ${busy} つあります` });
+    if(!DRY)executionGate.barrier=true;
     record('quit', {}, { reason: String(b.reason || '') });
     send(res, 200, { ok: true });
-    if (!DRY) setTimeout(shutdown, 200);
+    if (!DRY) setTimeout(()=>{void shutdown({graceful:true});}, 200);
     return undefined;
   }
   if (url.pathname === '/api/restart' || url.pathname === '/api/restart/cancel') {
@@ -1477,7 +1571,7 @@ async function apiRequest(req, res, url) {
       if(emergencyRestart?.pending())throw Object.assign(Error('緊急停止後の再起動を確認しています。［復旧］で状態を確認してください'),{status:409});
       if (url.pathname.endsWith('/cancel')) return send(res,200,{ok:true,restart:restartControl.cancel()});
       if (b.reserve !== undefined && typeof b.reserve !== 'boolean') return send(res,400,{error:lt('形式が違います')});
-      const result=restartControl.request(b.reserve === true);
+      const result=await restartControl.request(b.reserve === true);
       return send(res,200,{ok:true,from:VERSION,to:readVersion(),restart:result});
     } catch(e) { return send(res,e.status||409,{error:e.message,waiting:e.waiting}); }
   }
@@ -1528,7 +1622,6 @@ function serveStatic(req, res, pathname) {
 async function remoteGate(req, res, url) {
   const isApi = url.pathname.startsWith('/api/');
   if (!remote.enabled()) return isApi ? send(res, 403, { error: lt('外からの利用はオフです') }) : send(res, 403, remoteLib.offPage(), 'text/html; charset=utf-8');
-  remote.noteHost(req.headers['x-forwarded-host'] || req.headers.host);
   // 書き換える操作は、この画面から送った物だけ（ほかのサイトから送らせない）
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     const origin = req.headers.origin, hosts = [req.headers.host, req.headers['x-forwarded-host']].filter(Boolean).map(h => `https://${h}`);
@@ -1537,10 +1630,10 @@ async function remoteGate(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/login') return send(res, 200, remoteLib.loginPage(), 'text/html; charset=utf-8');
   if (req.method === 'POST' && url.pathname === '/api/login') {
     let b; try { b = await readBody(req); } catch (e) { return send(res, 400, { error: lt('形式が違います') }); }
-    const who = remoteLib.whoOf(req), r = remote.login(b.passcode, who, req.headers['user-agent']);
+    const who = remoteLib.whoOf(req), r = remote.login(b.passcode, who, req.headers['user-agent'], { deviceToken: remoteLib.cookieOf(req, remoteLib.DEVICE), enrollment: b.enrollment });
     record('remotelogin', {}, { ok: Boolean(r.ok), who });
     if (!r.ok) return send(res, r.status, { error: r.error });
-    res.setHeader('Set-Cookie', remoteLib.sessionCookie(r.token));
+    res.setHeader('Set-Cookie', [remoteLib.sessionCookie(r.token), remoteLib.deviceCookie(r.deviceToken)]);
     return send(res, 200, { ok: true });
   }
   const token = remoteLib.cookieOf(req);
@@ -1548,11 +1641,14 @@ async function remoteGate(req, res, url) {
     if (isApi) return send(res, 401, { error: lt('ログインしてください'), login: true });
     res.writeHead(302, { Location: '/login', 'Cache-Control': 'no-store' }); return res.end();
   }
+  // iPhone で開くアドレスは、合言葉で入った端末の通信からだけ覚える（未ログインの通信に書き換えさせない）
+  remote.noteHost(req.headers['x-forwarded-host'] || req.headers.host);
   if (req.method === 'POST' && url.pathname === '/api/logout') {
     remote.logout(token); record('remotelogout', {});
     res.setHeader('Set-Cookie', remoteLib.clearCookie());
     return send(res, 200, { ok: true });
   }
+  if (['/api/remote/enrollment','/api/remote/forget-devices','/api/local-auth/launch'].includes(url.pathname)) return send(res, 403, { error: 'local owner only' });
   if (isApi) return api(req, res, url);
   if (req.method !== 'GET') return send(res, 405, { error: 'method' });
   return serveStatic(req, res, url.pathname);
@@ -1601,7 +1697,7 @@ async function quickStart(b, maintenanceRequest = false) {
         if (row.asks?.length) store.updateTask(p.id, t.id, { state: '返事待ち', question: row.asks.map(a => a.question).join(' / ').slice(0, 300) });
         chatEnded(p.id, t.id);
       } };
-      if (!DRY && !(await chats.send(turn).started)) throw Error(lt('AIを起動できませんでした。CLIの導入状態を確認してください'));
+      if (!DRY && !(await (await chats.send(turn)).started)) throw Error(lt('AIを起動できませんでした。CLIの導入状態を確認してください'));
       store.updateTask(p.id, t.id, { state: '実行中', question: '', memo: images.length ? '参照画像: ' + images.join(' / ') : '' });
       if (DRY) t.turn = chat.buildTurn({ ...turn, fast: false, rows: [], meta: {} });
     }
@@ -1613,18 +1709,49 @@ async function quickStart(b, maintenanceRequest = false) {
   } catch (e) { return reply(409, { error: e.message, task: t?.id }); }
 }
 
+const ownerIndex = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
 const server = http.createServer(async (req, res) => {
   try {
     require('./lib/platform/win32-window-policy').applyWindowPolicy(res, {
       platform: platform.name, launch: process.env.HUB_WINDOW_LAUNCH, port: PORT,
     });
     const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    if (remoteLib.isRemote(req)) {
+      if (!remoteLib.validRemote(req, req.headers.host)) { req.resume(); return send(res, 403, { error: 'unrecognized proxy' }); }
+      // Recover from an obsolete saved name without trusting arbitrary proxy headers.
+      const savedHostMatches = remoteLib.validRemote(req, remote.load().host);
+      if (!savedHostMatches && !remoteLib.validRemote(req, new URL(await tailscaleUrl() || 'https://invalid').host)) { req.resume(); return send(res, 403, { error: 'unrecognized proxy' }); }
+    }
+    const navigation = localAuth.ping(req.headers['x-hub-navigation']);
+    if (navigation.proof) { res.setHeader('X-Hub-Instance', navigation.instance); res.setHeader('X-Hub-Proof', navigation.proof); }
+    if (!remoteLib.isRemote(req)) {
+      if (await require('./lib/local-auth').launchGate(localAuth, req, res, url)) return;
+      if (!allowed(req)) return send(res, 403, { error: 'forbidden' });
+      // This public document contains no owner data or credentials. Native
+      // windows supply a verified header to receive a fresh browser session.
+      if (req.method === 'GET' && ['/', '/index.html'].includes(url.pathname)) {
+        const html = localAuth.authenticated(req) ? ownerIndex.replace('<head>', '<head>' + localAuth.bootstrap()) : ownerIndex;
+        return send(res, 200, html, 'text/html; charset=utf-8');
+      }
+      if (req.method === 'GET' && url.pathname === '/api/ping' && !localAuth.authenticated(req)) return send(res, 200, { ok: true, ...localAuth.ping(url.searchParams.get('challenge')) });
+      if (!localAuth.authenticated(req)) {
+        if (!url.pathname.startsWith('/api/') && !['/', '/index.html'].includes(url.pathname)) return serveStatic(req, res, url.pathname);
+        req.resume();
+        return url.pathname.startsWith('/api/') ? send(res, 401, { error: 'Open Project Hub from its app or launcher' }) : send(res, 401, require('./lib/local-auth').lockedPage, 'text/html; charset=utf-8');
+      }
+      if (req.method === 'POST' && url.pathname === '/api/local-auth/launch') return send(res, 200, { ticket: localAuth.issue() });
+      url.searchParams.delete('hubResource'); req.url = url.pathname + url.search;
+    }
+
+    // Local owner authentication finished.
     if (url.pathname.startsWith('/api/move/')) {
       if (remoteLib.isRemote(req) || !allowed(req) || req.headers['x-hub'] !== '1') return send(res, 403, { error: 'forbidden' });
       if (req.method === 'GET' && url.pathname === '/api/move/status') return send(res, 200, move.status());
       if (req.method === 'POST' && url.pathname === '/api/move/export') {
         const body = await readBody(req);
-        if (move.running || move.busy()) return send(res, 409, { error: 'AI・順番待ち・保存・更新が終わってから引っ越してください' });
+        if (move.running || await move.strictBusy()) return send(res, 409, { error: 'AI・順番待ち・保存・更新が終わってから引っ越してください' });
         const pending = move.export(body); pending.catch(() => {}); return send(res, 202, move.status());
       }
       if (req.method === 'POST' && url.pathname === '/api/move/reveal') {
@@ -1653,7 +1780,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 function holdStoppedQueue(project,task){chats.holdQueue(project,task);}
-const emergencyStop=new (require('./lib/emergency-stop').EmergencyStop)({control:stopControl,chats,sessions,webchat,onPause:scope=>{
+const emergencyStop=new (require('./lib/emergency-stop').EmergencyStop)({control:stopControl,chats,sessions,webchat,muse:museDirect,onPause:scope=>{
   const scopes=scope?[scope]:[...new Map([...chats.running.values()].map(r=>r.options).filter(Boolean).map(o=>[JSON.stringify([o.project,o.task]),o])).values()];
   for(const o of scopes)record('chatstop',o);
 },unmanaged:()=>{
@@ -1673,12 +1800,17 @@ emergencyRestart=new (require('./lib/emergency-restart').EmergencyRestart)({cont
     return {head,version:VERSION,dir:__dirname};
   },conflicts:()=>mainMergeFlow.blockers(path.resolve(__dirname,'..'))});
 function safeShutdown(){
-  if(stopControl.error||stopControl.active||stopControl.data.errors?.length||stopControl.results.some(r=>!['exited','not-started'].includes(r.state)||r.save!=='saved')||chats.running.size||sessions.list().some(s=>s.running)||webchat.busy().length||webchat.control||chats.handoffErrors().length||activeRequests||taskHistory.activeWrites.size||freetalkHistory.activeWrites?.size||taskIntegrate.active||integrateAuto.active||executionGate.leases.size||appUpdate.running||['installing','publishing'].includes(appUpdate.data.phase)||aiTools.isOperating())return false;
+  if(stopControl.error||stopControl.active||stopControl.data.errors?.length||stopControl.results.some(r=>!['exited','not-started'].includes(r.state)||r.save!=='saved')||chats.running.size||sessions.list().some(s=>s.running)||webchat.busy().length||museDirect.busy().length||webchat.control||chats.guardErrors().length||activeRequests||taskHistory.activeWrites.size||freetalkHistory.activeWrites?.size||taskIntegrate.active||integrateAuto.active||executionGate.leases.size||appUpdate.running||['installing','publishing'].includes(appUpdate.data.phase)||aiTools.isOperating())return false;
   const unknown=emergencyStop.targets();if(!unknown.length)return true;
   const P=require('./lib/owned-processes'),rows=P.snapshot(),terminalPids=new Set([...sessions.map.values()].map(s=>s.identity?.pid));
   return unknown.every(o=>o.kind==='unmanaged'&&P.independentExternal(procwatch.list().find(p=>p.pid===o.pid)||{},rows,pid=>chats.supervisedPid(pid)||terminalPids.has(pid)));
 }
-function shutdown() { try{if(safeShutdown())stopControl.cleanExit();}catch{/* Uncertain ownership/save keeps the boot barrier armed. */}webchat.shutdown(); aiUpdates.stop(); appUpdate.stop(); procwatch.stop(); sessions.stopAll(); chats.stopAll(); server.close(); process.exit(0); }
+async function shutdown({graceful=false}={}) {
+  executionGate.barrier=true;
+  try{const safe=await chats.withStrictHandoff(()=>safeShutdown());if(graceful&&!safe)throw Error('終了の直前に状態が変わりました。Hubは終了していません');if(safe)stopControl.cleanExit();}
+  catch(e){if(graceful){executionGate.barrier=false;record('quit-handoff-error',{}, {error:e.message});return;}}
+  museDirect.scheduler.stop();webchat.shutdown();aiUpdates.stop();appUpdate.stop();procwatch.stop();sessions.stopAll();chats.stopAll();server.close();process.exit(0);
+}
 
 roleReview = extensions.create('role_review', { license:Object.freeze({require:features=>license.require(features)}), file:ROLES_FILE, store, chats, tools:aiTools, accounts, usage, limits:limitEvidence, accountFor,
   createTopic:()=>freetalk.createTopic(specialMode.pick(modelView.special(), rolesData(), '司令塔') || modelView.initial(), {title:lt('役割分担の見直し')}),
@@ -1729,9 +1861,7 @@ for(const p of store.listProjects())for(const t of p.tasks){
     if(remaining.length!==queue.length)record('delegate-unavailable',{project:p.id,task:t.id},{removed:queue.filter(q=>!remaining.some(x=>x.id===q.id)).map(q=>q.id)});
   }
 }
-chats.adopt();
-const finishedAdoptions=[...chats.running.values()].filter(r=>r.child?.dir&&require('./lib/cli-spool').strictRead(r.child.dir,'exit.json')).map(r=>r.settledP);
-const restoreReady=Promise.all(finishedAdoptions).then(()=>{ideaRunner.restored();chats.resumeDeferred();for(const p of store.listProjects())for(const t of p.tasks)try{chats.recoverContinuations(p,t);}catch(e){record('chat-continuation-error',{project:p.id,task:t.id},{error:e.message});}if(!DRY)ideaRunner.start();updateRestoreReady=true;});
+const restoreReady=Promise.resolve(chats.adopt()).then(()=>Promise.all([...chats.running.values()].filter(r=>r.child?.dir&&require('./lib/cli-spool').strictRead(r.child.dir,'exit.json')).map(r=>r.settledP))).then(()=>{ideaRunner.restored();chats.resumeDeferred();for(const p of store.listProjects())for(const t of p.tasks)try{chats.recoverContinuations(p,t);}catch(e){record('chat-continuation-error',{project:p.id,task:t.id},{error:e.message});}if(!DRY)ideaRunner.start();updateRestoreReady=true;});
 restoreReady.catch(e=>record('idea-restore-error',{}, {error:e.message}));
 discussion.recover();
 const discussionTimer=setInterval(()=>{void discussion.tick().catch(e=>record('discussion-error',{}, {error:e.message}));},1000);discussionTimer.unref();
@@ -1744,6 +1874,11 @@ if (require.main === module) {
     process.exit(1);
   });
   server.listen(PORT, '127.0.0.1', () => {
+    if(!DRY) museDirect.scheduler.start(({project,task})=>{
+      const p=store.readProject(project);
+      if(!p?.tasks.some(t=>t.id===task&&t.state!=='完了'))return null;
+      return p.kind==='freetalk'?freetalkHistory.state(task).generation:taskHistory.state(project,task).generation;
+    });
     console.log(`Project Hub ${VERSION}`);
     console.log(lt`Project Hub: http://127.0.0.1:${PORT}  （台帳の場所: ${ROOT}）`);
     console.log(sessions.available() ? lt('作業画面: 使えます') : lt('作業画面: 部品（node-pty）が未設定。setup.sh を実行してください'));
@@ -1754,5 +1889,7 @@ if (require.main === module) {
   process.on('SIGTERM', shutdown);
 }
 
-server.on('close', () => { ideaRunner?.close();ideas.close(); license.stop(); clearInterval(discussionTimer); clearInterval(roleReviewTimer);clearInterval(freetalkAutomaticTimer);stateOffers.close(); clearInterval(integrateTimer);clearInterval(terminalLimitTimer);clearInterval(restartTimer); aiUpdates.stop(); });
-module.exports = { queueRetreat, store, stopControl, emergencyStop, emergencyRestart, safeShutdown, ideas, ideaAPI, executionGate, ideaRunner, ideaDispatch, ideaLane, ideaRelease, ideaVerification, ideaReview, restoreReady, discussion, roleReview, textBudget, server, PORT, sessions, taskPrompt, aiUpdates, webchat, chats, restartControl, taskIntegrate, integrateAuto, integrationAbandon, bootModules, restartBlockers };
+server.on('listening', () => require('./lib/local-auth').activateServer(localAuth, server));
+process.once('exit', () => localAuth.close());
+server.on('close', () => { localAuth.close(); bodyClosed=true;clearInterval(bodyTimer);chats.handoffScanner?.close();chats.handoffAdmission?.close(); museDirect.scheduler.stop();conversationSearch.close(); ideaRunner?.close();ideas.close(); license.stop(); clearInterval(discussionTimer); clearInterval(roleReviewTimer);clearInterval(freetalkAutomaticTimer);stateOffers.close(); clearInterval(integrateTimer);clearInterval(terminalLimitTimer);clearInterval(restartTimer); aiUpdates.stop(); });
+module.exports = { localAuth, queueRetreat, store, stopControl, emergencyStop, emergencyRestart, safeShutdown, ideas, ideaAPI, executionGate, ideaRunner, ideaDispatch, ideaLane, ideaRelease, ideaVerification, ideaReview, restoreReady, discussion, roleReview, textBudget, server, PORT, sessions, taskPrompt, aiUpdates, webchat, chats, restartControl, taskIntegrate, integrateAuto, integrationAbandon, bootModules, restartBlockers };

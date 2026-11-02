@@ -2,7 +2,7 @@
 // Existing behavior and message assertions use the Japanese default contract.
 process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
-const root=fs.mkdtempSync(path.join(os.tmpdir(),'model-order-http-'));
+const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'model-order-http-'));
 process.env.HUB_ROOT=root;process.env.HUB_DRY_RUN='1';process.env.HUB_AI_HOME=path.join(root,'home');const port=49000+Math.floor(Math.random()*500);process.env.HUB_PORT=String(port);
 fs.mkdirSync(path.join(root,'_hub'),{recursive:true});fs.copyFileSync(path.join(__dirname,'../../docs/project-hub/templates/_hub/roles.yaml'),path.join(root,'_hub/roles.yaml'));
 const {server}=require('../server'),order=require('../public/model-order');let base;
@@ -87,3 +87,25 @@ test('スマホ表示API：初期値・権限・保存再読・不正値400・�
   assert.equal((await post('/api/special-mode', { enabled: false, ai: 'claude' })).status, 200);
   assert.deepEqual((await (await fetch(base + '/api/state')).json()).specialMode, { enabled: false, ai: 'claude' });
  });
+
+
+test('Muse表示名API：既存の権限条件、保存再読・既存名保持・既定復帰・不正キー拒否', async () => {
+  const { ModelView } = require('../lib/model-view'), file = path.join(root, '_hub/model-view.json');
+  const first = await (await fetch(base + '/api/state')).json(), key = 'muse|direct';
+  const before = fs.readFileSync(file);
+  assert.equal((await post('/api/models/phone', {key, name:'Muse名'}, {})).status, 403);
+  assert.equal((await post('/api/models/phone', {key, name:'Muse名'}, {'X-Hub':'1',Origin:'https://foreign.invalid'})).status, 403);
+  assert.deepEqual(fs.readFileSync(file), before);
+  const r = await post('/api/models/phone', {key, name:' ミューズ '});
+  assert.equal(r.status, 200); assert.equal((await r.json()).phoneLabels.names[key], 'ミューズ');
+  const current = await (await fetch(base + '/api/state')).json();
+  assert.deepEqual(current.phoneLabels.names, {...first.phoneLabels.names, [key]:'ミューズ'});
+  assert.deepEqual(new ModelView(file).phone(), current.phoneLabels);
+  for (const property of ['roles','cliFlags','hiddenModels','modelOrder','initialPick']) assert.deepEqual(current[property], first[property]);
+  const stored = fs.readFileSync(file);
+  for (const spec of [{key:'muse|other',name:'x'},{key,name:'x\ny'},{key,name:'あ'.repeat(25)}]) {
+    assert.equal((await post('/api/models/phone', spec)).status, 400); assert.deepEqual(fs.readFileSync(file), stored);
+  }
+  assert.equal((await post('/api/models/phone', {key,name:''})).status, 200);
+  assert.deepEqual((await (await fetch(base + '/api/state')).json()).phoneLabels, first.phoneLabels);
+});

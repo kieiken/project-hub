@@ -2,6 +2,7 @@
 process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const { execFileSync } = require('node:child_process');
 const { AppShell } = require('../lib/app-shell');
 function fixture(t, options = {}) {
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-shell-'));
@@ -55,4 +56,33 @@ test('native shell removes ChatGPT panel and clipboard polling while keeping Hub
   assert.doesNotMatch(source,/GptPanel|toggleGpt|showGpt|checkClip|clipTimer|hubGptClip|chatgpt\.com|u\.host == "gpt"/);
   assert.match(source,/window\.contentView = web/);
   for(const feature of ['HubShellHash','hubNativePaste','hubNativeDrop','isFieldEditor','runJavaScriptConfirmPanel','runOpenPanel','u.host == "access"','u.host == "reveal"']) assert.ok(source.includes(feature),feature);
+});
+
+test('スクショのfile promiseは全件成功時だけ一度渡し、失敗・重複・時間切れを部分添付しない', {skip:process.platform!=='darwin'}, t => {
+  const source=fs.readFileSync(path.join(__dirname,'../app/window.swift'),'utf8');
+  const aggregation=source.split('// BEGIN PROMISED DROP BATCH')[1].split('// END PROMISED DROP BATCH')[0];
+  const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'hub-drop-test-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const file=path.join(root,'main.swift'),binary=path.join(root,'drop-test');
+  fs.writeFileSync(file,`import Foundation\n${aggregation}\n
+var completed = 0
+let good = PromisedDropBatch(count: 2) { paths in
+    precondition(paths == ["one.png", "two.png"]); completed += 1
+}
+good.receive("one.png"); precondition(completed == 0)
+good.receive("two.png"); good.receive("late.png"); good.cancel()
+precondition(completed == 1)
+for failure in 0...2 {
+    var calls = 0
+    let batch = PromisedDropBatch(count: 2) { paths in precondition(paths == nil); calls += 1 }
+    batch.receive("one.png")
+    if failure == 0 { batch.receive(nil) }
+    if failure == 1 { batch.receive("one.png") }
+    if failure == 2 { batch.cancel(); batch.receive("two.png") }
+    batch.receive("late.png"); precondition(calls == 1)
+}
+print("promise aggregation passed")
+`);
+  execFileSync('swiftc',[file,'-o',binary],{timeout:60000});
+  assert.match(execFileSync(binary,{encoding:'utf8',timeout:10000}),/promise aggregation passed/);
 });

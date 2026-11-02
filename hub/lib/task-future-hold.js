@@ -4,14 +4,14 @@
 // approved task hash, source, receipt or replay guards.
 const fs=require('./platform/file-io'),path=require('node:path'),{createHash,randomUUID}=require('node:crypto');
 const graph=require('../public/project-order'),continuation=require('./task-continuation');
-const {noLinks,exists}=require('./remove'),{lt}=require('./locale');
+const {noLinks,readNoLinks,exists}=require('./remove'),{lt}=require('./locale');
 const key=(p,t)=>p+'\0'+t;
 const message=()=>lt('将来検討として保留中です。子作業で保留を解除してから統合してください');
 function file(root,project,task){return path.join(root,'_hub/task-future-holds',createHash('sha256').update(key(project,task)).digest('hex')+'.json');}
 function read(root,project,task){
   const f=file(root,project,task);
   try{
-    noLinks(f);if(!exists(f))return {};
+    readNoLinks(f);if(!exists(f))return {};
     const stat=fs.statSync(f),r=JSON.parse(fs.readFileSync(f,'utf8'));
     if(!stat.isFile()||stat.nlink!==1||r?.version!==1||r.project!==project||r.task!==task||typeof r.held!=='boolean'||!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(r.revision||'')||!Array.isArray(r.history))throw Error('invalid hold record');
     return {futureHold:r.held,futureHoldRevision:r.revision};

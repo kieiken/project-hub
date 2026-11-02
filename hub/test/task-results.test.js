@@ -104,3 +104,12 @@ for (const value of ['../outside@', '/absolute@', 'body:../outside@', 'other//re
 test('コピーの履歴があっても不正な宣言パスは拒否：' + value, t => {
   const f = fixture(t); assert.throws(() => f.verify(value + f.commit), /相対リポジトリ/);
 });
+
+test('成果の別名は緩和せず行番号・種類・正規例を示して拒否',t=>{
+ const dir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'hub-result-format-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const file=path.join(dir,'task.md');
+ fs.writeFileSync(file,'# 子\n## 成果\n- 作業用コピー保存済み：body:.@12345678\n');
+ assert.throws(()=>require('../lib/task-results').readResults(file),e=>e.code==='TASK_RESULTS_FORMAT'&&e.line===3&&/未対応の種類「作業用コピー保存済み」/.test(e.message)&&/本体保存済み：body/.test(e.message));
+ fs.writeFileSync(file,'## 成果\n- 本体保存済み：body:.@12345678（専用コピーへの保存）\n');assert.equal(require('../lib/task-results').readResults(file)[0].kind,'本体保存済み');
+ const request=new (require('../lib/integration-simple').SimpleIntegration)({}).organizeRequest({},{title:'子'},'a'.repeat(64));
+ for(const text of ['ファイル','本体保存済み','なし','別名は禁止','場所・commitを推測しない','専用コピーへの保存'])assert.ok(request.text.includes(text),text);
+});

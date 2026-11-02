@@ -122,3 +122,9 @@ test('成果整理中・不備ありは完了確認や引渡しを案内しな�
   assert.match(operation(text,'作業の完了'),auto==='running'?/成果の記録を整えています/:/［成果の整理を頼む］/);
  }
 });
+
+ test('成果確認中は質問や整理依頼・完了承認へ誘導しない',()=>{
+ const text=info({completionPending:false,resultsPending:{code:'checking',auto:'none',reason:'成果を確認中です'}});
+ assert.match(operation(text,'作業の完了'),/成果を確認中/);
+ assert.doesNotMatch(operation(text,'作業の完了'),/［成果の整理を頼む］|［完了に移す］|まず質問に答える/);
+ });

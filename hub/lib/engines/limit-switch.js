@@ -18,23 +18,97 @@ module.exports = function createLimitEngine(ctx) {
     return roleReviewRuntime.heldLimit ? roleReviewRuntime.heldLimit(request, (getLimitEvidence())) : (getLimitEvidence()).forRequest(request);
   }
 
-  async function refreshLimitEvidence(request) {
+  // Opaque, request-scoped receipt: an early read is never a new routing decision.
+  const earlyCreditChecks = new WeakMap();
+  function startCreditCheck(request) {
+    const policy = rolesData(), control = getStopControl?.();
+    if (request.ai !== 'codex' || policy.preferCredits !== true || !policy.checkCredits.codex ||
+        integrationPolicyRequest(request) || roleReviewRuntime.isRequest?.(request.request) ||
+        discussionRuntime.isRequest(request.request) || control?.held(request)) return;
+    if (getLimitEvidence().active(request.account || 'default', launch.flagFor(request.ai, request.model))?.source !== 'usage-100') return;
+    const receipt = {}, account = request.account || 'default';
+    // Attach both handlers immediately: a rejected handoff/validation can abandon
+    // the receipt while the read finishes, without an unhandled rejection.
+    const result = Promise.resolve().then(() => getUsage().checkCredits(request.ai, account, { fresh: true }))
+      .then(result => ({ result }), error => ({ error }));
+    earlyCreditChecks.set(receipt, { project: request.project, task: request.task, ai: request.ai, account, result });
+    return receipt;
+  }
+
+  async function refreshLimitEvidence(request, earlyCreditCheck) {
     verifyIntegrationAssignmentSend(request);
     if (discussionRuntime.isRequest(request.request)) { (getDiscussion()).verify(request); return; }
     if (!['claude', 'codex'].includes(request.ai)) return;
-    if (rolesData().checkCredits[request.ai]) await (getUsage()).checkCredits(request.ai, request.account || 'default');
+    const checks = new Map(), usage = getUsage(), control = getStopControl?.(), ticket = control?.ticket(request);
+    const check = async o => {
+      if (!rolesData().checkCredits[o.ai]) return;
+      const account = o.account || 'default', key = o.ai + ':' + account;
+      if (!checks.has(key)) {
+        const early = earlyCreditCheck && earlyCreditChecks.get(earlyCreditCheck);
+        if (early && early.project === o.project && early.task === o.task && early.ai === o.ai && early.account === account) {
+          const settled = await early.result;
+          if (settled.error) throw settled.error;
+          checks.set(key, { request: o, result: settled.result, early: true,
+            rechecked: settled.result?.acquisition !== 'cached' && getLimitEvidence().creditDecision(o).reason === 'available' });
+        } else checks.set(key, { request: o, result: await usage.checkCredits(o.ai, account) });
+      }
+    };
+    const refreshReused = async () => {
+      if (integrationPolicyRequest(request) || roleReviewRuntime.isRequest?.(request.request)) return;
+      for (const entry of checks.values()) {
+        const o = entry.request;
+        if (rolesData().preferCredits !== true || control?.held(request) || control?.changed(request, ticket)) continue;
+        const limits = getLimitEvidence(), decision = limits.creditDecision(o);
+        // Refresh even an available reused proof: adoption/admission awaits
+        // after this preflight must not consume the old proof's remaining time.
+        // An early result that is already stale or only shared a cache gets
+        // the same one replacement as a reused proof. Failed/slow reads do not.
+        if (!entry.rechecked && (entry.early || entry.result?.acquisition === 'cached') && ['available','not-fresh','not-checked','before-limit','checking'].includes(decision.reason)) {
+          entry.rechecked = true;
+          entry.replaced = true;
+          entry.result = await usage.checkCredits(o.ai, o.account || 'default', { fresh: true });
+        }
+      }
+    };
+    if (rolesData().checkCredits[request.ai]) await check(request);
+    if (checks.size) await refreshReused();
     if (integrationPolicyRequest(request)) {
-      if (!(getLimitEvidence()).active(request.account || 'default',launch.flagFor(request.ai,request.model))) await (getUsage()).status(false,{[request.ai]:request.account || 'default'});
+      if (!(getLimitEvidence()).active(request.account || 'default',launch.flagFor(request.ai,request.model))) await usage.status(false,{[request.ai]:request.account || 'default'}, { only: { ai: request.ai, account: request.account || 'default' } });
       return;
     }
     if (!limitRoutingEnabled()) return;
     const target = roleReviewLimit(request) ? limitBackup(request) : request;
-    if (!target || !['claude', 'codex'].includes(target.ai)) return;
-    // 元担当が保持中でも、確認ONの交代先は起動前に既存クレジットを判定する。
-    if (target !== request && rolesData().checkCredits[target.ai]) await (getUsage()).checkCredits(target.ai, target.account || 'default');
-    if (roleReviewLimit({ ...request, ...target })) return;
-    // 状態だけ読む（prompt/turnは送らない）。TTL/アカウント隔離はUsageの共通経路。
-    await (getUsage()).status(false, { [target.ai]: target.account || 'default' });
+    if (target && ['claude', 'codex'].includes(target.ai)) {
+      if (target !== request && rolesData().checkCredits[target.ai]) await check(target);
+      if (checks.size) await refreshReused();
+      if (!roleReviewLimit({ ...request, ...target })) {
+        await usage.status(false, { [target.ai]: target.account || 'default' }, { only: { ai: target.ai, account: target.account || 'default' } });
+      }
+    }
+    // The last authentication/status await can age a reused proof past 30s.
+    if (checks.size) await refreshReused();
+    for (const { request: o, result } of checks.values()) {
+      if (rolesData().preferCredits === true) record('credit-priority-check', o, { ...(getLimitEvidence()).creditDecision(o),
+        acquisition: result.acquisition, model: launch.flagFor(o.ai, o.model), account: o.account || 'default' });
+    }
+    const entry = checks.get(request.ai + ':' + (request.account || 'default'));
+    if (!entry?.early) return;
+    // The callback only starts a replacement read. Its caller must discard the
+    // old synchronous scan permit and acquire a NEW one after awaiting it.
+    const identity = o => JSON.stringify([o.project, o.task, o.ai, o.account || 'default', launch.flagFor(o.ai, o.model)]);
+    const original = identity(request);
+    return o => {
+      if (identity(o) !== original || entry.replaced || entry.result?.acquisition === 'cached' ||
+          rolesData().preferCredits !== true || !rolesData().checkCredits[o.ai] ||
+          control?.held(request) || control?.changed(request, ticket) ||
+          getLimitEvidence().creditDecision(o).reason !== 'not-fresh') return;
+      entry.replaced = true; // Reserve before await; never a third lookup.
+      return usage.checkCredits(o.ai, o.account || 'default', { fresh: true }).then(result => {
+        entry.result = result;
+        record('credit-priority-check', o, { ...getLimitEvidence().creditDecision(o),
+          acquisition: result.acquisition, model: launch.flagFor(o.ai, o.model), account: o.account || 'default' });
+      });
+    };
   }
 
   function limitRoutingEnabled() { return limitSwitchPolicy.enabled(); }
@@ -148,5 +222,5 @@ function assertCapacityHandoff(o) {
   return { terminalLimits, terminalLimitTimer };
   }
 
-  return { capacityBackup, assertCapacityHandoff, limitModels, roleReviewLimit, refreshLimitEvidence, limitRoutingEnabled, limitBackup, terminalLimitNotice, terminalPendingFile, terminalPending, saveTerminalPending, terminalBusy, terminalLimitHandoff, installTerminal };
+  return { startCreditCheck, capacityBackup, assertCapacityHandoff, limitModels, roleReviewLimit, refreshLimitEvidence, limitRoutingEnabled, limitBackup, terminalLimitNotice, terminalPendingFile, terminalPending, saveTerminalPending, terminalBusy, terminalLimitHandoff, installTerminal };
 };

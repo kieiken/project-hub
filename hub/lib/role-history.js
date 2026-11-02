@@ -73,7 +73,7 @@ function load(file, text = fs.readFileSync(file, 'utf8'), now = new Date().toISO
   } else if (!same(journal.history.at(-1).roles, roles)) {
     // Direct human edits are observed, never backdated to an unverifiable time.
     journal.history.push(entry(roles, now, 'edit', lt('roles.yaml の直接編集を確認'), [], journal.history.at(-1).roles));
-    if (journal.review) { journal.lastReview = { project: journal.review.project, task: journal.review.task, at: now, status: 'failed', message: lt('見直し中に役割設定が編集されたため中断しました') }; journal.review = null; }
+    if (journal.review) { journal.lastReview = { project: journal.review.project, task: journal.review.task, at: now, status: 'failed', message: lt('見直し中に役割設定が編集されたため中断しました'), catalogObservations: journal.review.catalogObservations || [] }; journal.review = null; }
   }
   if (journal.version === 1) {
     // v1 silently captured the installation settings. Keep that data for recovery,
@@ -92,9 +92,9 @@ function commit(file, before, next, options = {}) {
   if (changed) j.history.push(entry(after, at, options.kind || 'edit', options.reason || lt('役割分担を手動で保存'), options.participants || [], current.roles));
   if (options.reviewed) {
     if (!j.review || j.review.id !== options.reviewId || j.review.baseRevision !== current.revision) fail('見直し前の役割設定が変わったため保存していません');
-    const { project, task } = j.review;
+    const { project, task, catalogObservations = [] } = j.review;
     j.lastReviewedAt = at; j.review = null;
-    j.lastReview = { project, task, at, status: 'success', changed, message: options.reason, participants: options.participants || [] };
+    j.lastReview = { project, task, at, status: 'success', changed, message: options.reason, participants: options.participants || [], catalogObservations };
   }
   const out = encode(next, j);
   if (out !== current.text) atomic(file, current.text, out);

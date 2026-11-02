@@ -57,14 +57,18 @@ test('account names in usage headings are escaped',()=>{
   const a=app(),html=a.c.usageHtml({providers:{codex:{...snapshot.providers.codex,accountName:'<img src=x onerror=alert(1)>'}}},NOW);
   assert.match(html,/Codex・&lt;img/);assert.doesNotMatch(html,/<img/);
 });
-test('Codex-only display adds tickets and exact grouped balances after windows; top bar stays unchanged',()=>{
+test('Codex-only display adds tickets and grouped one-decimal balances after windows; top bar stays unchanged',()=>{
   const a=app(),extras={resetCredits:{count:1,items:[{title:'Full reset',expiresAt:'2026-11-12T00:00:00Z'}]},credits:{balance:'62500',unlimited:false}};
   const p={...snapshot.providers.codex,...extras},html=a.c.usageHtml({providers:{codex:p,claude:p}},NOW);
-  assert.equal((html.match(/リセットチケット：1枚/g)||[]).length,1);assert.equal((html.match(/クレジット残高：62,500/g)||[]).length,1);
+  assert.equal((html.match(/リセットチケット：1枚/g)||[]).length,1);assert.equal((html.match(/クレジット残高：62,500\.0</g)||[]).length,1);
   assert.ok(html.includes('Full reset・期限 '+a.c.usageDate(extras.resetCredits.items[0].expiresAt)));
   assert.ok(html.indexOf('usage-extras')>html.indexOf('usage-window'));assert.ok(html.indexOf('クレジット残高')<html.indexOf('取得：'));
   for(const compact of [false,true])assert.equal(a.c.usageSummary('codex',p,NOW,compact,true),a.c.usageSummary('codex',snapshot.providers.codex,NOW,compact,true));
-  for(const [balance,text] of [['0','0'],['9007199254740993123456789.50','9,007,199,254,740,993,123,456,789.50']]) assert.match(a.c.usageExtras('codex',{credits:{balance}}),new RegExp('クレジット残高：'+text.replace(/\./g,'\\.')));
+  for(const [balance,text] of [['0','0.0'],['59878.9695470000','59,879.0'],['12.04','12.0'],['12.05','12.1'],['999.95','1,000.0'],['9007199254740993123456789.50','9,007,199,254,740,993,123,456,789.5']]) {
+    const credits=Object.freeze({balance});
+    assert.ok(a.c.usageExtras('codex',{credits}).includes('クレジット残高：'+text+'</p>'));
+    assert.equal(credits.balance,balance);
+  }
   assert.match(a.c.usageExtras('codex',{credits:{unlimited:true,balance:'123'}}),/クレジット残高：無制限/);
 });
 test('Extras escape all ticket text, omit missing or invalid data and do not add consuming controls',()=>{
@@ -242,6 +246,20 @@ test('Cooldown visibly disables manual refresh and does not silently send a requ
   vm.runInContext('usageData.refreshAfter=new Date(Date.now()-1000).toISOString()',a.c);
   a.c.drawUsageControls();assert.equal(a.el('#usage-refresh').disabled,false);
 });
+test('会話の初回読込中は自動の利用状況取得を待ち、アカウント表示は直ちに消す',async()=>{
+ const a=app(),calls=[];vm.runInContext('usageLoading=false;usageData={providers:{old:{}}};',a.c);
+ a.c.chatHistoryPending=()=>true;
+ a.c.api=async route=>{calls.push(route);return snapshot;};
+ a.c.usageContextChanged();await a.c.loadUsage();
+ assert.deepEqual(calls,[]);assert.equal(vm.runInContext('usageData',a.c),null);
+ a.c.chatHistoryPending=()=>false;await a.c.loadUsage();assert.equal(calls.length,1);
+ assert.match(calls[0],/^\/api\/usage$/);
+});
+test('会話待ちでも本人の明示的な利用状況再取得は従来どおり実行する',async()=>{
+ const a=app(),calls=[];vm.runInContext('usageLoading=false;',a.c);a.c.chatHistoryPending=()=>true;
+ a.c.api=async route=>{calls.push(route);return snapshot;};
+ await a.c.loadUsage(true);assert.deepEqual(calls,['/api/usage/refresh']);
+});
 test('Usage redraw and load preserve drawer position; focus never scrolls it',async()=>{
  const a=app(),drawer=a.el('#usage-drawer');drawer.scrollTop=350;
  let actual='';Object.defineProperty(a.el('#usage-body'),'innerHTML',{get(){return actual;},set(v){actual=v;drawer.scrollTop=0;}});
@@ -315,11 +333,12 @@ test('Claude/Codex全モデルの保持を個別表示し、個別解除だけ�
   assert.equal(calls.length, 1); assert.equal(calls[0][0], '/api/limits/clear'); assert.equal(calls[0][1].model, 'claude-opus-5-5'); assert.equal(calls[0][1].account, 'work');
   finish({ ...snapshot, limits: [] }); await pending; assert.equal(vm.runInContext('usageVersion', a.c), 1);
 });
-test('credit exception is restricted to default Codex, preserves exact fractional display and confirms only once',async()=>{
+test('credit exception is restricted to default Codex, rounds labels while preserving exact actions and confirms only once',async()=>{
  const a=app(),p={ai:'codex',account:'default',status:'ok',credits:{balance:'62500.0000000000',unlimited:false}};
  assert.match(a.c.creditExceptionHtml(p,null),/data-credit-action="start"/);assert.equal(a.c.creditExceptionHtml({...p,account:'work'},null),'');assert.equal(a.c.creditExceptionHtml({...p,ai:'claude'},null),'');
  assert.equal(a.c.creditExceptionHtml({...p,credits:{...p.credits,balance:'62500.0000000001'}},null),'');assert.equal(a.c.creditExceptionHtml({...p,credits:{...p.credits,hasCredits:false}},null),'');
- const e={state:'active',lastBalance:'62499.9999999999',startBalance:'62500.0000000000'};assert.match(a.c.creditExceptionHtml(p,e),/62,499\.9999999999/);
+ const e={state:'active',lastBalance:'62499.9999999999',startBalance:'62500.0000000000'};assert.match(a.c.creditExceptionHtml(p,e),/残り 62,500\.0 ／ 開始 62,500\.0/);
+ assert.match(a.c.creditExceptionHtml(p,null),/data-credit-balance="62500\.0000000000"/);
  const calls=[];a.c.confirm=()=>false;a.c.api=async(...args)=>{calls.push(args);return {...snapshot,creditException:e};};await a.c.changeCreditException({creditAction:'start',creditBalance:p.credits.balance});assert.equal(calls.length,0);
  a.c.confirm=()=>true;await a.c.changeCreditException({creditAction:'start',creditBalance:p.credits.balance});assert.equal(calls.length,1);assert.equal(calls[0][0],'/api/limits/credit-exception');assert.equal(calls[0][1].account,'default');assert.equal(calls[0][1].expectedBalance,p.credits.balance);
  assert.match(a.el('#usage-body').innerHTML,/既存クレジットで継続中/);assert.doesNotMatch(a.el('#usage-body').innerHTML,/data-credit-action="end" disabled/);

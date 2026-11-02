@@ -1,0 +1,16 @@
+# 本機機密設定（公開範例檔前仍需確認內容）
+.env
+.env.*
+!.env.example
+!.env.sample
+.npmrc
+.dev.vars
+.dev.vars.*
+.claude/settings.local.json
+
+# AI 對話、交接與暫存工作
+.ai/chat/
+.ai/handoff/
+.ai/work/
+node_modules/
+.DS_Store

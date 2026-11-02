@@ -86,3 +86,128 @@ test('定期整理は変更を作れない長い重要要約の警告も読取�
  const f=fixture(t);raw(f,'## 最新の再開要約\n承認：'+'KEEP'.repeat(700)+'\n');apply(f);let checks=0;const before=fs.readFileSync(f.file),notices=[];
  f.budget.maintainEnabled(()=>{checks++;return false;},(k,w)=>notices.push(w));assert.equal(checks,0);assert.match(notices.flat().join(' '),/重要情報/);assert.deepEqual(fs.readFileSync(f.file),before);
 });
+
+test('定期確認は完了journalの本文を再読せず、新規・変更・削除を検出する',t=>{
+ const f=fixture(t);fs.mkdirSync(f.budget.dir,{recursive:true});
+ const file=path.join(f.budget.dir,'00000000-0000-0000-0000-000000000000.json');
+ const done=JSON.stringify({project:f.p.id,stage:'done',original:'x'.repeat(2*1024*1024)});
+ fs.writeFileSync(file,done);const read=fs.readFileSync;let reads=0;
+ fs.readFileSync=(name,...args)=>{if(String(name)===file)reads++;return read(name,...args);};
+ try{
+  assert.deepEqual(f.budget.pending(f.p.id,{preflight:true}),[]);
+  for(let i=0;i<6;i++)assert.deepEqual(f.budget.pending(f.p.id,{preflight:true}),[]);
+  assert.equal(reads,1);
+  // Safety gates deliberately bypass the periodic cache.
+  f.budget.pending(f.p.id);assert.equal(reads,2);
+  f.budget.pending(f.p.id,{preflight:true});assert.equal(reads,3);
+  const previous=fs.statSync(file);
+  fs.writeFileSync(file,done.replace('"done"','"oops"'));
+  fs.utimesSync(file,previous.atime,previous.mtime);
+  assert.equal(f.budget.pending(f.p.id,{preflight:true})[0].j.stage,'oops');
+  const before=reads;f.budget.pending(f.p.id,{preflight:true});assert.equal(reads,before+1);
+  fs.writeFileSync(file+'.new',done);fs.renameSync(file+'.new',file);
+  assert.deepEqual(f.budget.pending(f.p.id,{preflight:true}),[]);
+  fs.unlinkSync(file);assert.deepEqual(f.budget.pending(f.p.id,{preflight:true}),[]);
+  assert.equal(f.budget.completedJournals.size,0);
+  fs.writeFileSync(file,JSON.stringify({project:f.p.id,stage:'intent'}));
+  assert.throws(()=>f.budget.maintenanceCheck(f.p.id,f.task.id),/復旧/);
+  fs.writeFileSync(file,'{broken');assert.throws(()=>f.budget.pending(f.p.id,{preflight:true}),SyntaxError);
+ }finally{fs.readFileSync=read;}
+});
+for(const link of ['symlink','hardlink'])test('定期確認の完了cacheも'+link+'への置換を拒否',t=>{
+ const f=fixture(t);fs.mkdirSync(f.budget.dir,{recursive:true});
+ const file=path.join(f.budget.dir,'00000000-0000-0000-0000-000000000000.json'),other=path.join(f.budget.dir,'original');
+ fs.writeFileSync(file,JSON.stringify({project:f.p.id,stage:'done'}));f.budget.pending(f.p.id,{preflight:true});
+ fs.renameSync(file,other);if(link==='symlink')fs.symlinkSync(other,file);else fs.linkSync(other,file);
+ assert.throws(()=>f.budget.pending(f.p.id,{preflight:true}));
+});
+test('36MBの完了記録と3作業でも次の見回りは本文読取り0回',t=>{
+ const f=fixture(t),third=f.store.createTask(f.p.id,{title:'third'}),tasks=[f.task.id,f.other.id,third.id];
+ for(const task of tasks)fs.writeFileSync(f.store.taskFile(f.p.id,task),'---\nid: '+task+'\nstate: 実行中\n---\n## 成果\n保持\n');
+ fs.mkdirSync(f.budget.dir,{recursive:true});fs.writeFileSync(f.budget.stateFile(f.p.id),JSON.stringify({tasks}));
+ const journals=new Set();for(let i=0;i<27;i++){
+  const file=path.join(f.budget.dir,'00000000-0000-0000-0000-'+String(i).padStart(12,'0')+'.json');
+  fs.writeFileSync(file,JSON.stringify({project:f.p.id,stage:'done',original:'x'.repeat(1400000)}));journals.add(file);
+ }
+ const read=fs.readFileSync;let reads=0;const notices=[];
+ fs.readFileSync=(name,...args)=>{if(journals.has(String(name)))reads++;return read(name,...args);};
+ try{
+  const cold=performance.now();f.budget.maintainEnabled(()=>{throw Error('unexpected write');},(...x)=>notices.push(x));const coldMs=performance.now()-cold;
+  assert.equal(reads,27);reads=0;const warm=performance.now();
+  for(let i=0;i<3;i++)f.budget.maintainEnabled(()=>{throw Error('unexpected write');},(...x)=>notices.push(x));
+  const warmMs=(performance.now()-warm)/3;assert.equal(reads,0);assert.equal(notices.length,12);assert.ok(notices.every(x=>x[1].length===0));
+  t.diagnostic('27 completed journals / 3 tasks: cold '+coldMs.toFixed(1)+'ms, warm average '+warmMs.toFixed(1)+'ms, repeated journal reads '+reads);
+ }finally{fs.readFileSync=read;}
+});
+
+test('read plans reuse unchanged inputs, invalidate archives/summary/mode and retain fresh transact checks',async t=>{
+ const f=fixture(t);raw(f,'## 最新の再開要約\n未済：KEEP\n## メモ\n'+'- old\n'.repeat(6000));
+ let builds=0;const build=f.budget.buildPlan.bind(f.budget);f.budget.buildPlan=(...a)=>{builds++;return build(...a);};
+ const a=f.budget.plan(f.p.id,f.task.id);assert.ok(a.changes.length);assert.deepEqual(f.budget.plan(f.p.id,f.task.id),a);assert.equal(builds,1);
+ a.changes[0].next='mutated caller';assert.notEqual(f.budget.plan(f.p.id,f.task.id).changes[0].next,a.changes[0].next);
+ const archive=f.budget.plan(f.p.id,f.task.id).changes.find(x=>x.file.includes('notes-')).file;fs.mkdirSync(path.dirname(archive),{recursive:true});fs.writeFileSync(archive,'destination changed');
+ f.budget.plan(f.p.id,f.task.id);assert.equal(builds,2);
+ const stamp=fs.statSync(f.file);const text=fs.readFileSync(f.file,'utf8');fs.writeFileSync(f.file,text.replace('KEEP','NEXT'));fs.utimesSync(f.file,stamp.atime,stamp.mtime);f.budget.plan(f.p.id,f.task.id);assert.equal(builds,3);
+ fs.chmodSync(f.file,0o640);f.budget.plan(f.p.id,f.task.id);assert.equal(builds,4);
+ fs.mkdirSync(f.budget.dir,{recursive:true});fs.writeFileSync(f.budget.summaryRequestFile(f.p.id,f.task.id),JSON.stringify({stage:'conflict'}));assert.match(f.budget.plan(f.p.id,f.task.id).warnings.join(' '),/原文が変わっています/);assert.equal(builds,5);
+ const pv=await f.budget.previewAsync(f.p.id,f.task.id);fs.appendFileSync(archive,'later');assert.throws(()=>f.budget.apply({...pv,confirm:true}),/変わりました/);
+});
+test('cold async body plan stays off the event loop; concurrent reads share work and live busy/token gates remain',async t=>{
+ const f=fixture(t);raw(f,'## メモ\n'+'- old😀\n'.repeat(100000));let ticks=0;const timer=setInterval(()=>ticks++,2);t.after(()=>clearInterval(timer));
+ const [a,b]=await Promise.all([f.budget.previewAsync(f.p.id,f.task.id),f.budget.previewAsync(f.p.id,f.task.id)]);
+ assert.ok(ticks>3);assert.deepEqual(a.moves,b.moves);assert.notEqual(a.token,b.token);assert.equal(f.budget.planCache.size,1);
+ assert.deepEqual(f.budget.plan(f.p.id,f.task.id),new TextBudget({store:f.store}).plan(f.p.id,f.task.id));
+ f.budget.busy=()=> 'AI moving';assert.equal((await f.budget.previewAsync(f.p.id,f.task.id)).token,'');
+ const key=f.budget.planKey(f.p.id,f.task.id);fs.appendFileSync(f.project,'\n## new\n');assert.equal(f.budget.cachedPlan(key),null);
+});
+test('async periodic maintenance warms plans without writing while busy, then uses unchanged transaction checks',async t=>{
+ const f=fixture(t);raw(f,'## メモ\n'+'- old\n'.repeat(6000));apply(f);raw(f,'## メモ\n'+'- new\n'.repeat(6000));const before=fs.readFileSync(f.file);
+ const notices=[];await f.budget.prepareMaintenance((...x)=>notices.push(x));f.budget.maintainEnabled(()=>true,(...x)=>notices.push(x));assert.deepEqual(fs.readFileSync(f.file),before);
+ await f.budget.prepareMaintenance();f.budget.maintainEnabled(()=>false,()=>{});assert.ok(fs.readFileSync(f.file).length<before.length);assert.equal(f.budget.pending(f.p.id).length,0);
+});
+test('oversized plans remain usable by async preflight without retaining unbounded cache entries',async t=>{
+ const f=fixture(t);raw(f,'## メモ\n'+'- old\n'.repeat(6000));
+ const archive=f.budget.plan(f.p.id,f.task.id).changes.find(c=>c.file.includes('notes-')).file;fs.mkdirSync(path.dirname(archive),{recursive:true});fs.writeFileSync(archive,'x'.repeat(5*1024*1024));
+ assert.equal((await f.budget.maintenanceCheckAsync(f.p.id,f.task.id)).needed,true);assert.equal(f.budget.planCache.size,0);assert.equal(f.budget.tokens.size,0);
+});
+test('async preview reads large completed journals off-loop, reuses only unchanged metadata, and never caches write permission',async t=>{
+ const f=fixture(t);raw(f,'## メモ\n'+'- old\n'.repeat(6000));fs.mkdirSync(f.budget.dir,{recursive:true});
+ const files=[];for(let i=0;i<12;i++){const file=path.join(f.budget.dir,'00000000-0000-0000-0000-'+String(i).padStart(12,'0')+'.json');fs.writeFileSync(file,JSON.stringify({id:'done-'+i,project:f.p.id,task:f.task.id,stage:'done',request:'request-'+i,original:'x'.repeat(1000000)}));files.push(file);}
+ const before=files.map(f=>fs.readFileSync(f)),syncRead=fs.readFileSync;let mainReads=0,ticks=0;fs.readFileSync=(file,...args)=>{if(files.includes(String(file)))mainReads++;return syncRead(file,...args);};const timer=setInterval(()=>ticks++,2);
+ try{
+  const first=await f.budget.previewAsync(f.p.id,f.task.id,'request-0');assert.equal(first.requestStatus,'done');assert.ok(first.token);assert.ok(ticks>3);assert.equal(mainReads,0);
+  assert.equal((await f.budget.previewAsync(f.p.id,f.task.id,'request-0')).requestStatus,'done');assert.equal(mainReads,0);
+  // A newly added unresolved record must block the next displayed token, and
+  // a token from before that record still cannot authorize apply().
+  const pending=path.join(f.budget.dir,'00000000-0000-0000-0000-999999999999.json');fs.writeFileSync(pending,JSON.stringify({id:'pending',project:f.p.id,task:f.task.id,stage:'intent'}));const blocked=await f.budget.previewAsync(f.p.id,f.task.id);assert.equal(blocked.token,'');assert.deepEqual(blocked.pending,['pending']);assert.throws(()=>f.budget.apply({...first,confirm:true}),/復旧/);assert.ok(mainReads>=12);
+  fs.unlinkSync(pending);const st=fs.statSync(files[0]);fs.writeFileSync(files[0],before[0].toString().replace('"done"','"oops"'));fs.utimesSync(files[0],st.atime,st.mtime);assert.equal((await f.budget.previewAsync(f.p.id,f.task.id,'request-0')).token,'');
+  fs.writeFileSync(files[0],'{malformed');await assert.rejects(f.budget.previewAsync(f.p.id,f.task.id));
+ }finally{clearInterval(timer);fs.readFileSync=syncRead;}
+});
+
+
+test('periodic preparation is read-only; actual maintenance completes synchronously in a fresh handoff permit',async t=>{
+ const f=fixture(t);raw(f,'## メモ\n'+'- old\n'.repeat(6000));apply(f);raw(f,'## メモ\n'+'- new\n'.repeat(6000));
+ const before=fs.readFileSync(f.file),{ChatRunner}=require('../lib/chat'),spool=path.join(f.root,'spool');fs.mkdirSync(spool);
+ const runner=new ChatRunner({spoolRoot:spool});let scans=0;runner.handoffAdmission={async scan(){scans++;return {errors:[],dirs:[]};},close(){}};
+ f.budget.busy=()=>runner.guardErrors().length?'no current handoff permit':'';
+ await f.budget.prepareMaintenance();assert.deepEqual(fs.readFileSync(f.file),before);assert.equal(scans,0);
+ assert.throws(()=>f.budget.idle(f.p.id,f.task.id),/no current handoff permit/);
+ let writeInside=false;f.budget.checkpoint=()=>{assert.deepEqual(runner.guardErrors(),[]);writeInside=true;};
+ await runner.withStrictHandoff(()=>{
+  assert.equal(f.budget.maintainEnabled(()=>false,(scope,w)=>assert.deepEqual(w,[])),undefined);
+  assert.equal(writeInside,true);assert.ok(fs.readFileSync(f.file).length<before.length);
+ });
+ assert.equal(scans,1);assert.throws(()=>f.budget.idle(f.p.id,f.task.id),/no current handoff permit/);
+});
+test('maintenance discards a prepared plan after changed originals, and a new journal blocks writing',async t=>{
+ const f=fixture(t);raw(f,'## メモ\n'+'- old\n'.repeat(6000));apply(f);raw(f,'## メモ\n'+'- warm\n'.repeat(6000));
+ await f.budget.prepareMaintenance();const key=f.budget.planKey(f.p.id,f.task.id);assert.ok(f.budget.cachedPlan(key));
+ raw(f,'## メモ\n'+'- LIVE\n'.repeat(6000));assert.equal(f.budget.cachedPlan(key),null);
+ let builds=0;const build=f.budget.buildPlan.bind(f.budget);f.budget.buildPlan=(...args)=>{builds++;return build(...args);};
+ f.budget.maintainEnabled(()=>false,(scope,w)=>assert.deepEqual(w,[]));assert.equal(builds,1);
+ const archive=f.budget.archives(f.p.id,f.task.id).find(x=>x.path.includes('notes-'));assert.match(fs.readFileSync(path.join(f.p.dir,archive.path),'utf8'),/LIVE/);
+ raw(f,'## メモ\n'+'- last\n'.repeat(6000));await f.budget.prepareMaintenance();const before=fs.readFileSync(f.file);
+ fs.writeFileSync(path.join(f.budget.dir,'00000000-0000-0000-0000-999999999998.json'),JSON.stringify({project:f.p.id,task:f.task.id,stage:'intent'}));
+ const notices=[];f.budget.maintainEnabled(()=>{throw Error('must not reach write admission');},(scope,w)=>notices.push(...w));assert.match(notices.join(' '),/復旧/);assert.deepEqual(fs.readFileSync(f.file),before);
+});

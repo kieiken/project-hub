@@ -5,7 +5,7 @@ const LIMITS=Object.freeze({summary:2000,notes:20000,trigger:24000,index:8000,to
 const count=s=>Array.from(s).length,cut=(s,n)=>Array.from(s).slice(0,Math.max(0,n)).join(''),hash=s=>createHash('sha256').update(s).digest('hex');
 const lines=s=>s.match(/[^\n]*\n|[^\n]+$/g)||[];
 const pointer=l=>/^\[.*\]\(\.ai\/memory\/[^\r\n]+\)\r?\n?$/.test(l);
-const critical=l=>/未済|判断待ち|承認|停止|失敗|決定事項|理由|現状|残件|証拠の場所|待確認|核准|未完成|暫停|失敗|決定事項|原因|目前|待處理/.test(l);
+const critical=l=>/未済|判断待ち|承認|停止|失敗|決定事項|理由|現状|残件|証拠の場所|待確認|核准|未完成|暫停|失敗|決定事項|原因|目前|待處理/.test(l)||/\b(?:unfinished|pending|approval|approved|stopped|failed|failure|decisions?|reasons?|current status|outstanding|evidence|remaining|awaiting (?:review|confirmation|decision))\b/i.test(l);
 function partition(original,kept,moved){const bag=new Map();for(const l of lines(original))bag.set(l,(bag.get(l)||0)+1);for(const l of [...lines(kept),...lines(moved)])bag.set(l,(bag.get(l)||0)-1);if([...bag.values()].some(n=>n!==0))throw Error('原文の分割照合に失敗しました');}
 function sections(raw,level=2){
   const matches=[...raw.matchAll(new RegExp('^'+ '#'.repeat(level)+' ([^\\r\\n]+)\\r?\\n','gm'))];
@@ -59,16 +59,82 @@ function searchHit(relative,ls,i,start,end,query,available){
   const a=Math.max(0,Math.min(at-Math.floor((room-count(query))/2),chars.length-room)),b=Math.min(chars.length,a+room);
   return {text:head+(a?'…':'')+chars.slice(a,b).join('')+(b<chars.length?'…':'')+'\n',partial:true};
 }
+// Read-only plans depend on every input and destination, including absent files.
+// Writers still perform the original full byte/mode checks in transact().
+function planStamp(file){require('./remove').readNoLinks(file);try{const s=fs.statSync(file,{bigint:true});if(!s.isFile()||s.nlink!==1n)throw Error('原文は単独の通常ファイルにしてください');return [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs,s.mode].join(':');}catch(e){if(e.code==='ENOENT')return null;throw e;}}
+function validPlan(dependencies){return [...dependencies].every(([file,stamp])=>planStamp(file)===stamp);}
 class TextBudget{
-  constructor({store,busy=()=>'',checkpoint=()=>{}}){Object.assign(this,{store,busy,checkpoint});this.tokens=new Map();this.dir=path.join(store.root,'_hub/notes-archive');}
+  constructor({store,busy=()=>'',checkpoint=()=>{}}){Object.assign(this,{store,busy,checkpoint});this.tokens=new Map();this.completedJournals=new Map();this.dir=path.join(store.root,'_hub/notes-archive');this.planCache=new Map();this.planReads=new Map();this.previewJournals=new Map();}
   topic(project,task){const p=this.store.readProject(project),file=p&&this.store.taskFile(project,task);if(!file||p.kind==='freetalk')throw Error(lt('通常の作業が見つかりません'));return {p,file};}
   stateFile(project){return path.join(this.dir,'policy-'+hash(project)+'.json');}
   summaryRequestFile(project,task){return path.join(this.dir,'summary-'+hash(project+'\0'+task)+'.json');}
   summaryWarnings(project,task){const q=JSON.parse(read(this.summaryRequestFile(project,task))?.text||'null');return q&&(q.stage==='conflict'||q.stage==='queued'&&q.conflictPending)?[lt('要約の原文が変わっています。再送せず確認してください')]:[];}
   state(project){return JSON.parse(read(this.stateFile(project))?.text||'{"tasks":[]}');}
-  pending(project){noLinks(this.dir);if(!exists(this.dir))return [];return fs.readdirSync(this.dir).filter(n=>/^[a-f0-9-]{36}\.json$/.test(n)).map(n=>({file:path.join(this.dir,n),j:JSON.parse(read(path.join(this.dir,n)).text)})).filter(x=>x.j.project===project&&x.j.stage!=='done');}
+  pending(project,{preflight=false}={}){
+    noLinks(this.dir);if(!exists(this.dir)){this.completedJournals.clear();return [];}
+    const files=fs.readdirSync(this.dir).filter(n=>/^[a-f0-9-]{36}\.json$/.test(n)).map(n=>path.join(this.dir,n)),live=new Set(files),pending=[];
+    for(const file of this.completedJournals.keys())if(!live.has(file))this.completedJournals.delete(file);
+    for(const file of files){
+      // Only the read-only periodic preflight may skip unchanged completed
+      // journals. Recovery and every write gate still read the full originals.
+      let stamp;
+      if(preflight){
+        noLinks(file);const st=fs.statSync(file,{bigint:true});
+        if(!st.isFile()||st.nlink!==1n)throw Error('原文は単独の通常ファイルにしてください');
+        stamp=[st.dev,st.ino,st.size,st.mtimeNs,st.ctimeNs,st.mode].join(':');
+        if(this.completedJournals.get(file)===stamp)continue;
+      }
+      this.completedJournals.delete(file);
+      const j=JSON.parse(read(file).text);
+      if(preflight&&j.stage==='done')this.completedJournals.set(file,stamp);
+      if(j.project===project&&j.stage!=='done')pending.push({file,j});
+    }
+    return pending;
+  }
   idle(project,task){const why=this.busy(project,task);if(why)throw Error(why===true?lt('AI・整理・確認が動いています'):why);const {p}=this.topic(project,task);const legacy=read(path.join(p.dir,'.ai/memory/.project-notes-archive.json'));if(legacy&&JSON.parse(legacy.text).state==='intent')throw Error(lt('メモ保管の復旧が必要です'));}
+  planKey(project,task,replacement){return JSON.stringify([project,task,replacement??null,new Date().toISOString().slice(0,7),process.env.HUB_LANG||'',this.store.readTask(this.topic(project,task).file).state]);}
+  cachedPlan(key){const hit=this.planCache.get(key);if(hit&&validPlan(hit.dependencies))return structuredClone(hit.value);this.planCache.delete(key);return null;}
+  rememberPlan(key,value,dependencies){
+    if(!validPlan(dependencies))throw Error('本文整理の計算中に原文が変わりました');
+    const size=Buffer.byteLength(JSON.stringify(value));
+    this.planCache.delete(key);
+    if(size<=8*1024*1024){while(this.planCache.size>=16||[...this.planCache.values()].reduce((n,x)=>n+x.size,0)+size>16*1024*1024)this.planCache.delete(this.planCache.keys().next().value);this.planCache.set(key,{value:structuredClone(value),dependencies,size});}
+    return value;
+  }
   plan(project,task,replacement){
+    const key=this.planKey(project,task,replacement),hit=this.cachedPlan(key);if(hit)return hit;
+    const dependencies=new Map(),value=this.buildPlan(project,task,replacement,dependencies);return this.rememberPlan(key,value,dependencies);
+  }
+  async planAsync(project,task){
+    const key=this.planKey(project,task),hit=this.cachedPlan(key);if(hit)return hit;
+    if(this.planReads.has(key))return structuredClone(await this.planReads.get(key));
+    const {p,file}=this.topic(project,task),state=this.store.readTask(file).state;
+    const pending=require('./text-budget-read-worker').plan({root:this.store.root,project,task,p:{id:p.id,dir:p.dir,kind:p.kind},file,state}).then(({value,dependencies})=>{if(this.planKey(project,task)!==key)throw Error('本文整理の計算中に原文が変わりました');return this.rememberPlan(key,value,new Map(dependencies));}).finally(()=>this.planReads.delete(key));
+    this.planReads.set(key,pending);return structuredClone(await pending);
+  }
+  journalKey(){
+    noLinks(this.dir);if(!exists(this.dir))return 'absent';
+    const s=fs.statSync(this.dir,{bigint:true});
+    return JSON.stringify([[s.dev,s.ino,s.mode,s.mtimeNs,s.ctimeNs].join(':'),...fs.readdirSync(this.dir).filter(n=>/^[a-f0-9-]{36}\.json$/.test(n)).sort().map(n=>[n,planStamp(path.join(this.dir,n))])]);
+  }
+  async previewPending(project,task,request){
+    const scope=JSON.stringify([project,request?task:'',request||'']),key=this.journalKey(),old=this.previewJournals.get(scope);
+    if(old?.key===key)return {key,...structuredClone(old.value)};
+    const value=await require('./text-budget-read-worker').pending({root:this.store.root,project,task,request});
+    if(this.journalKey()!==key)throw Error('本文整理の確認中に記録が変わりました');
+    this.previewJournals.delete(scope);
+    if(Buffer.byteLength(JSON.stringify(value))+Buffer.byteLength(key)<=1024*1024){while(this.previewJournals.size>=16)this.previewJournals.delete(this.previewJournals.keys().next().value);this.previewJournals.set(scope,{key,value:structuredClone(value)});}
+    return {key,...value};
+  }
+  async previewAsync(project,task,request){
+    const [v,j]=await Promise.all([this.planAsync(project,task),this.previewPending(project,task,request)]);
+    if(this.journalKey()!==j.key)throw Error('本文整理の確認中に記録が変わりました');
+    return this.preview(project,task,request,v,j.pending,j.status);
+  }
+  buildPlan(project,task,replacement,dependencies){
+    const read=f=>{const before=planStamp(f),value=require('./safe-file').read(f);if(planStamp(f)!==before)throw Error('本文整理の計算中に原文が変わりました');dependencies.set(f,before);return value;};
+    read(this.summaryRequestFile(project,task));
+    read(this.topic(project,task).file);
     const {p,file}=this.topic(project,task),month=new Date().toISOString().slice(0,7).replace('-',''),changes=[],moves=[],warnings=replacement===undefined?this.summaryWarnings(project,task):[],links=[];
     const add=(f,next)=>{const before=read(f);if(before?.text!==next)changes.push({file:f,before:before?.text??null,next,mode:before?.mode??0o600});};
     const move=(source,section,text,relative)=>{
@@ -109,10 +175,10 @@ class TextBudget{
   }
   snapshot(project,task){const {p,file}=this.topic(project,task);return [file,path.join(p.dir,'PROJECT.md'),path.join(p.dir,'.ai/memory/INDEX.md'),this.stateFile(project)].map(f=>({file:f,...read(f)}));}
   requestStatus(project,task,request){if(!request)return '';noLinks(this.dir);if(!exists(this.dir))return 'unconfirmed';for(const n of fs.readdirSync(this.dir).filter(n=>/^[a-f0-9-]{36}\.json$/.test(n))){const j=JSON.parse(read(path.join(this.dir,n)).text);if(j.project===project&&j.task===task&&j.request===request)return j.stage;}return 'unconfirmed';}
-  preview(project,task,request){const v=this.plan(project,task),pending=this.pending(project);let reason='';try{this.idle(project,task);}catch(e){reason=e.message;}if(pending.length)reason=lt('本文整理の結果が不明です。復旧を確認してください');
+  preview(project,task,request,planned,displayPending,displayStatus){const v=planned||this.plan(project,task),pending=displayPending||this.pending(project);let reason='';try{this.idle(project,task);}catch(e){reason=e.message;}if(pending.length)reason=lt('本文整理の結果が不明です。復旧を確認してください');
     const token=randomUUID();for(const [k,t] of this.tokens)if(Date.now()-t.at>600000)this.tokens.delete(k);
     if(!reason)this.tokens.set(token,{...v,request:token,at:Date.now(),snapshot:this.snapshot(project,task)});
-    return {project,task,token:reason?'':token,reason,warnings:v.warnings,moves:v.moves,limits:LIMITS,enabled:this.state(project).tasks.includes(task),requestStatus:this.requestStatus(project,task,request),noChanges:!v.changes.length,pending:pending.filter(x=>x.j.task===task).map(x=>x.j.id),files:v.changes.map(x=>({file:path.relative(this.topic(project,task).p.dir,x.file),before:count(x.before||''),after:count(x.next)}))};
+    return {project,task,token:reason?'':token,reason,warnings:v.warnings,moves:v.moves,limits:LIMITS,enabled:this.state(project).tasks.includes(task),requestStatus:displayStatus??this.requestStatus(project,task,request),noChanges:!v.changes.length,pending:pending.filter(x=>x.j.task===task).map(x=>x.j.id),files:v.changes.map(x=>({file:path.relative(this.topic(project,task).p.dir,x.file),before:count(x.before||''),after:count(x.next)}))};
   }
   transact(v,enable=true){
     this.idle(v.project,v.task);if(this.pending(v.project).length)throw Error(lt('本文整理の復旧が必要です'));
@@ -160,11 +226,39 @@ class TextBudget{
   // Read-only preflight. It authorizes nothing: maintain/transact still repeat
   // the current policy, originals, pending journals and full idle checks.
   maintenanceCheck(project,task){
-    if(this.pending(project).length)throw Error(lt('本文整理の復旧が必要です'));
+    const cached=this.previewJournals.get(JSON.stringify([project,'','']));
+    const pending=cached?.key===this.journalKey()?cached.value.pending:this.pending(project,{preflight:true});
+    if(pending.length)throw Error(lt('本文整理の復旧が必要です'));
     const q=JSON.parse(read(this.summaryRequestFile(project,task))?.text||'null');
     if(q?.stage==='queued')return {needed:true,warnings:[]};
     const v=this.plan(project,task);
     return {needed:q?.stage!=='conflict'&&v.changes.length>0,warnings:v.warnings};
+  }
+  async maintenanceCheckAsync(project,task){
+    const journals=await this.previewPending(project);
+    if(journals.pending.length)throw Error(lt('本文整理の復旧が必要です'));
+    const q=JSON.parse(read(this.summaryRequestFile(project,task))?.text||'null');
+    if(q?.stage==='queued')return {needed:true,warnings:[]};
+    const key=this.planKey(project,task),v=await this.planAsync(project,task);
+    if(this.planKey(project,task)!==key)throw Error('本文整理の計算中に原文が変わりました');
+    if(this.journalKey()!==journals.key)throw Error('本文整理の確認中に記録が変わりました');
+    const latest=JSON.parse(read(this.summaryRequestFile(project,task))?.text||'null');
+    if(JSON.stringify(latest)!==JSON.stringify(q))throw Error('本文整理の計算中に原文が変わりました');
+    // Oversized plans intentionally are not retained. This is only a preflight;
+    // maintain/transact still validate all current originals before any write.
+    return {needed:latest?.stage!=='conflict'&&v.changes.length>0,warnings:v.warnings};
+  }
+  // Read and warm only. Callers must await this BEFORE acquiring a synchronous
+  // handoff permit, then invoke maintainEnabled without awaiting inside it.
+  async prepareMaintenance(notice=()=>{}){
+    if(this.maintenanceReading)return;this.maintenanceReading=true;
+    try{for(const p of this.store.listProjects()){
+      if(p.kind==='freetalk')continue;
+      for(const task of this.state(p.id).tasks){
+        try{await this.maintenanceCheckAsync(p.id,task);}
+        catch(e){notice(p.id+' / '+task,[e.message]);}
+      }
+    }}catch(e){notice('本文整理',[e.message]);}finally{this.maintenanceReading=false;}
   }
   needsMaintenance(project,task){return this.maintenanceCheck(project,task).needed;}
   maintainEnabled(blocked,notice){

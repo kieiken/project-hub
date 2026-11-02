@@ -28,6 +28,6 @@ test('HTTP simultaneous new sends admit one turn, and global stop cannot be manu
  const ticket=hub.stopControl.ticket(key),responses=await Promise.all([send({manualStopTicket:ticket}),send({manualStopTicket:ticket})]);assert.equal(responses.filter(r=>r.status===200).length,1,JSON.stringify(responses));await wait(()=>!hub.chats.busy(key.project,key.task));
  hub.stopControl.pause();assert.equal((await send({manualStopTicket:hub.stopControl.ticket(key)})).status,409);assert.equal(hub.restartControl.executions,0);
 });
-test('normal clean exit is safe without owned AI; unknown saved results retain boot protection',()=>{
- hub.stopControl.setResults([]);assert.equal(hub.safeShutdown(),true);hub.stopControl.setResults([{...key,state:'exited',save:'unconfirmed'}]);assert.equal(hub.safeShutdown(),false);hub.stopControl.setResults([]);
+test('normal clean exit is safe without owned AI; unknown saved results retain boot protection',async()=>{
+ hub.stopControl.setResults([]);assert.equal(await hub.chats.withStrictHandoff(()=>hub.safeShutdown()),true);hub.stopControl.setResults([{...key,state:'exited',save:'unconfirmed'}]);assert.equal(await hub.chats.withStrictHandoff(()=>hub.safeShutdown()),false);hub.stopControl.setResults([]);
 });

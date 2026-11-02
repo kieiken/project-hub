@@ -16,7 +16,7 @@ test('保存済み・同一HEADでも申告原文/commit/manifest/関連試験�
 });
 for(const mode of ['product','task','test','mode','new-test','missing-test','symlink'])test('保存済み確認資料の変更/不足を拒否：'+mode,t=>{
  const f=fixture(t),e=results.collect(f.h,f.r,f.i);
- if(mode==='mode')fs.chmodSync(f.product,0o600);else if(mode==='new-test')fs.writeFileSync(path.join(f.dir,'.ai/work/'+f.i.task+'-more.log'),'new');else if(mode==='missing-test')fs.unlinkSync(f.log);else if(mode==='symlink'){fs.unlinkSync(f.log);fs.symlinkSync(f.product,f.log);}else fs.appendFileSync(mode==='product'?f.product:mode==='task'?f.taskFile:f.log,'changed');
+ if(mode==='mode')fs.chmodSync(f.product,(fs.statSync(f.product).mode&0o777)===0o600?0o644:0o600);else if(mode==='new-test')fs.writeFileSync(path.join(f.dir,'.ai/work/'+f.i.task+'-more.log'),'new');else if(mode==='missing-test')fs.unlinkSync(f.log);else if(mode==='symlink'){fs.unlinkSync(f.log);fs.symlinkSync(f.product,f.log);}else fs.appendFileSync(mode==='product'?f.product:mode==='task'?f.taskFile:f.log,'changed');
  assert.throws(()=>results.verify(e,f.h,f.r,f.i));
 });
 test('旧空資料とclosed独立資料不足のみ正式補足の根拠にでき、原物を変えない',t=>{

@@ -39,7 +39,7 @@ class StaticFiles {
   async send(req, res, file, type, fallback) {
     if(this.snapshot){
       const entry=this.snapshot.get(file);if(!entry)return fallback(res,404,'not found','text/plain');
-      const headers={'Content-Type':type,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff',ETag:entry.tag,Vary:'Accept-Encoding'};
+      const headers={'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',ETag:entry.tag,Vary:'Accept-Encoding'};
       if(matchesTag(req.headers['if-none-match'],entry.tag)){res.writeHead(304,headers);return res.end();}
       let bytes=entry.bytes;
       if(bytes.length>1024&&COMPRESSIBLE.has(path.extname(file))&&acceptsGzip(req.headers['accept-encoding'])){
@@ -52,7 +52,7 @@ class StaticFiles {
     catch { return fallback(res, 404, 'not found', 'text/plain'); }
     // Weak validators describe the same content for identity and gzip responses.
     const tag = `W/"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
-    const headers = { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', ETag: tag, Vary: 'Accept-Encoding' };
+    const headers = { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ETag: tag, Vary: 'Accept-Encoding' };
     if (matchesTag(req.headers['if-none-match'], tag)) { res.writeHead(304, headers); return res.end(); }
     const encoded = stat.size > 1024 && COMPRESSIBLE.has(path.extname(file)) && acceptsGzip(req.headers['accept-encoding']);
     let bytes;

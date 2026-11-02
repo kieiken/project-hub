@@ -11,8 +11,27 @@ const platforms = require('./platform');
 const run = promisify(execFile), TEXT_LIMIT = 500000, PACKAGE_LIMIT = 256 * 1024 * 1024, FILE_LIMIT = 20000;
 const TEXT = /\.(txt|md|markdown|csv|tsv|json|jsonl|yaml|yml|xml|html|css|js|ts|py|log|rtf)$/i;
 const { PDF_SCRIPT } = platforms;
+// 添付のXMLは外部から来るため、後戻りする正規表現を使わず前から一度だけ走査する。
+// 閉じがない開始は、後ろの開始も同じく閉じを持てないので、そこで打ち切る。
+function cdataText(s) {
+  let out = '', pos = 0;
+  for (let i; (i = s.indexOf('<![CDATA[', pos)) >= 0;) {
+    const end = s.indexOf(']]>', i + 9);
+    if (end < 0) break;
+    out += s.slice(pos, i) + s.slice(i + 9, end); pos = end + 3;
+  }
+  return out + s.slice(pos);
+}
 function xmlText(xml) {
-  return [...xml.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)].map(m => m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (all, v) => {
+  const parts = [];
+  for (let pos = 0, i; (i = xml.indexOf('<a:t', pos)) >= 0;) {
+    const c = xml.charAt(i + 4);
+    if (c !== '>' && !/\s/.test(c)) { pos = i + 1; continue; }
+    const gt = xml.indexOf('>', i + 4), end = gt < 0 ? -1 : xml.indexOf('</a:t>', gt + 1);
+    if (end < 0) break;
+    parts.push(xml.slice(gt + 1, end)); pos = end + 6;
+  }
+  return parts.map(m => cdataText(m).replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (all, v) => {
     if (v[0] === '#') { const n = v[1].toLowerCase() === 'x' ? parseInt(v.slice(2),16) : Number(v.slice(1)); return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ''; }
     return {amp:'&',lt:'<',gt:'>',quot:'"',apos:"'"}[v] || all;
   })).join('\n');

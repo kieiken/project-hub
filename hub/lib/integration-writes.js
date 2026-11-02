@@ -49,6 +49,8 @@ function ignored(dir){let top;try{top=git(dir,['rev-parse','--show-toplevel']).t
  }return out;
 }
 function inspect(gitw,dir){const ignore=ignored(dir);return gitw.inspect(dir,{readOnly:true,...(ignore.length?{ignore}:{})});}
+async function ignoredAsync(dir){return require('./integration-read-worker').run('writes.ignored',{dir,roots:[...roots]},{dirs:[dir]});}
+async function inspectAsync(gitw,dir){return require('./git-read').consistent([dir],async()=>{const ignore=await ignoredAsync(dir);return gitw.inspectAsync(dir,{ignore});});}
 // Only the formal confirmed commit may retire an interrupted write, anchored to HEAD.
 function committed(file){file=path.resolve(file);const root=home(file),top=root&&topOf(file);if(!top)throw Error('保存後の記録を確認できません');updateJournal(root,data=>{if(normalized(state(file))!==base(top,path.relative(top,file)))throw Error('保存後の記録を確認できません');delete data[file];});const f=intent(file);if(pending(file)){fs.unlinkSync(f);syncDir(path.dirname(f));}}
-module.exports={register:root=>roots.add(path.resolve(root)),write,tree,inspect,ignored,pending,state,home,atomic,committed};
+module.exports={ignoredAsync,inspectAsync,register:root=>roots.add(path.resolve(root)),write,tree,inspect,ignored,pending,state,home,atomic,committed};

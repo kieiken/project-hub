@@ -13,7 +13,7 @@ function chatImages(project, task) {
 }
 
 function attachmentImagesHtml(images) {
-  return images.map(x => UI.template`<span class="quick-image">${x.kind === 'file' ? UI.html('<span class="quick-file" aria-hidden="true">📄</span>') : UI.template`<img src="${esc(x.url)}" alt="${esc(x.name)}" role="button" tabindex="0" data-image-open="${esc(x.id)}" aria-label="${esc(x.name)}を原寸で開く">`}<button type="button" data-chat-remove="${esc(x.id)}" aria-label="${esc(x.name)}を取り消す">×</button><small title="${esc(x.message || x.name)}">${esc(x.name)}${x.status && x.status !== 'ok' ? ' · ' + esc(UI.text(x.status === 'partial' ? '一部のみ' : '本文を参照できません')) : ''}</small>${x.message ? `<small>${esc(x.message)}</small>` : ''}</span>`).join('');
+  return images.map(x => UI.template`<span class="quick-image">${x.kind === 'file' ? UI.html('<span class="quick-file" aria-hidden="true">📄</span>') : UI.template`<img src="${esc(globalThis.HubLocalAuth?.url(x.url) || x.url)}" alt="${esc(x.name)}" role="button" tabindex="0" data-image-open="${esc(x.id)}" aria-label="${esc(x.name)}を原寸で開く">`}<button type="button" data-chat-remove="${esc(x.id)}" aria-label="${esc(x.name)}を取り消す">×</button><small title="${esc(x.message || x.name)}">${esc(x.name)}${x.status && x.status !== 'ok' ? ' · ' + esc(UI.text(x.status === 'partial' ? '一部のみ' : '本文を参照できません')) : ''}</small>${x.message ? `<small>${esc(x.message)}</small>` : ''}</span>`).join('');
 }
 
 function chatImagesHtml(project, task) { return attachmentImagesHtml(chatImages(project, task)); }
@@ -102,6 +102,7 @@ function clearSentChatImages(project, task, sent) {
 }
 
 function shortModelLabel(ai, model) {
+  if (ai === 'muse') return 'Muse';
   if (ai === 'dot') return 'Dot';
   if (ai === 'chatgpt') return UI.text(model === 'auto' ? 'Chat／Pro' : '廃止された経路');
   if (ai === 'codex') return String(model).replace(/^GPT-/, '');
@@ -147,8 +148,9 @@ function roleModelOptions(ai, selected) {
 }
 
 function chatSelection(p, t) {
-  const pick = { ...chatPick(p, t) };
-  if (!['chatgpt', 'dot'].includes(pick.ai) && pick.model && !(state.roles.models[AI_KEY[pick.ai]] || []).includes(pick.model)) { // 作業ファイルに本当の名前で書かれていた時
+  const saved = chatPick(p, t);
+  const pick = { ...(saved.ai === 'muse' && state.museSupported === false ? defaultWorkPick(t.role) : saved) };
+  if (!['chatgpt', 'dot', 'muse'].includes(pick.ai) && pick.model && !(state.roles.models[AI_KEY[pick.ai]] || []).includes(pick.model)) { // 作業ファイルに本当の名前で書かれていた時
     const hit = Object.entries((state.cliFlags || {})[pick.ai] || {}).find(([, id]) => id === pick.model);
     if (hit) pick.model = hit[0];
   }
@@ -169,7 +171,7 @@ function chatModelChoices(p, t, selected) {
   const pick = selected || chatSelection(p, t);
   // 名前が未設定のモデルは、CLI の既定のモデルで動く（設定画面で名前を入れられる）
   const flag = (a, m) => ((state.cliFlags || {})[a] || {})[m];
-  const available = pick.ai === 'chatgpt' ? (pick.model === 'auto' && webchatReady(t)) : shownModels(AI_KEY[pick.ai],pick.model).includes(pick.model);
+  const available = pick.ai === 'muse' ? pick.model === 'direct' : pick.ai === 'chatgpt' ? (pick.model === 'auto' && webchatReady(t)) : shownModels(AI_KEY[pick.ai],pick.model).includes(pick.model);
   const unavailable = UI.text(pick.ai === 'chatgpt' && ['chat','app'].includes(pick.model) ? '（廃止された経路です。選び直してください）' : '（利用不可。選び直してください）');
   const old = pick.ai === 'agy' && !pick.model ? chatModelOption('agy', '', UI.text('Agy のモデルを選んでください'), 'selected disabled') : pick.model && !available && !(pick.ai === 'chatgpt' && pick.model === 'auto') ? chatModelOption(pick.ai, pick.model, UI.template`${AI_LABEL[pick.ai]}・${pick.model}${unavailable}`, 'selected disabled', unavailable) : '';
   const autoOpt = webchatUI()?.option(t,pick) || '';
@@ -178,7 +180,7 @@ function chatModelChoices(p, t, selected) {
     const [key, m] = id.split('|'), a = key === 'claude-code' ? 'claude' : key;
     const suffix = flag(a, m) === '' ? UI.text('（既定）') : '';
     return chatModelOption(a, m, UI.template`${AI_LABEL[a]}・${m}${suffix}`, `${aiUnavailable(a) ? 'disabled' : ''} ${pick.ai === a && pick.model === m ? 'selected' : ''}`, suffix);
-  }).join('') + gptOpt;
+  }).join('') + gptOpt + (state.museSupported !== false ? chatModelOption('muse','direct',UI.text('Muse（外部）'),pick.ai === 'muse' ? 'selected' : '') : '');
 }
 
 function syncChatModelChoices() {
@@ -191,24 +193,27 @@ function chatHtml(p, t) {
   const pick = chatSelection(p, t), opts = chatModelChoices(p,t);
   const bodyNotice=(state.bodyNotices||[]).filter(x=>x.scope===p.id+' / '+t.id||x.scope==='本文整理').map(x=>UI.template`<p class="small danger" role="status">${esc(x.message)}</p>`).join('');
   return UI.template`<div class="chat" data-p="${esc(p.id)}" data-t="${esc(t.id)}">${!t.freetalk?UI.template`<div class="task-history-toolbar"><button class="btn plain sm" type="button" data-task-history="continue" data-p="${esc(p.id)}" data-t="${esc(t.id)}">要約して続ける</button><span class="history-progress small" id="history-progress" role="status" data-p="${esc(p.id)}" data-t="${esc(t.id)}" hidden></span><button class="btn plain sm" type="button" data-task-history="archives" data-p="${esc(p.id)}" data-t="${esc(t.id)}">過去の会話</button></div>`:''}
-    ${bodyNotice}${state.extensions?.notice ? UI.template`<p class="small danger" role="status">${esc(state.extensions.notice)}</p>` : ''}<div id="webchat-notice">${webchatNoticeHtml(t,pick.ai==='chatgpt' && pick.model==='auto')}</div><div id="webchat-progress">${webchatProgress(p,t)}</div>${discussionUI()?.progressHtml() || ''}<div class="msgs" id="msgs">${EMPTY_CHAT}</div>
+    ${bodyNotice}${state.extensions?.notice ? UI.template`<p class="small danger" role="status">${esc(state.extensions.notice)}</p>` : ''}<div id="webchat-notice">${webchatNoticeHtml(t,pick.ai==='chatgpt' && pick.model==='auto')}</div><div id="webchat-progress">${webchatProgress(p,t)}</div>${discussionUI()?.progressHtml() || ''}<div class="msgs" id="msgs"><p class="chat-loading small" role="status">会話を読み込んでいます…</p></div>
     <button class="chat-latest btn plain sm" id="chat-latest" type="button" hidden>↓ 最新へ</button>
+    <div id="muse-reply-status" class="small" role="status" hidden></div>
     <form class="composer" id="composer">
       <div class="queue" id="chat-queue" hidden></div>
       <div class="quick-images" id="chat-images" aria-label="添付ファイル・画像" ${chatImages(p.id, t.id).length ? '' : 'hidden'}>${chatImagesHtml(p.id, t.id)}</div>
       <span class="small" id="chat-image-state" role="status" ${chatImageUploads.get(chatAttachmentKey(p.id, t.id)) ? '' : 'hidden'}>添付ファイルを追加中…</span>
+      <p class="small muse-send-scope" id="muse-send-scope" role="status" ${pick.ai === 'muse' ? '' : 'hidden'}>送信先：Muse（外部）。今回の質問と選択した文字資料だけを送ります。追問は同じMuse相談の続きです。他AIとの会話は送りません。</p>
       <textarea id="chat-in" rows="3" maxlength="100000" placeholder="依頼を書く（例：このスクショの崩れを直して）" aria-label="依頼" aria-describedby="chat-history-help" title="↑ 前の指示（3件まで）・↓ 入力中の文章へ戻る">${esc(chatDraft[chatAttachmentKey(p.id, t.id)] || '')}</textarea>
       <span class="sr-only" id="chat-history-help">↑ 前の指示（3件まで）・↓ 入力中の文章へ戻る</span>
+      <span class="small" id="chat-send-status" role="status" hidden></span>
       <div class="crow composer-controls">
         <button class="btn plain" id="chat-attach" type="button" aria-label="ファイルを追加" title="ファイルを追加">＋</button>
         <input type="file" id="chat-files" ${p.id === 'freetalk' ? 'accept="' + FREETALK_ACCEPT + '"' : ''} multiple hidden>
         <select id="chat-ai" aria-label="答える AI とモデル">${opts}</select>
-        <select id="chat-effort" aria-label="思考" ${effortHidden(pick.ai) ? 'hidden' : ''} ${['agy','chatgpt','dot'].includes(pick.ai) ? 'disabled' : ''}>${effortsFor(pick.ai).map(e => UI.template`<option ${(pick.ai === 'agy' ? '高' : pick.effort) === e ? 'selected' : ''}${UI.valueAttribute(e)}>${esc(UI.label(e))}</option>`).join('')}</select>
+        <select id="chat-effort" aria-label="思考" ${effortHidden(pick.ai) ? 'hidden' : ''} ${['agy','chatgpt','dot','muse'].includes(pick.ai) ? 'disabled' : ''}>${effortsFor(pick.ai).map(e => UI.template`<option ${(pick.ai === 'agy' ? '高' : pick.effort) === e ? 'selected' : ''}${UI.valueAttribute(e)}>${esc(UI.label(e))}</option>`).join('')}</select>
         <span class="small" id="chat-state"></span><span class="sp"></span>
         <div class="composer-settings">
         <span id="chat-account-box">${['claude','codex','grok'].includes(pick.ai) ? taskAccountSelect(p,t,pick.ai,true) : ''}</span>
         <span id="chat-fast-box">${taskFastSelect(p,t,pick.ai)}</span>
-        ${discussionUI()?.buttonHtml() || ''}</div><button class="btn" id="chat-send" type="submit">送る</button>
+        ${discussionUI()?.buttonHtml() || ''}</div><span class="voice-actions" id="chat-send-actions"><button id="chat-send" type="submit" class="btn ${pick.ai === 'muse' ? 'muse-send' : ''}">${esc(UI.text(pick.ai === 'muse' ? 'Museへ送る（外部）' : '送る'))}</button></span>
       </div>
       ${discussionUI()?.settingsHtml() || ''}<div class="crow busyrow" id="chat-busyrow" hidden>
         <button class="btn plain" id="chat-stop" type="button" title="今の作業を止めます（待っている指示も取り消します）">停止</button>
@@ -237,6 +242,6 @@ function syncSpecialPick(p, t) {
   const pick = chatSelection(p, t);
   select.innerHTML = chatModelChoices(p,t);
   select.value = pick.ai + '|' + pick.model;
-  effort.hidden = effortHidden(pick.ai); effort.disabled = ['agy', 'chatgpt', 'dot'].includes(pick.ai); effort.innerHTML = effortsFor(pick.ai).map(e => UI.template`<option ${e === pick.effort ? 'selected' : ''}${UI.valueAttribute(e)}>${esc(UI.label(e))}</option>`).join(''); effort.value = pick.effort;
+  effort.hidden = effortHidden(pick.ai); effort.disabled = ['agy', 'chatgpt', 'dot', 'muse'].includes(pick.ai); effort.innerHTML = effortsFor(pick.ai).map(e => UI.template`<option ${e === pick.effort ? 'selected' : ''}${UI.valueAttribute(e)}>${esc(UI.label(e))}</option>`).join(''); effort.value = pick.effort;
   drawChatAccount(p, t);
 }

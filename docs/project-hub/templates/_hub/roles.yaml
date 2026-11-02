@@ -9,24 +9,24 @@ models:                      # AI ごとに選べるモデル
   claude-code: [Opus 5.5, Fable 5.1]
   codex:       [GPT-6.1-Sol]
 
-agents: [サンプル担当]    # Discord の架空の担当例。実際の担当に変更する
+agents: ["サンプル担当"]    # Discord の架空の担当例。実際の担当に変更する
 
 roles:
-  司令塔:       { main: [claude-code, Fable 5.1, 極高], backup: [codex, GPT-6.1-Sol, 高], job: 計画・割り振り・進み具合 }
-  調査:         { main: [claude-code, Opus 5.5, 高],   backup: [codex, GPT-6.1-Sol, 高], job: 情報集め・要約 }
-  デザイン:     { main: [claude-code, Opus 5.5, 高],   backup: [codex, GPT-6.1-Sol, 高], job: 画面・構成・見た目 }
-  画像生成:     { main: [codex, GPT-6.1-Sol, 中],     backup: [人],                     job: 画像を作る }
-  コーディング: { main: [codex, GPT-6.1-Sol, 高],     backup: [claude-code, Opus 5.5, 高], job: プログラムを書く }
-  チェック:     { main: [claude-code, Fable 5.1, 極高], backup: [codex, GPT-6.1-Sol, 高], job: 独立レビュー（本人のテストは必須） }
-  文章:         { main: [claude-code, Opus 5.5, 中],   backup: [codex, GPT-6.1-Sol, 中], job: 説明文・マニュアル }
-  最終確認:     { main: [人],                          backup: [人],                     job: 完成の判断 }
+  司令塔:       { main: [claude-code, Fable 5.1, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: 計画・割り振り・進み具合 }
+  調査:         { main: [claude-code, Opus 5.5, "高"],   backup: [codex, GPT-6.1-Sol, "高"], job: 情報集め・要約 }
+  デザイン:     { main: [claude-code, Opus 5.5, "高"],   backup: [codex, GPT-6.1-Sol, "高"], job: 画面・構成・見た目 }
+  画像生成:     { main: [codex, GPT-6.1-Sol, "中"],     backup: ["人"],                     job: '画像を作る' }
+  コーディング: { main: [codex, GPT-6.1-Sol, "高"],     backup: [claude-code, Opus 5.5, "高"], job: プログラムを書く }
+  チェック:     { main: [claude-code, Fable 5.1, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '独立レビュー（本人のテストは必須）' }
+  文章:         { main: [claude-code, Opus 5.5, "中"],   backup: [codex, GPT-6.1-Sol, "中"], job: 説明文・マニュアル }
+  最終確認:     { main: ["人"],                          backup: ["人"],                     job: 完成の判断 }
 
 # ※ モデル名・思考・画像生成の経路は、使えるか・料金を確認してから確定する
 
 permissions:                 # 作業の権限（最大・確認なし）
   claude-code: claude --dangerously-skip-permissions
   codex:       codex --dangerously-bypass-approvals-and-sandbox
-  ask_before: []             # 聞いてほしい操作があれば書く（例: [課金, 公開]）
+  ask_before: []             # 聞いてほしい操作があれば書く（例: ["課金", "公開"]）
 
 switch:                      # 第2段階から使う
   auto: false                # 新規導入時は自動交代オフ（人が承認してから）

@@ -33,6 +33,16 @@ function target(h,a){
  if(resource.canonical(a.target)!==resource.canonical(h.baseOf(a.p)))throw Error('統合先のGitを確認できません');
  return {head:null,status:'',direct:true,dir:resource.canonical(a.target)};
 }
+async function targetAsync(h,a){
+ // A null inspection is permitted only for a genuinely Git-free direct body.
+ // A damaged .git directory/failed status never becomes a clean destination.
+ const value=await require('./integration-writes').inspectAsync(h.gitw,a.target);
+ if(value)return value;
+ let current=path.resolve(a.target);
+ for(;;){if(fs.existsSync(path.join(current,'.git')))throw Error('統合先のGitを確認できません');const up=path.dirname(current);if(up===current)break;current=up;}
+ if(resource.canonical(a.target)!==resource.canonical(h.baseOf(a.p)))throw Error('統合先のGitを確認できません');
+ return {head:null,status:'',direct:true,dir:resource.canonical(a.target)};
+}
 function blockers({b,all,baseOf,expand=x=>x,activities,global=[],op='receipt',target,paths=[]}){
  if(!['receipt','main-merge'].includes(op))throw Error('統合操作の種類を確認できません');
  const p=all.find(p=>p.id===b.project),t=p?.tasks.find(t=>t.id===b.task);
@@ -77,4 +87,4 @@ function blockers({b,all,baseOf,expand=x=>x,activities,global=[],op='receipt',ta
 }
 function assertTarget(h,a){const value=target(h,a),merging=h.gitw.merging(a.target);if(value.status||merging){const paths=value.status.split('\n').filter(Boolean).map(x=>x.replace(/^\s*[? MADRCU!]+\s+/,''));const e=Error(merging?'統合先で取り込みが途中です':'統合先の未保存の変更を保存してください：'+paths.slice(0,20).join('、')+(paths.length>20?' ほか'+(paths.length-20)+'件':''));Object.assign(e,{code:'INTEGRATION_TARGET_DIRTY',stage:merging?'merge':'save',paths});throw e;}return value;}
 const confirmationParent=a=>hash([parent(a),task(path.join(a.p.dir,'.ai/tasks',a.t.id+'.md'))]);
-module.exports={hash,parent,confirmationParent,item,target,assertTarget,blockers};
+module.exports={hash,parent,confirmationParent,item,target,targetAsync,assertTarget,blockers};

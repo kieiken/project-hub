@@ -16,14 +16,14 @@ function templates(roleData) {
   const slot = name => { const s = require('./roles').delegateSlot(roleData, name); return s ? lt`${s.ai}・${s.model}` : '人'; };
   return TEMPLATES.replace('claude・claude-fable-5-1', slot('チェック')).replace('codex・gpt-6.1-sol', slot('コーディング'));
 }
-const DIFFERENCE = lt('委任は差分6行：目的／読む（相対パス）／やる／条件／出力（ファイル・済手順）／次（担当・定型）。共通事項は省き、定型指定時に全文の ## 委任の定型 を読む。');
+const DIFFERENCE = lt('委任は差分6行：目的/読む（相対パス）/やる/条件/出力（ファイル・済手順）/次（担当・定型）。共通省略。定型：全文 ## 委任の定型。');
 const TEXT_RULE = lt('最新の再開要約は2000字以内で置き換える。上に足さない。初回整理後は /api/task/body/summary で原文を保管してから置換する。AI稼働中は更新依頼だけ保存し、終了後に原文保管と置換を行う。表示不足は hub_search_archive で確認する。');
 function creditRule(data) {
   if (data?.preferCredits !== true || !['claude', 'codex'].some(ai => data.checkCredits?.[ai] === true)) return '';
   const targets = ['claude', 'codex'].filter(ai => data.checkCredits?.[ai] === true).map(ai => ai === 'claude' ? 'Claude' : 'Codex').join(' / ');
   return lt`【既存クレジット優先の承認】対象は${targets}の確認ON側だけ。優先利用OFFまで、契約枠上限後の利用可能な既存クレジット利用を人が許可。自動チャージなし/OFF確認済み、既存残高の範囲のみ。購入・自動チャージ・APIキー課金・認証変更は禁止。Hubが送信前に同じAI/アカウントの新鮮な正式情報を確認し、利用可能なら元担当を優先。不明・古い・取得失敗・枯渇・正式CLI拒否なら既存交代/待機。月間追加利用枠は実残高と扱わない。AIは確認を省略したり自分でCLIや交代を再実行しない。`;
 }
-function packet({ pdir, task, project, policy, issues, common, contextRule, askRule, port, roleData }) {
+function packet({ pdir, task, project, policy, issues, common, dynamic = '', contextRule, askRule, port, roleData }) {
   // 全文・固定指示に同じ方針を一回ずつ置き、モデル・上限の分割に混ぜない。
   policy = policy.replace(WORKFLOW_RULE + '\n', '');
   const at = policy.indexOf(lt('【人への操作案内の決まり】'));
@@ -48,21 +48,22 @@ function packet({ pdir, task, project, policy, issues, common, contextRule, askR
     limit = limit.replace(lt('従量課金禁止。'), lt('購入・自動チャージ・APIキー課金は禁止。')) + '\n' + creditRule(roleData);
   }
   const coding = roleData && require('./roles').delegateSlot(roleData, 'コーディング');
-  const ids = JSON.stringify({ project: project || path.basename(pdir), task }).slice(1, -1);
+  const example = JSON.stringify({ project: project || path.basename(pdir), task, ai: coding?.ai || 'codex', model: coding?.model || 'gpt-6.1-sol', text: '差分' });
   const fixed = [
-    lt`台帳=${pdir}。cwd内は相対パス。全文：台帳/.ai/chat/${task}.rules.md（必要時参照）。`,
+    lt`台帳=${pdir}。cwd相対パス。全文：台帳/.ai/chat/${task}.rules.md`,
     lines[0], limit, WORKFLOW_RULE,
     lt`全文版：${crypto.createHash('sha256').update(full).digest('hex').slice(0, 12)}`,
-    lt`【別の AI に作業を渡す時】codex / claude / agy / grok を裏で起動しない。会話でcurl -s -X POST http://127.0.0.1:${port}/api/delegate -H 'X-Hub: 1' -H 'Content-Type: application/json' -d '{${ids},"ai":"${coding?.ai || 'codex'}","model":"${coding?.model || 'gpt-6.1-sol'}","title":"短い名前","text":"差分"}'。ai・model欄は必須。渡したら終了。全文 ## 委任。`,
+    lt`【委任】codex/claude/agy/grok を裏で起動しない。同作業会話でPOST /api/delegate（127.0.0.1:${port}、X-Hub:1（ローカル認証は curl -H @"$HUB_HEADERS" を使用。秘密を本文に書かない）、JSON、ai・model欄は必須、例${example}）。全文 ## 委任。委任後終了。`,
     lt('新しいプロジェクト・子プロジェクト・作業ファイルを作らない。やっていない手順に [x] を付けない。'),
     DIFFERENCE,
-    lt('成果は作業ファイルの ## 成果 に書く。ZIPは配布時だけ。共通で優先。全文の ## 成果と保管。'),
-    lt('【操作案内】画面未確認。見える名前・［ボタン名］・場所で条件付き案内、AI終了後。全文 ## 操作案内。委任がターミナル稼働で断られた時だけ作業画面［ターミナル］の対象AI欄［停止］を頼む。'),
-    lt('issues変更時は全文 ## 問題点 を読み、同じプロジェクトの要約も更新。'),
+    lt('成果は作業ファイルの ## 成果 に書く。ZIPは配布時だけ。共通優先。全文 ## 成果と保管。'),
+    lt('【操作案内】画面未確認。AI終了後、名前/［ボタン名］/場所で条件付き案内。委任がターミナル稼働で断られた時だけ対象AI欄［停止］を頼む。'),
+    lt('issues変更：全文 ## 問題点・同PJ要約更新。'),
     SEND_TEXT_RULE,
+    lt('【Muse】会話準備→同作業画面で本人承認→正式キュー。承認・決定API禁止。docs/metamuse.md通り、台帳/.ai/muse-approvals/<id>.jsonへ全文/期限/回数/同作業の続き（role/text）を保存。番号/確認番号/場所の手入力・承認後の再依頼禁止。ローカル整理は承認不要。'),
     common,
   ].filter(Boolean).join('\n');
-  return START + fixed + END + info;
+  return START + fixed + END + info + (dynamic ? '\n' + dynamic : '');
 }
 function split(prompt) {
   const start = String(prompt || '').indexOf(START), end = String(prompt || '').indexOf(END);

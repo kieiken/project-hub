@@ -23,7 +23,7 @@ const issuerMessages = Object.freeze({
   legacy_license_unavailable: '以前の利用権を確認できません。選んだデータの保存先は使えますが、有料機能・無料体験の開始・コード登録は保留しています。購入や登録を繰り返さず、この表示をお知らせください。',
   license_registration_pending: '利用コードの登録は受付済みです。再送・再購入せず結果を確認してください。',
 });
-const issuerHttpCodes = new Set(['device_limit_mac', 'device_limit_windows', 'unregistered', 'unsupported_os', 'entitlement', 'trial_used', 'challenge', 'signature', 'build_os']);
+const issuerHttpCodes = new Set(['device_limit_mac', 'device_limit_windows', 'unregistered', 'unsupported_os', 'entitlement', 'trial_used', 'challenge', 'signature', 'build_os', 'trial_daily_limited']);
 // Only fixed classifications/messages cross the registration API boundary.
 function activationError(error) {
   let value = error?.code;
@@ -174,7 +174,9 @@ class License {
     if (!response.ok) {
       let value; try { value = (await response.json())?.code; } catch {}
       const code = issuerHttpCodes.has(value) ? value : 'issuer_unavailable';
-      throw Object.assign(Error(activationError({ code }).error), { code });
+      const retryAt = code === 'trial_daily_limited' && response.status === 429
+        ? this.wall() + Math.min(86400, Math.max(60, Number(response.headers.get('Retry-After')) || 86400)) : 0;
+      throw Object.assign(Error(activationError({ code }).error), { code, retryAt });
     }
     try { return await response.json(); }
     catch { throw Object.assign(Error(issuerMessages.issuer_response), { code: 'issuer_response' }); }
@@ -223,6 +225,8 @@ class License {
     try {
       const result = await this.signedRequest('activate', { code: code.trim() });
       const p = this.acceptProof(result.proof);
+      // A successful paid activation supersedes a wait for new-trial admission.
+      this.retryAfter = 0;
       try { await this.refreshTime(p.ent); } catch {} // Proof remains safe; short-term stays held until a time anchor.
       return { ok: true, status: this.status() };
     } finally { this.online = false; }
@@ -249,7 +253,7 @@ class License {
     this.requireSupported();
     if (this.wall() < this.retryAfter) return;
     this.online = true;
-    let failed = false;
+    let failed = false, retryAt = 0;
     try {
       let proofs = this.proofs.map(e => { try { return validateProof(verifyEnvelope(e, this.config.trustedKeys, 'proof')); } catch { return null; } })
         .filter(p => p && p.dev === this.identity?.dev && scopeMatches(p.scope, this.config.build));
@@ -266,10 +270,10 @@ class License {
       for (const p of proofs) if (!['purchase', 'trial'].includes(p.kind) && p.exp > now && p.exp - now <= 7 * 86400) {
         try { const r = await this.signedRequest('renew', { ent: p.ent }); this.acceptProof(r.proof); } catch { failed = true; }
       }
-    } catch (e) { failed = true; if (e.code === 'trial_used') this.trialUsed = true; }
+    } catch (e) { failed = true; retryAt = e.retryAt || 0; if (e.code === 'trial_used') this.trialUsed = true; }
     finally {
       // Retry failures separately from start()'s six-hour successful refresh cadence.
-      this.retryAfter = failed ? this.wall() + 60 : 0;
+      this.retryAfter = failed ? Math.max(this.wall() + 60, retryAt) : 0;
       this.online = false;
     }
   }

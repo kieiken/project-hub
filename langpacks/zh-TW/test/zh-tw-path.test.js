@@ -2,7 +2,7 @@
 // Existing behavior and message assertions use the Japanese default contract.
 process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
-const source=fs.readFileSync(path.resolve(__dirname,'../../../hub/public/app.js'),'utf8');
+const source=require('../../../hub/test/fixtures/app-source.cjs').readApp();
 const code=source.slice(source.indexOf('// 場所を押した時は開き方を選ぶ。'),source.indexOf('// コマンドなどの細かい作業を会話に出すか'));
 function fixture(inApp=false,info={},locale='ja') {
  const elements=new Map(),events=new Map(),windowEvents=new Map(),calls=[],notices=[];

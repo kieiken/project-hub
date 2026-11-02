@@ -43,7 +43,7 @@ function packAsset(name) {
     || file.startsWith('test/') && /\.(?:js|json|md|yaml|yml|txt)$/.test(file);
 }
 function excluded(name) {
-  if (name.startsWith('hub/purchase-test-app/') || ['hub/test/purchase-test-app.test.js', 'hub/test/purchase-test-workspace.test.js', 'hub/test/purchase-test-update.test.js', 'hub/test/purchase-test-preparation.test.js',
+  if (name.startsWith('hub/purchase-test-app/') || ['hub/test/purchase-test-app.test.js', 'hub/test/purchase-test-workspace.test.js', 'hub/test/purchase-test-update.test.js', 'hub/test/purchase-test-preparation.test.js', 'hub/test/release-mac-migration.test.js',
     'hub/test/windows-license-recovery.test.cjs', 'hub/test/fixtures/purchase-test-app-child.cjs'].includes(name)) return true;
   if (name.startsWith('hub/staging-app/') || ['hub/test/staging-app.test.js', 'hub/test/fixtures/staging-app-child.cjs',
     'hub/test/staging-app-lifecycle.test.js', 'hub/test/fixtures/staging-shutdown.swift'].includes(name)) return true;

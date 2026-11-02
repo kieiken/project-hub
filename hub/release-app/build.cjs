@@ -9,9 +9,10 @@ function build(source,destination,platform,version='4.125.2'){
   const git=args=>cp.execFileSync('git',args,{cwd:repo,maxBuffer:32*1024*1024}),blob=name=>git(['show',source+':'+name]);
   // Shared builder/transformers must themselves be the saved input, not an
   // uncommitted build-host variation of the source recorded in the manifest.
-  for(const file of ['hub/release-app/build.cjs','hub/release-app/compile.cjs','hub/purchase-test-app/build.cjs'])assert.equal(sha(blob(file)),sha(fs.readFileSync(path.join(repo,file))),'release_builder_changed');
+  for(const file of ['hub/release-app/build.cjs','hub/release-app/compile.cjs','hub/release-app/update-trust.cjs','hub/purchase-test-app/build.cjs'])assert.equal(sha(blob(file)),sha(fs.readFileSync(path.join(repo,file))),'release_builder_changed');
   const app=platform==='darwin'?path.join(destination,'Project Hub.app'):null,base=app?path.join(app,'Contents/Resources/runtime'):path.join(destination,'ProjectHub-Windows');
   const manifest={version:1,kind:'public-release',source,platform,arch:platform==='darwin'?'arm64':'x64',port:4545,releaseVersion:version,shellProtocol:1,files:[],trialDays:30,publisherSigned:false,notarized:false,distribution:'publisher-free',liveAcceptance:false,windowsIssuerEnabled:false,readiness:'INDEPENDENT_REVIEW_AND_EXTERNAL_ACCEPTANCE_REQUIRED'};
+  if(platform==='darwin')manifest.macShellGeneration=2;
   function put(name,bytes,mode=0o644){assert.ok(!manifest.files.some(r=>r.path===name));const file=path.join(base,name);fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o755});fs.writeFileSync(file,bytes,{flag:'wx',mode});fs.chmodSync(file,mode);manifest.files.push({path:name,bytes:Buffer.byteLength(bytes),sha256:sha(bytes),mode});}
   const rows=git(['ls-tree','-rz',source]).toString().split('\0').filter(Boolean).map(line=>{const [meta,name]=line.split('\t');return {name,mode:meta.split(' ')[0]};});
   for(const row of rows.filter(r=>shared.include(r.name,platform)&&!/^hub\/(staging-app|purchase-test-app)\//.test(r.name))){
@@ -31,13 +32,14 @@ function build(source,destination,platform,version='4.125.2'){
     else {put(row.name,bytes,row.mode==='100755'?0o755:0o644);continue;}
     put(row.name,s,row.mode==='100755'?0o755:0o644);
   }
-  for(const [name,transform] of [['runtime',compile.runtime],['license',compile.license],['workspace',compile.workspace],['update',compile.update],['select',compile.common],['launch',compile.launch]])put(`hub/release-app/${name}.cjs`,transform(blob(`hub/purchase-test-app/${name}.cjs`).toString()));
+  for(const [name,transform] of [['runtime',compile.runtime],['license',compile.license],['workspace',compile.workspace],['update',compile.update],['select',compile.select],['launch',compile.launch]])put(`hub/release-app/${name}.cjs`,transform(blob(`hub/purchase-test-app/${name}.cjs`).toString()));
   put('hub/release-app/core.cjs',compile.core(blob('hub/staging-app/runtime.cjs').toString()));put('hub/release-app/protocol.cjs',compile.protocol(version));put('hub/release-app/update-trust.cjs',compile.trust());
   put('hub/release-app/legacy-license.cjs',blob('hub/release-app/legacy-license.cjs'));
   put('hub/release-app/license-hold.cjs',blob('hub/release-app/license-hold.cjs'));
+  put('hub/release-app/mac-bootstrap.cjs',blob('hub/release-app/mac-bootstrap.cjs'));
   if(platform==='win32') {for(const name of ['windows-window','prepare-windows','finalize-windows','finish-unsigned-windows','verify-windows-return'])put('hub/release-app/'+name+'.cjs',blob('hub/release-app/'+name+'.cjs'));manifest.windowsNativePrepared=false;}
   for(const row of shared.dependencyFiles(platform))put(row.path,row.bytes,/(?:spawn-helper|winpty-agent\.exe|OpenConsole\.exe)$/.test(row.path)?0o755:0o644);
-  put('README.md',blob('hub/release-app/README.md'));
+  put('README.md',blob('hub/release-app/README.md').toString().replace(/^# Project Hub 正式配布候補 \d+\.\d+\.\d+/, '# Project Hub 正式配布候補 '+version));
   put('docs/project-hub/RELEASE-OPERATIONS.md',blob('hub/release-app/OPERATIONS.md'));
   if(platform==='win32')put('MAKE-WINDOWS-APP.cmd','@echo off\r\nset NODE_OPTIONS=\r\nset NODE_PATH=\r\ncd /d "%~dp0"\r\nnode hub\\release-app\\finish-unsigned-windows.cjs --base "%CD%"\r\npause\r\n');
   if(platform==='win32')put('START-WINDOWS.cmd','@echo off\r\nset NODE_OPTIONS=\r\nset NODE_PATH=\r\ncd /d "%~dp0"\r\nnode hub\\release-app\\launch.cjs\r\nif errorlevel 1 pause\r\n');
@@ -47,7 +49,7 @@ function build(source,destination,platform,version='4.125.2'){
     put('hub/release-app/Window.swift',window);put('hub/release-app/Shutdown.swift',blob('hub/staging-app/Shutdown.swift').toString().replaceAll('4587','4545'));
     const native=path.join(base,'hub/lib/license/mac-native');cp.execFileSync('/usr/bin/swiftc',['-O','-target','arm64-apple-macosx13.0',path.join(base,'hub/lib/license/mac-native.swift'),'-o',native],{timeout:120000});fs.chmodSync(native,0o755);manifest.files.push({path:'hub/lib/license/mac-native',bytes:fs.statSync(native).size,sha256:sha(fs.readFileSync(native)),mode:0o755});
     const mac=path.join(app,'Contents/MacOS');fs.mkdirSync(mac,{recursive:true,mode:0o755});cp.execFileSync('/usr/bin/swiftc',['-O','-target','arm64-apple-macosx13.0',path.join(base,'hub/release-app/Shutdown.swift'),path.join(base,'hub/release-app/Window.swift'),'-o',path.join(mac,'ProjectHub'),'-framework','Cocoa','-framework','WebKit'],{timeout:120000});fs.chmodSync(path.join(mac,'ProjectHub'),0o755);
-    fs.writeFileSync(path.join(app,'Contents/Info.plist'),`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>ProjectHub</string><key>CFBundleIdentifier</key><string>local.projecthub</string><key>CFBundleName</key><string>Project Hub</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleIconFile</key><string>AppIcon</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>${version}</string><key>LSMinimumSystemVersion</key><string>13.0</string><key>NSHighResolutionCapable</key><true/></dict></plist>`,{mode:0o644});
+    fs.writeFileSync(path.join(app,'Contents/Info.plist'),`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>ProjectHub</string><key>CFBundleIdentifier</key><string>local.projecthub</string><key>CFBundleName</key><string>Project Hub</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleIconFile</key><string>AppIcon</string><key>CFBundleShortVersionString</key><string>${version}</string><key>CFBundleVersion</key><string>${version}</string><key>LSMinimumSystemVersion</key><string>13.0</string><key>NSHighResolutionCapable</key><true/><key>NSMicrophoneUsageDescription</key><string>音声入力ボタンを押した時に、話した内容を入力欄へ入れるためにマイクを使います。</string><key>NSSpeechRecognitionUsageDescription</key><string>話した内容を文字にします。音声はAppleなどの音声認識サービスで処理される場合があります。</string></dict></plist>`,{mode:0o644});
   }
   // Record the saved package's local switch, independently of live acceptance.
   const windowsPolicy=require(path.join(base,'hub/lib/license/policy.js')).forPlatform('win32');

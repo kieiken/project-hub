@@ -2,6 +2,7 @@
 // 自動の会話整理：AIの選別を検証し、引き継ぎ・目次・話題別の記録を組み立てる（書込みは task-history.js）。
 const {lt}=require('./locale');
 const launch=require('./launch');
+const delegationText=require('./delegation-text');
 const TYPES=['decision','reason','approval','residual','next','reference'];
 const LABELS={decision:'決定事項',reason:'理由',approval:'承認（人の発言のみ）',residual:'人の判断待ち',next:'次にする作業',reference:'参照先'};
 const ORDER=['next','residual','approval','decision','reason','reference'];
@@ -9,7 +10,7 @@ const LIMIT={handoff:2000,topic:4000,item:300,quote:200,title:40,items:200,index
 const count=s=>Array.from(s).length,cut=(s,n)=>Array.from(String(s)).slice(0,Math.max(0,n)).join('');
 const oneLine=s=>String(s??'').replace(/\s+/g,' ').trim();
 // 人が自分で書いた行だけ。委任の依頼文・結果通知・上限の引継ぎ文・Hubの整理行は人の発言にしない。
-const human=r=>r&&r.role==='user'&&!r.from&&!r.origin&&!r.limitSwitch&&!r.summaryAuto&&typeof r.text==='string'&&!/^【(?:渡した依頼|已交接的要求)：/.test(r.text)&&!/^\[task-(summary|auto):/.test(r.text);
+const human=r=>r&&r.role==='user'&&!r.from&&!r.origin&&!r.limitSwitch&&!r.summaryAuto&&typeof r.text==='string'&&!delegationText.isDelegated(r.text)&&!/^\[task-(summary|auto):/.test(r.text);
 // Saved request IDs and Hub limit-switch records, never the translated handoff text,
 // determine which turns belong to one selection. This also works after a restart.
 function selectionTurns(rows,job){

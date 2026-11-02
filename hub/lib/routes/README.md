@@ -17,6 +17,7 @@
 | information | background / read | 応答、既存のプロセス一覧、起動版と保存版の取得、変更履歴、セッション一覧、ログ読取 |
 | modelinfo | tools / skills / models | 応答、既存の道具の状態とモデル反映、スキル一覧、アカウント、役割と起動設定、モデル案内、加速設定 |
 | accounts | read / write | 応答、既存のアカウント・利用状況・道具・モデル反映、セッション・Store・会話保存、起動処理、上限記録、監査、翻訳 |
+| musesettings | read / write | 応答、ローカル接続/Origin確認、固定版Museツールの選択・秘密を除いた状態、本人用Terminal起動、操作名だけの監査 |
 | hierarchy | remove / organize | 応答、既存の削除・復元と審査、アイデアの退避、通知整理、並び順、Store・セッション・会話、監査 |
 | aiupdate | write | 応答、既存のAI更新処理、モデル反映、監査、翻訳 |
 | limits | clear / write | 応答、既存のアカウント照合・利用状況・通常の上限解除・上限例外とFable解除、現在の話し合い取得、監査、翻訳 |

@@ -371,7 +371,7 @@ test('自動ChatをGPT子の既定にし、旧依頼とrequest別の処理済み
 test('整理と利用状況は外側の一覧タップで閉じ、実際の画面移動を続ける', () => {
   for (const [go, pid, shouldClose] of [['project', 'other', true], ['work', 'other', true], ['work', 'p', true]]) {
     const a = app(); a.context.api = () => new Promise(() => {});
-    const navigation = a.documentListeners.find(x => x.name === 'click' && x.cb.toString().includes('view = { kind: go.dataset.go'));
+    const navigation = a.documentListeners.find(x => x.name === 'click' && x.cb.toString().includes("e.target.closest('[data-go]')"));
     const before = a.documentListeners.length;
     for (const file of ['maintenance.js', 'usage.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../public', file), 'utf8'), a.context);
     const captures = a.documentListeners.slice(before).filter(x => x.name === 'click' && x.capture);
@@ -1270,6 +1270,8 @@ test('除外中は取り込みと予告を隠し、戻す操作と保管中表�
   assert.match(included, /取り込み対象から外す/);
   assert.match(included, /data-act="merge"[^>]*hidden disabled/);
   assert.match(included, /data-act="mergeexclude"[^>]*hidden/);
+  assert.equal(previews, 0); // 会話の初回rowsを表示するまでは補助取得を待つ
+  a.stream().onmessage({data:JSON.stringify({type:'rows',rows:[],queue:[],busy:null})});
   assert.equal(previews, 1);
   const excluded = render(true);
   assert.doesNotMatch(excluded, /data-act="merge"|data-act="mergeexclude"/);
@@ -1277,6 +1279,8 @@ test('除外中は取り込みと予告を隠し、戻す操作と保管中表�
   assert.match(excluded, /data-act="mergeinclude"/);
   assert.equal(previews, 1);
   render(false);
+  assert.equal(previews, 1);
+  a.stream().onmessage({data:JSON.stringify({type:'rows',rows:[],queue:[],busy:null})});
   assert.equal(previews, 2);
 });
 
@@ -1337,6 +1341,7 @@ test('画面を作り直さない定期取得でも取り込み表示の変更�
   const a = app(), s = snapshot(); s.projects[0].tasks[0].copy = true;
   vm.runInContext('state = '+JSON.stringify(s)+'; view = {kind:"work",project:"p",task:"t"}', a.context);
   a.context.render();
+  a.stream().onmessage({data:JSON.stringify({type:'rows',rows:[],queue:[],busy:null})});
   let previews = 0, renders = 0;
   a.context.loadPreview = (p,t) => { assert.equal(p,'p'); assert.equal(t,'t'); previews++; };
   a.context.render = () => { renders++; };
@@ -1410,7 +1415,10 @@ function gitPreviewApp(t) {
     assert.equal(a.element('[data-act="mergeexclude"]').hidden, hidden);
     assert.equal(a.elements.has('[data-main-preview]'), false);
   };
-  const render = () => a.context.renderWork();
+  const render = () => {
+    a.context.renderWork();
+    a.stream().onmessage({data:JSON.stringify({type:'rows',rows:[],queue:[],busy:null})});
+  };
   const refresh = () => a.context.loadPreview('p', 't');
   return { ...a, root, main, copy, workRoot, sh, preview, requests, reply, controls, render, refresh };
 }
@@ -1500,7 +1508,9 @@ test('実Git preview→除外操作: 同じ作業の再描画で古いDOMの差�
 
 test('実Git preview→除外操作: 定期取得は再描画せず実Gitの差分復帰を表示する', async t => {
   const a = gitPreviewApp(t);
-  a.context.render(); await a.reply(); a.controls(true);
+  a.context.render();
+  a.stream().onmessage({data:JSON.stringify({type:'rows',rows:[],queue:[],busy:null})});
+  await a.reply(); a.controls(true);
   const button = a.element('[data-act="merge"]');
   fs.writeFileSync(path.join(a.copy, 'a.txt'), 'copy changed\n');
   let renders = 0; a.context.render = () => { renders++; };
@@ -1597,6 +1607,50 @@ test('始める下書きは再描画・切替・再起動で復元し、登録�
   assert.equal(vm.runInContext('quickDraft({id:"other"}).text', a.context), '');
 });
 
+test('スクショdropはFileListが空でもfile itemから添付し、本文と既存画像を保持する', async () => {
+  const a = conversationApp(), got = [], image = {name:'shot.png',type:'image/png'};
+  a.element('#chat-in').value = '書きかけの本文';
+  a.context.chatImages('p','t').push(attached('existing'));
+  a.context.addChatImage = async (...args) => got.push(args);
+  const drop = transfer => a.events.get('drop')({dataTransfer:transfer,target:{closest:selector=>selector==='.chat'?{}:null},preventDefault(){}});
+  await drop({files:[],items:[{kind:'string',getAsFile:()=>{throw Error('not a file');}},{kind:'file',getAsFile:()=>null},{kind:'file',getAsFile:()=>image}]});
+  assert.equal(got.length,1); assert.deepEqual(got[0],['p','t',image]);
+  await drop({files:[image],items:[{kind:'file',getAsFile:()=>image}]});
+  assert.equal(got.length,2,'FileListとitemsを二重に添付しない');
+  assert.equal(a.element('#chat-in').value,'書きかけの本文');
+  assert.equal(a.context.chatImages('p','t')[0].id,'existing');
+  const messages=[]; a.context.toast=message=>messages.push(message);
+  await drop({files:[],items:[]}); assert.equal(got.length,2);
+  assert.match(messages[0],/ブラウザから画像データが届きませんでした/);
+});
+
+test('スクショNativeの遅延dropは開始時の画面・会話世代に一回だけ結び付く', async () => {
+  const a = conversationApp(), got=[];
+  a.element('#main').firstElementChild={isConnected:true};
+  a.context.addChatImage=async(...args)=>got.push(args);
+  const native=a.context.window.hubNativeDrop;
+  const ticket=native.begin(); assert.equal(typeof ticket,'string');
+  await native(['/tmp/shot.png'],ticket); await native(['/tmp/shot.png'],ticket);
+  assert.deepEqual(got,[['p','t','/tmp/shot.png',true]]);
+  for(const change of [
+    ()=>vm.runInContext('view.task="other"',a.context),
+    ()=>{a.element('#main').firstElementChild={isConnected:true};},
+    ()=>vm.runInContext('globalThis.HubChatGenerations=new Map([["p\\0t",1]])',a.context),
+    ()=>vm.runInContext('fileViewer={}',a.context),
+    ()=>{a.document.querySelectorAll=()=>[{}];},
+  ]) {
+    vm.runInContext('view.task="t";fileViewer=null;delete globalThis.HubChatGenerations',a.context);
+    a.document.querySelectorAll=()=>[];
+    const id=native.begin(); change(); await native(['/tmp/late.png'],id);
+    assert.equal(got.length,1,'遅延画像は別画面・再描画・会話世代更新後・画像ビューア・ダイアログへ入れない');
+  }
+  assert.equal(native.begin(),null,'ダイアログ中は新しいdropを開始しない');
+  a.document.querySelectorAll=()=>[];
+  const messages=[];a.context.toast=message=>messages.push(message);
+  const failed=native.begin();native.fail(failed);native.fail(failed);
+  assert.equal(messages.length,1);await native(['/tmp/failed.png'],failed);assert.equal(got.length,1);
+});
+
 test('入力欄へのドロップ・画像貼り付けで本文を保持し、Nativeの非画像は参考資料へ渡す', async () => {
   const a = app(), data = snapshot(), got = [], refs = [];
   vm.runInContext('state = ' + JSON.stringify(data) + '; view = {kind:"project",project:"p"}; quickDraft(proj("p")).text = "消えない指示"', a.context);
@@ -1625,6 +1679,117 @@ function freetalkConversation() {
   vm.runInContext('state.projects[0].id="freetalk";state.projects[0].kind="freetalk";state.projects[0].tasks[0].freetalkHistory={generation:1};view={kind:"work",project:"freetalk",task:"t"};openChat(proj("freetalk"),taskOf(proj("freetalk"),"t"));',a.context);
   return a;
 }
+for (const [name, screen, paths, terminal, zone] of [
+  ['ターミナルの画像', 'work', ['/tmp/promised.png'], true],
+  ['会話の画像以外', 'work', ['/tmp/promised.txt']],
+  ['会話の画像と文書の混在', 'work', ['/tmp/promised.png', '/tmp/promised.txt']],
+  ['プロジェクト参考', 'project', ['/tmp/promised.txt']],
+  ['プロジェクトの画像と参考の混在', 'project', ['/tmp/promised.png', '/tmp/promised.txt']],
+  ['新規プロジェクトの参考', 'newproject', ['/tmp/promised.png'], false, 'refs'],
+  ['新規プロジェクトの本体', 'newproject', ['/tmp/promised.png'], false, 'body'],
+]) test(`H1 一時ファイルは${name}へ場所を記録せず全件拒否する`, async () => {
+  const a = conversationApp(), writes = [], notices = [];
+  a.element('#chat-in').value = '残す本文';
+  a.context.chatImages('p', 't').push(attached('existing'));
+  vm.runInContext(`view.kind=${JSON.stringify(screen)};lastDropZone=${JSON.stringify(zone || '')}`, a.context);
+  if (terminal) {
+    const query = a.document.querySelector;
+    a.document.querySelector = s => s === '#chat-in' ? null : query(s);
+  }
+  for (const method of ['api', 'fetch', 'addChatImage', 'addQuickImages', 'addNewRefs', 'setBodyFolder']) {
+    a.context[method] = async (...args) => { writes.push([method, ...args]); };
+  }
+  a.context.toast = text => notices.push(text);
+  a.element('#main').firstElementChild = { isConnected: true };
+  const native = a.context.window.hubNativeDrop, ticket = native.begin();
+  assert.equal(typeof ticket, 'string');
+  assert.equal(await native(paths, ticket, { temporary: true }), false);
+  assert.deepEqual(writes, [], 'API・参照一覧・本体・画像のどこにも一時パスを渡さない');
+  assert.equal(a.element('#chat-in').value, '残す本文');
+  assert.deepEqual(Array.from(a.context.chatImages('p', 't'), x => x.id), ['existing']);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /保存したファイルを選ぶか、画像を会話画面に/);
+  await native(paths, ticket, { temporary: true });
+  assert.equal(notices.length, 1, '拒否したticketも一度で消費する');
+});
+
+test('H1 一時画像の会話dropはコピー完了まで待ち本文と既存添付を残す', async () => {
+  const a = conversationApp(); let finish, completed = false;
+  a.element('#chat-in').value = '残す本文';
+  a.context.chatImages('p', 't').push(attached('existing'));
+  a.context.api = (route, body) => {
+    assert.equal(route, '/api/start/image-path');
+    assert.equal(body.project, 'p'); assert.equal(body.path, '/tmp/promised.png');
+    return new Promise(resolve => { finish = resolve; });
+  };
+  a.element('#main').firstElementChild = { isConnected: true };
+  const native = a.context.window.hubNativeDrop;
+  const pending = native(['/tmp/promised.png'], native.begin(), { temporary: true }).then(() => { completed = true; });
+  await Promise.resolve();
+  assert.equal(completed, false, 'nativeの片付けに戻る前に画像保存を待つ');
+  finish(attached('saved-copy')); await pending;
+  assert.equal(completed, true);
+  assert.equal(a.element('#chat-in').value, '残す本文');
+  assert.deepEqual(Array.from(a.context.chatImages('p', 't'), x => x.path), ['/local/existing.png', '/local/saved-copy.png']);
+});
+
+test('H1 プロジェクト画面の一時画像は参考パスではなく画像コピーに保存する', async () => {
+  const a = conversationApp(), routes = [];
+  vm.runInContext('view={kind:"project",project:"p"};quickDraft(proj("p")).text="残す指示"', a.context);
+  a.context.api = async (route, body) => {
+    routes.push(route); assert.equal(route, '/api/start/image-path');
+    assert.equal(body.path, '/tmp/promised.png'); return attached('saved-copy');
+  };
+  a.element('#main').firstElementChild = { isConnected: true };
+  const native = a.context.window.hubNativeDrop;
+  await native(['/tmp/promised.png'], native.begin(), { temporary: true });
+  assert.deepEqual(routes, ['/api/start/image-path']);
+  assert.equal(vm.runInContext('quickDraft(proj("p")).text', a.context), '残す指示');
+  assert.equal(vm.runInContext('quickDraft(proj("p")).images[0].path', a.context), '/local/saved-copy.png');
+});
+
+test('H1 freetalkの一時文書は話題のコピー保存と世代照合を経由する', async () => {
+  const a = freetalkConversation(), routes = [];
+  a.element('#chat-in').value = '残す本文';
+  a.context.api = async (route, body) => {
+    routes.push(route);
+    if (route === '/api/task/attach') {
+      assert.equal(body.project, 'freetalk'); assert.equal(body.task, 't'); assert.equal(body.generation, 1);
+      assert.deepEqual(Array.from(body.paths), ['/tmp/promised.txt']);
+      return { attachments: [{ id: 'copy', name: 'copy.txt', generation: 1, kind: 'file', path: '/copy/copy.txt' }] };
+    }
+    assert.equal(route, '/api/freetalk/status?project=freetalk&task=t');
+    return { generation: 1, revision: 'after-upload', reason: '' };
+  };
+  a.element('#main').firstElementChild = { isConnected: true };
+  const native = a.context.window.hubNativeDrop;
+  await native(['/tmp/promised.txt'], native.begin(), { temporary: true });
+  assert.deepEqual(routes, ['/api/task/attach', '/api/freetalk/status?project=freetalk&task=t']);
+  assert.equal(a.context.chatImages('freetalk', 't')[0].path, '/copy/copy.txt');
+  assert.equal(a.element('#chat-in').value, '残す本文');
+});
+
+test('H1 Finderの通常URLはターミナルでも従来の場所記録へ渡す', async () => {
+  for (const options of [undefined, { temporary: false }]) {
+    const a = conversationApp(), query = a.document.querySelector, routes = [];
+    a.document.querySelector = s => s === '#chat-in' ? null : query(s);
+    a.context.api = async (route, body) => {
+      routes.push(route); assert.equal(route, '/api/task/attach');
+      assert.deepEqual(Array.from(body.paths), ['/saved/shot.png']); return { typed: false };
+    };
+    a.element('#main').firstElementChild = { isConnected: true };
+    const native = a.context.window.hubNativeDrop;
+    await native(['/saved/shot.png'], native.begin(), options);
+    assert.deepEqual(routes, ['/api/task/attach']);
+  }
+});
+test('スクショNativeはfreetalkの保存世代が更新された後に古い画像を追加しない',async()=>{
+  const a=freetalkConversation();a.element('#main').firstElementChild={isConnected:true};
+  let added=0;a.context.addChatImage=async()=>added++;
+  const native=a.context.window.hubNativeDrop,ticket=native.begin();
+  vm.runInContext('state.projects[0].tasks[0].freetalkHistory.generation=2',a.context);
+  await native(['/tmp/old-shot.png'],ticket);assert.equal(added,0);
+});
 test('freetalkはスマホの選択・drop・ネイティブ貼付を話題uploadへ統一し、文書も選べる',async()=>{
  const a=freetalkConversation(),calls=[];a.context.matchMedia=()=>({matches:true});
  a.element('#chat-files').click=()=>{};a.element('#chat-attach').handlers.click();assert.match(a.element('#chat-files').accept,/\.pdf.*\.pptx.*\.key/);
@@ -1672,7 +1837,8 @@ test('会話の＋は送信しないファイル選択ボタンで、captureと�
   assert.ok(input); assert.match(input, /type="file"/); assert.match(input, /multiple hidden/);
   assert.doesNotMatch(input, /\b(?:accept|capture)\b/);
   assert.ok(html.indexOf('id="chat-attach"') < html.indexOf('id="chat-ai"'));
-  assert.match(html, /［＋］で選ぶ/);
+  assert.match(html, /会話を読み込んでいます/);
+  assert.match(vm.runInContext('EMPTY_CHAT',a.context), /［＋］で選ぶ/);
 });
 
 test('＋は押した時の画面幅で写真／全ファイルを選び、選択値を空にして同期的に開く', () => {
@@ -1822,10 +1988,15 @@ test('送信直後に入力欄を空にし、受付待ちの新しい下書き�
   assert.equal(a.element('#chat-in').value, '');
   assert.equal(a.element('#chat-send').disabled, true);
   assert.equal(a.element('#chat-send').textContent, '送っています…');
+  assert.equal(a.element('#chat-send-status').hidden, false);
+  assert.equal(a.element('#chat-send-status').textContent, '送信を確認しています…');
+  assert.equal(vm.runInContext('chatBusy', a.context), null); // HTTP acceptance is still pending.
   a.element('#chat-in').value = '次の下書き'; a.element('#chat-in').handlers.input();
   finish({queued:true,queue:1}); await new Promise(setImmediate);
   assert.equal(a.element('#chat-in').value, '次の下書き');
   assert.equal(a.element('#chat-send').disabled, false);
+  assert.equal(a.element('#chat-send-status').hidden, true);
+  assert.equal(a.element('#chat-send-status').textContent, '');
 });
 
 test('受付失敗なら別の会話を変えず原稿を復元し、新しい下書きも残す', async () => {
@@ -1842,6 +2013,7 @@ test('受付失敗なら別の会話を変えず原稿を復元し、新しい�
     fail(Error('受付失敗')); await new Promise(setImmediate);
     assert.equal(vm.runInContext('chatDraft[chatAttachmentKey("p","t")]',a.context), '送る本文\n\n次の下書き');
     assert.equal(a.element('#chat-in').value, switched ? '別の会話の本文' : '送る本文\n\n次の下書き');
+    if (!switched) assert.equal(a.element('#chat-send-status').hidden, true);
   }
 });
 
@@ -2229,7 +2401,7 @@ for (const locale of ['ja', 'zh-TW']) test('正式な質問・選択・承認・
   for(const extra of [{question:'選んでください'},{question:'承認してください'},{state:'返事待ち'},{state:'上限で停止'},{resultsPending:true},{completionPending:true}]){
     const s=snapshot('実行中',[{project:'p',task:'t',ai:'codex',running:true,quiet:3600}]);Object.assign(s.projects[0].tasks[0],extra);s.chatting=[{project:'p',task:'t',ai:'codex'}];
     vm.runInContext('state='+JSON.stringify(s)+';view={kind:"turn"}',a.context);a.context.render();
-    const confirm=Boolean(extra.completionPending);
+    const confirm=Boolean(extra.completionPending || extra.resultsPending);
     assert.equal(Boolean(vm.runInContext('REPLY(state.projects[0],state.projects[0].tasks[0])',a.context)),!confirm);
     assert.equal(Boolean(vm.runInContext('CONFIRM(state.projects[0],state.projects[0].tasks[0])',a.context)),false);
     assert.equal(a.element('#turn-n').textContent,a.context.UI.template`返事待ち ${confirm?0:1}`);
@@ -2250,7 +2422,7 @@ test('通知：変化なしの定期取得でも返事待ち・完了の文字�
   assert.equal(renders, 0);
   assert.equal(a.element('#turn-n').textContent, '返事待ち 0');
   assert.equal(a.element('#turn-done-n').textContent, '完了 1');
-  assert.equal(a.element('#turn').attributes['aria-label'], 'あなたの番：返事待ち 0件、作業中 0件、完了 1件');
+  assert.equal(a.element('#turn').attributes['aria-label'], 'あなたの番：返事待ち 0件、作業中 0件、成果確認 0件、完了 1件');
 });
 
 test('通知：設定・入力・詳しくを開いたまま定期取得しても3区分の件数と説明を更新する', async () => {
@@ -2273,12 +2445,12 @@ test('通知：設定・入力・詳しくを開いたまま定期取得して�
     await a.context.pollState();
     assert.equal(a.element('#turn-n').textContent, '返事待ち 1', held);
     assert.equal(a.element('#turn-done-n').textContent, '完了 0', held);
-    assert.equal(a.element('#turn').attributes['aria-label'], 'あなたの番：返事待ち 1件、作業中 0件、完了 0件', held);
+    assert.equal(a.element('#turn').attributes['aria-label'], 'あなたの番：返事待ち 1件、作業中 0件、成果確認 0件、完了 0件', held);
     vm.runInContext('fetchState = async () => (' + JSON.stringify(snapshot()) + ')', a.context);
     await a.context.pollState();
     assert.equal(a.element('#turn-n').textContent, '返事待ち 0', held);
     assert.equal(a.element('#turn-done-n').textContent, '完了 0', held);
-    assert.equal(a.element('#turn').attributes['aria-label'], 'あなたの番：返事待ち 0件、作業中 0件、完了 0件', held);
+    assert.equal(a.element('#turn').attributes['aria-label'], 'あなたの番：返事待ち 0件、作業中 0件、成果確認 0件、完了 0件', held);
     assert.equal(renders, 0, held);
     assert.equal(a.element('#main').innerHTML, main, held);
   }
@@ -2352,7 +2524,7 @@ test('停止保留表示：実稼働との併存を隠さず返事優先の一�
     assert.equal(vm.runInContext('WORKING(state.projects[0],state.projects[0].tasks[0])',a.context),true,activity);
     assert.match(a.context.taskLight(p,t,true).tip,/作業中.*保留/);
     assert.equal(a.element('#turn-n').textContent,'返事待ち 1',activity);assert.equal(a.element('#turn-work-n').textContent,'作業中 0',activity);
-    assert.match(a.context.taskRow(p,t,true,'reply'),activity==='results'?/成果整理/:/作業中・指示保留/);
+    assert.match(a.context.taskRow(p,t,true,'reply'),/作業中・指示保留/);
   }
 });
 
@@ -2510,7 +2682,10 @@ test('実spawn失敗のSSE後も上下から再操作でき、fake CLI修復後�
   const rows=[{id:'',contains:x=>x===ask}],box=a.element('#msgs');let historyVisible=true;
   box.querySelectorAll=sel=>sel==='.m'?rows:sel==='.ask'&&historyVisible?[ask]:[];
   Object.defineProperty(box,'innerHTML',{set(html){rows.length=0;historyVisible=html.includes('data-ask-key');if(historyVisible)rows.push({id:'',contains:x=>x===ask},{id:'',contains:()=>false});},get(){return '';}});
-  box.insertAdjacentHTML=(_pos,html)=>{if(html.includes('class="m '))rows.push({id:html.includes('id="msg-partial"')?'msg-partial':'',contains:()=>false});};
+  box.insertAdjacentHTML=(_pos,html)=>{
+   if(html.includes('class="m pending-question"')){historyVisible=true;ask.dataset.questionSource=/data-question-source="([^"]+)"/.exec(html)?.[1];rows.push({id:'',contains:x=>x===ask});}
+   else if(html.includes('class="m '))rows.push({id:html.includes('id="msg-partial"')?'msg-partial':'',contains:()=>false});
+  };
   a.document.querySelectorAll=sel=>sel==='.ask'?[ask]:[];a.element('#chat-ai').value='codex|GPT-6.1-Sol';a.element('#chat-effort').value='極高';a.element('#chat-in').value='別の下書き';
   a.context.chatImages('p','t').push(attached('r1-retained'));a.context.load=async()=>{};a.context.refreshTree=async()=>{};a.context.toast=()=>{};let lower;a.context.bindAskAnswers=(_box,send)=>{lower=send;};a.context.openChat(s.projects[0],s.projects[0].tasks[0]);
   const installPartial=()=>a.elements.set('#msg-partial',{querySelector:s=>a.element('partial'+s),insertAdjacentHTML:box.insertAdjacentHTML,remove(){a.elements.delete('#msg-partial');}});
@@ -2847,7 +3022,7 @@ test('スマホ設定カードの保存/失敗と遅いpoll、他端末更新も
 
 // 保存のたびにカードを置換していないことと、移動先のフォーカスを検証するDOM。
 function phoneCard(a, s) {
-  const box = a.element('#phone-labels'), keys = [...a.context.orderedModels(), ...(a.context.window.HubPaidWebchat ? ['chatgpt|auto'] : [])];
+  const box = a.element('#phone-labels'), keys = a.context.phoneLabelKeys();
   const inputs = keys.map(key => ({ dataset: { phoneName: key }, value: s.phoneLabels.names[key] || '', disabled: false }));
   const radios = ['short', 'full'].map(mode => ({ dataset: { phoneMode: mode }, checked: mode === s.phoneLabels.labels, disabled: false }));
   const status = { textContent: '' }; let replacements = 0;
@@ -3141,9 +3316,9 @@ test('成果整理は完了確認・完了ボタンを出さず、稼働中は�
   assert.doesNotMatch(html,/data-act="taskcomplete"|完了に移しますか/);
   if(auto==='running')assert.doesNotMatch(html,/成果の整理を頼む/);else assert.match(html,/成果の整理を頼む/);
   assert.equal(vm.runInContext('Boolean(NEEDS(gateTask))',a.context),auto!=='running');
-  assert.equal(vm.runInContext('Boolean(REPLY(gateProject,gateTask))',a.context),auto!=='running');
-  const row=vm.runInContext('taskRow(gateProject,gateTask,false,"reply")',a.context);assert.match(row,auto==='running'?/作業中/:/成果整理/);assert.doesNotMatch(row,/完了確認|送らずに消す/);
-  assert.equal(vm.runInContext('notificationKind(gateProject,gateTask)',a.context),auto==='running'?'work':'reply');
+  assert.equal(vm.runInContext('Boolean(REPLY(gateProject,gateTask))',a.context),false);
+  const row=vm.runInContext('taskRow(gateProject,gateTask,false,"reply")',a.context);assert.match(row,auto==='running'?/成果整理中/:/成果確認/);assert.doesNotMatch(row,/完了確認|送らずに消す/);
+  assert.equal(vm.runInContext('notificationKind(gateProject,gateTask)',a.context),auto==='running'?'work':'results');
  }
 });
 
@@ -4038,4 +4213,105 @@ test('screen modules preserve the main activation and purchase gate for an unreg
     a.context.renderSettings();
     assert.doesNotMatch(a.element('#main').innerHTML,/id="license-form"|id="license-code"|data-license-intro|data-license-purchase/);
   }
+});
+
+
+test('entry image: native pending drop owns DOM duplicates only on its original screen', async()=>{
+  const a=conversationApp(),got=[],messages=[];
+  const anchor={isConnected:true};a.element('#main').firstElementChild=anchor;
+  a.context.addChatImage=async(...args)=>got.push(args);a.context.toast=x=>messages.push(x);
+  const native=a.context.window.hubNativeDrop,ticket=native.begin();
+  const event=files=>({dataTransfer:{files,items:[]},target:{closest:s=>s==='.chat'?{}:null},preventDefault(){}});
+  await a.events.get('drop')(event([]));await a.events.get('drop')(event([{name:'same.png',type:'image/png'}]));
+  assert.equal(got.length,0);assert.equal(messages.length,0,'no false DOM failure during native receive');
+  await native(['/tmp/same.png'],ticket,{temporary:true});assert.equal(got.length,1);
+  const stale=native.begin();a.element('#main').firstElementChild={isConnected:true};
+  await a.events.get('drop')(event([{name:'fresh.png',type:'image/png'}]));
+  assert.equal(got.length,2,'a stale ticket cannot block a new DOM upload');
+  await native(['/tmp/stale.png'],stale,{temporary:true});assert.equal(got.length,2);
+  a.element('#chat-in').value='keep';
+  const failed=native.begin();native.fail(failed,'promise');native.fail(failed,'promise');
+  assert.equal(messages.length,1);assert.match(messages[0],/Macから画像ファイル/);
+  await a.events.get('drop')(event([]));assert.match(messages[1],/ブラウザから画像データ/);
+  assert.equal(a.element('#chat-in').value,'keep');
+});
+
+test('entry image: native receive reasons and backend save errors remain distinguishable', async()=>{
+  const a=conversationApp(),messages=[];a.element('#main').firstElementChild={isConnected:true};
+  a.context.toast=x=>messages.push(x);const native=a.context.window.hubNativeDrop;
+  for(const reason of ['promise-count','timeout','temporary-directory','file-location','file-url','image-data'])native.fail(native.begin(),reason);
+  assert.equal(new Set(messages).size,6);assert.match(messages[0],/件数/);assert.match(messages[1],/時間/);
+  a.context.api=async()=>{throw Error('画像は1枚50MBまでです');};
+  a.context.drawChatImages=()=>{};
+  await native(['/tmp/large.png'],native.begin(),{temporary:true});
+  assert.match(messages.at(-1),/large.png：画像は1枚50MB/);
+  assert.equal(a.context.chatImages('p','t').length,0);
+});
+
+test('通知：質問なしの成果不備は成果確認へ、確認中・整理中・通常稼働は区別して数える',()=>{
+ const a=app(),s=snapshot(),p=s.projects[0],base=p.tasks[0];
+ p.tasks=[
+  ...['none','failed','blocked'].map(auto=>({...base,id:auto,title:auto,resultsPending:{auto,code:'candidates',reason:'保存先を確認',detail:'整理が停止'}})),
+  {...base,id:'checking',title:'checking',resultsPending:{auto:'none',code:'checking'}},
+  {...base,id:'organizing',title:'organizing',resultsPending:{auto:'running',code:'format'}},
+  {...base,id:'live',title:'live',resultsPending:{auto:'blocked',code:'candidates',detail:'AIが作業中です'}},
+  {...base,id:'normal',title:'normal'},
+  {...base,id:'done',title:'done',completionPending:true}
+ ];
+ s.chatting=[{project:p.id,task:'live',ai:'codex'},{project:p.id,task:'normal',ai:'codex'}];
+ const original=JSON.stringify(s);
+ vm.runInContext('state='+original+';view={kind:"turn",project:"p"};open.add("p")',a.context);a.context.render();
+ for(const [id,text] of [['#turn-n','返事待ち 0'],['#turn-work-n','作業中 4'],['#turn-results-n','成果確認 3'],['#turn-done-n','完了 1']])assert.equal(a.element(id).textContent,text);
+ assert.match(a.element('#list').innerHTML,/>成果確認 3</);assert.doesNotMatch(a.element('#list').innerHTML,/notice-reply/);
+ assert.equal(a.element('#turn').attributes['aria-label'],'あなたの番：返事待ち 0件、作業中 4件、成果確認 3件、完了 1件');
+ for(const [id,label] of [['checking','成果確認中'],['organizing','成果整理中'],['live','作業中'],['normal','作業中']]){
+  const t=p.tasks.find(t=>t.id===id),row=a.context.taskRow(p,t,true,'work');
+  assert.match(row,new RegExp('task-status busy">'+label+'<'));
+  assert.doesNotMatch(row,/data-act="answered"|data-act="taskcomplete"|data-act="resultsorganize"/);
+  if(t.resultsPending)assert.doesNotMatch(a.context.completionButtons(p,t),/data-act="resultsorganize"|data-act="taskcomplete"/);
+  assert.match(a.context.notificationBadges(p,[t]),new RegExp('>'+label+'<'));
+ }
+ vm.runInContext('turnTab="results";render()',a.context);
+ const html=a.element('#main').innerHTML;
+ assert.equal((html.match(/class="trow /g)||[]).length,3);assert.equal((html.match(/data-act="resultsorganize"/g)||[]).length,3);
+ assert.doesNotMatch(html,/data-act="answered"|data-act="taskcomplete"|id="turn-answer-all"/);
+ assert.match(html,/成果整理は現在動いていません/);
+ assert.equal(vm.runInContext('JSON.stringify(state)',a.context),original);
+});
+
+test('通知：成果不備と実質問・入力待ち・停止保留が併存しても返事と完了承認を保護する',()=>{
+ for(const fields of [{question:'確認してください'},{state:'返事待ち'},{state:'上限で停止'},{chatQueueBlocked:true},{chatQueueBlocked:true,chatQueueHeld:true}]){
+  const a=app(),s=snapshot(),p=s.projects[0],t=p.tasks[0];Object.assign(t,{completionPending:true,resultsPending:{auto:'failed',code:'format'}},fields);
+  const original=JSON.stringify(s);vm.runInContext('state='+original+';view={kind:"turn",project:"p"}',a.context);a.context.render();
+  assert.equal(a.element('#turn-n').textContent,'返事待ち 1');assert.equal(a.element('#turn-results-n').textContent,'成果確認 0');assert.equal(a.element('#turn-done-n').textContent,'完了 0');
+  assert.match(a.context.notificationBadges(p,[t]),/notice-reply/);assert.doesNotMatch(a.context.completionButtons(p,t),/data-act="taskcomplete"/);
+  assert.equal(vm.runInContext('JSON.stringify(state)',a.context),original);
+ }
+});
+
+test('通知：成果再確認と通常稼働の遷移を定期取得し、成功後だけ完了承認へ移す',async()=>{
+ const a=app(),s=snapshot(),p=s.projects[0],t=p.tasks[0];t.completionPending=true;
+ for(const [pending,chatting,tab,count] of [
+  [{auto:'blocked',code:'candidates'},[{project:p.id,task:t.id,ai:'codex'}],'work',1],
+  [{auto:'blocked',code:'candidates'},[],'results',1],
+  [{auto:'none',code:'checking'},[],'work',1],
+  [{auto:'running',code:'format'},[],'work',1],
+  [{auto:'failed',code:'format'},[],'results',1],
+  [null,[],'done',1]
+ ]){
+  if(pending)t.resultsPending=pending;else delete t.resultsPending;s.chatting=chatting;
+  vm.runInContext('fetchState=async()=>('+JSON.stringify(s)+')',a.context);await a.context.pollState();
+  for(const kind of ['reply','work','results','done'])assert.equal(a.element({'reply':'#turn-n','work':'#turn-work-n','results':'#turn-results-n','done':'#turn-done-n'}[kind]).textContent,{'reply':'返事待ち ','work':'作業中 ','results':'成果確認 ','done':'完了 '}[kind]+(kind===tab?count:0));
+  assert.equal(Boolean(vm.runInContext('CONFIRM(state.projects[0],state.projects[0].tasks[0])',a.context)),tab==='done');
+ }
+});
+
+test('通知：返事待ちの一括解除は成果確認の状態・質問・成果検査を変更しない',async()=>{
+ const a=app(),s=snapshot(),p=s.projects[0],base=p.tasks[0],calls=[];
+ p.tasks=[{...base,id:'ask',question:'選んでください'}, {...base,id:'results',question:'',completionPending:false,resultsPending:{auto:'failed',code:'format'}}];
+ const before=JSON.stringify(p.tasks[1]);vm.runInContext('state='+JSON.stringify(s),a.context);
+ a.context.confirm=()=>true;a.context.api=async(url,body)=>{calls.push({url,body});return {};};a.context.load=async()=>{};
+ await a.context.appWorkCallback693()({target:{closest:s=>s==='#turn-answer-all'?{}:null}});
+ assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/task');assert.equal(calls[0].body.task,'ask');
+ assert.equal(vm.runInContext('JSON.stringify(state.projects[0].tasks[1])',a.context),before);
 });

@@ -16,8 +16,8 @@ function relevant(ai, model, w) {
   return bucket === 'codex' || bucket === model;
 }
 class ModelLimits {
-  constructor(file, { now = Date.now, models = () => MODELS, creditPolicy = () => ({}), creditState = () => null } = {}) {
-    this.file = file; this.now = now; this.models = models; this.creditPolicy = creditPolicy; this.creditState = creditState; this.data = {};
+  constructor(file, { now = Date.now, models = () => MODELS, creditPolicy = () => ({}), creditState = () => null, onCreditDecision = null } = {}) {
+    this.file = file; this.now = now; this.models = models; this.creditPolicy = creditPolicy; this.creditState = creditState; this.onCreditDecision = onCreditDecision; this.data = {};
     this.reload();
   }
   reload() {
@@ -52,18 +52,38 @@ class ModelLimits {
     if (e.validUntil !== null && stamp(e.validUntil) <= this.now()) return shared;
     return { ...e, version: 2, lastLimitAt: e.lastLimitAt || e.at, untilSource: e.untilSource || 'usage', project: e.project || '', task: e.task || '', request: e.request || '', model, account, hold: true };
   }
-  creditPriority(o, held = this.active(o.account || 'default', launch.flagFor(o.ai, o.model))) {
-    const policy = this.creditPolicy();
-    if (policy.preferCredits !== true || policy.checkCredits?.[o.ai] !== true || held?.source !== 'usage-100') return false;
-    const proof = this.creditState(o.ai, o.account || 'default'), now = this.now();
+  creditDecision(o, held = this.active(o.account || 'default', launch.flagFor(o.ai, o.model))) {
+    const policy = this.creditPolicy(), account = o.account || 'default', now = this.now();
+    const proof = this.creditState(o.ai, account);
     const attempted = stamp(proof?.attemptedAt), checked = stamp(proof?.checkedAt);
-    // 枠100%の保持は消さない。正式CLI拒否は残高だけで解除しない。
-    return proof?.availability === 'available' && proof.prepaid === true && checked >= stamp(held.lastLimitAt) &&
-      attempted <= checked && checked <= now && now - attempted < 30000;
+    let reason;
+    if (o.ai !== 'codex') reason = 'unsupported-provider';
+    else if (policy.preferCredits !== true) reason = 'priority-off';
+    else if (policy.checkCredits?.[o.ai] !== true) reason = 'check-off';
+    else if (held?.source !== 'usage-100') reason = held?.source === 'cli-limit' ? 'cli-limit' : 'no-usage-hold';
+    else if (!proof) reason = 'no-proof';
+    else if (proof.ai !== o.ai || proof?.account !== account) reason = 'account-changed';
+    else if (proof.availability !== 'available') reason = proof.availability === 'empty' ? 'empty' :
+      ['checking','no-proof','not-checked','unavailable','invalid-time','slow-read','not-fresh','account-changed'].includes(proof.reason) ? proof.reason : 'unknown';
+    else if (proof.prepaid !== true) reason = 'not-prepaid';
+    else if (!(attempted <= checked && checked <= now)) reason = 'invalid-time';
+    else if (now - attempted >= 30000) reason = 'not-fresh';
+    else if (checked < stamp(held.lastLimitAt)) reason = 'before-limit';
+    else reason = 'available';
+    return { allowed: reason === 'available', reason, availability: ['available','empty'].includes(proof?.availability) ? proof.availability : 'unknown',
+      attemptedAt: Number.isFinite(attempted) ? proof.attemptedAt : null, checkedAt: Number.isFinite(checked) ? proof.checkedAt : null,
+      evaluatedAt: new Date(now).toISOString() };
+  }
+  creditPriority(o, held = this.active(o.account || 'default', launch.flagFor(o.ai, o.model))) {
+    return this.creditDecision(o, held).allowed;
   }
   forRequest(o) {
     const held = this.active(o.account || 'default', launch.flagFor(o.ai, o.model));
-    return this.creditPriority(o, held) ? null : held;
+    if (!held) return null;
+    const decision = this.creditDecision(o, held);
+    // Only typed decision fields: no balances, CLI output, credentials or prompts.
+    try { this.onCreditDecision?.(o, { ...decision, model: held.model, account: held.account, limitSource: held.source }); } catch { /* logging cannot authorize a start */ }
+    return decision.allowed ? null : held;
   }
   creditException() { this.reload(); return credit.valid(this.data._creditException) ? { ...this.data._creditException } : null; }
   startCreditException(input, snapshot) {

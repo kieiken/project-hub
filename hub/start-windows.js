@@ -32,8 +32,10 @@ function freePort(port) {
     probe.listen(port, '127.0.0.1', () => probe.close(resolve));
   });
 }
-async function serverReady(url, pid, runtimePath, request = fetch) {
-  const options = { signal: AbortSignal.timeout(1500), headers: { connection: 'close' } };
+async function serverReady(url, pid, runtimePath, request = fetch, verify = require('./app/open-browser.cjs').verify) {
+  const owner = await verify(Number(require('node:url').parse(url).port));
+  if (owner.pid !== pid) return false;
+  const options = { signal: AbortSignal.timeout(1500), headers: { connection: 'close', 'X-Hub-Token': require('./lib/local-auth').capability(owner.token) } };
   const ping = await request(url + '/api/ping', options);
   if (!ping.ok) return false;
   const body = await ping.json();
@@ -67,7 +69,10 @@ async function main() {
       ready = await serverReady(url, child.pid, __dirname);
     } catch { /* readiness only; no user operation is replayed */ }
     if (ready) {
-      try { await platform.openUrl(url); }
+      try {
+        const launched = await require('./app/open-browser.cjs').launch(port, file => platform.openUrl(require('node:url').pathToFileURL(file).href));
+        setTimeout(launched.cleanup, 65000).unref();
+      }
       catch (error) { if (!exited) child.kill(); throw error; }
       console.log('保存先：' + root); return;
     }

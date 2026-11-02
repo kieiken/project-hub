@@ -2,31 +2,31 @@
 
 [日本語](README.md) | 繁體中文
 
-**公開 Beta 版。目前是開發中的版本（v4.117.0）。** 功能、畫面與儲存格式仍可能改變。請先在可以試用的範圍內使用，避免直接套用到重要資料。歡迎分享使用心得、回報問題或提交 Pull Request；參與方式見 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
+**Project Hub 的 Mac 與 Windows 版皆為正式版。** 目前的發行版為 [Mac 4.126.41](https://github.com/kieiken/project-hub/releases/tag/v4.126.41) 與 [Windows 4.125.2](https://github.com/kieiken/project-hub/releases/tag/v4.125.2)。歡迎分享使用心得、回報問題或提交 Pull Request；參與方式見 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
 
-Project Hub 將專案與任務集中管理，並在同一個畫面中執行 Claude Code / Codex。主要供單一使用者在自己的 Mac 上使用。服務只監聽 `127.0.0.1`；本機操作沒有使用者登入驗證。可自行啟用 Tailscale 與通關密語，從自己的 iPhone 遠端操作，但不適合作為公開網站或多人共用伺服器。
+Project Hub 將專案與任務集中管理，並在同一個畫面中執行 Claude Code / Codex。主要供單一使用者在自己的 Mac 或 Windows 11 x64 上使用。服務只監聽 `127.0.0.1`；本機操作沒有使用者登入驗證。可自行啟用 Tailscale 與通關密語，從自己的 iPhone 遠端操作，但不適合作為公開網站或多人共用伺服器。
 
 使用前請閱讀 [hub/README.zh-TW.md](hub/README.zh-TW.md) 的「使用前須知」。
 
 ## 畫面範例
 
-以下是過去版本的實際畫面，個人資料、業務內容與真實對話已遮蔽。畫面仍是拍攝時的日文版本，可能與目前版本（4.117.0）不同。
+以下是 v4.126.41 的畫面。專案、任務與對話內容都是為了說明而準備的虛構資料（不含實際使用者的資料）。畫面為日文版本。
 
-### 對話畫面與執行中的指示（取消／補充說明／下一個指示）
+### 任務的對話畫面
 
-拍攝於 2026-09-29，版本為 v4.10.0（已遮蔽敏感資訊）。
+在虛構的專案「咖啡店開業準備」中，於對話裡確認 AI 整理的價格表，並輸入下一個指示。畫面上方會顯示目前的階段與剩下的步驟。
 
-![對話畫面與執行中的指示（v4.10.0，已遮蔽敏感資訊）](docs/screenshots/conversation-redacted.png)
+![任務的對話畫面（v4.126.41，虛構資料）](docs/screenshots/conversation.png)
 
-### 對話畫面與排隊中的後續指示
+### 對話搜尋
 
-拍攝於 2026-09-30，版本為 v4.16.0（已遮蔽敏感資訊）。
+可從所有專案與自由對話中以關鍵字搜尋，並打開找到的發言與前後的對話。
 
-![對話畫面與排隊中的後續指示（v4.16.0，已遮蔽敏感資訊）](docs/screenshots/queued-instructions-redacted.png)
+![對話搜尋結果（v4.126.41，虛構資料）](docs/screenshots/search.png)
 
 ## 必要條件
 
-- macOS（也可在 Windows 10／11 執行，見下方「Windows」）。
+- macOS（Apple Silicon、macOS 13 以上）或 Windows 11 x64（見下方「Windows」）。
 - Node.js 22 以上、Git。
 - 安裝要使用的 AI CLI（Claude Code / Codex），並先完成登入。
 - 編譯終端機元件 node-pty 與 Project Hub.app 需要 Apple 開發工具。
@@ -48,9 +48,9 @@ HUB_LANG=zh-TW HUB_APP_DIR=/Applications HUB_ROOT="/Volumes/External/AI-Workspac
 
 操作方式與更新步驟見 [hub/README.zh-TW.md](hub/README.zh-TW.md)。
 
-### Windows（實驗性支援）
+### Windows
 
-Windows 10／11 的支援仍屬實驗性；先在下載的資料夾執行一次 `hub\setup.bat`，之後用 `hub\start.bat` 啟動（會在瀏覽器開啟 http://127.0.0.1:4545）。需要 Git for Windows（bash）、Node.js 22 以上，以及要使用的 AI CLI。node-pty 已附 Windows 用的預先編譯檔，不需要安裝 Visual Studio。Mac App、自動更新與背景 AI 監看在 Windows 上無法使用。程序所有權確認尚未支援，因此待處理指令自動啟動及停止完成確認仍有限制。修正版尚未在 Windows 實機驗證。
+Windows 11 x64 的正式版在 [發行頁面](https://github.com/kieiken/project-hub/releases) 提供。使用 WebView2 專用視窗，準備與啟動步驟見 [Windows 專用視窗說明](hub/app/windows/README.md)。請以一般權限使用，不要以系統管理員身分啟動。由於沒有發行者簽章，第一次啟動時 Windows 可能顯示警告。App 內的自動更新只會替換 App 內的處理程式。僅限 Mac 的隔離執行等功能，在 Windows 上無法使用。
 
 ## 每日自動更新
 

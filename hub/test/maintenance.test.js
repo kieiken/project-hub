@@ -121,10 +121,13 @@ test('構造確認は資料の相対パスをプロジェクト基準に解決�
 
 test('references exceeding the batch size finish completely and retain busy state',async t=>{
  const f=fixture(t,{referenceLimits:{bytes:1024*1024}}),file=f.old('.ai/work/protected.dat'),large=f.old('large.json','x'.repeat(1024*1024+1)+file);f.busy(true);
- let ticks=0;const timer=setInterval(()=>ticks++,0);let d;
- try {d=await f.m.preview('P');}finally{clearInterval(timer);}
+ // The scanner yields with setImmediate. A 0ms interval has a 1ms minimum
+ // and need not fire before a fast scan finishes. Queue work in the same
+ // phase before preview, so removing all yields still fails this check.
+ let yielded=false;const pending=setImmediate(()=>{yielded=true;});let d;
+ try {d=await f.m.preview('P');}finally{clearImmediate(pending);}
  assert.ok(d.token,d.stopped?.reason);assert.equal(d.candidates.length,0);assert.ok(d.excluded.some(x=>x.path===file && /参照/.test(x.reason)));
- assert.equal(d.busy,true);assert.ok(d.scan.batches>1);assert.ok(d.scan.bytes>1024*1024);assert.ok(ticks>0,'other event-loop work runs during the scan');
+ assert.equal(d.busy,true);assert.ok(d.scan.batches>1);assert.ok(d.scan.bytes>1024*1024);assert.ok(yielded,'other event-loop work runs during the scan');
  assert.equal(fs.statSync(large).size,1024*1024+1+Buffer.byteLength(file));
 });
 

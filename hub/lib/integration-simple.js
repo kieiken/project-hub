@@ -76,7 +76,7 @@ class SimpleIntegration {
     if(a.target!==r.target||!current||current.status||h.gitw.merging(a.target)||current.head&&!h.gitw.isAncestor(r.target,r.auto.targetHead))throw Error(lt('開始後に子または統合先が変わりました'));
     // A human can confirm a saved fix on the same copy before any Git/file
     // integration. Later phases retain their reviewed heads and receipt guards.
-    const attempts=Object.values(r.auto.attempts),rebase=current.head!==r.auto.targetHead&&!r.complete&&!r.auto.prepared&&!r.auto.main&&!Object.keys(r.auto.migrations||{}).length&&r.items.every(i=>!i.integrated&&!i.receipt&&['待ち','整理中'].includes(i.state))&&attempts.every(a=>['organize','order','verified'].includes(a.phase));
+    const attempts=Object.values(r.auto.attempts),rebase=current.head!==r.auto.targetHead&&!r.complete&&!r.auto.prepared&&!r.auto.main&&!Object.keys(r.auto.migrations||{}).length&&r.items.every(i=>!i.integrated&&!i.receipt&&['待ち','整理中'].includes(i.state))&&attempts.every(a=>['organize','order','verified'].includes(a.phase)||a.phase==='superseded'&&a.organizeFailure&&r.auto.attempts[a.supersededBy]?.organizeRepair);
     if(current.head!==r.auto.targetHead&&!rebase&&!attempts.some(a=>['code','review','needs-review'].includes(a.phase)))throw Error(lt('開始後に統合先HEADが変わりました'));
     return {current,rebase};
   }
@@ -205,6 +205,12 @@ class SimpleIntegration {
     const pending=Object.entries(r.auto.attempts).find(([,a])=>['organize','order'].includes(a.phase));
     if(pending){
       const [k,a]=pending;
+      if(a.organizeRepairReady){
+        const recovery=require('./integration-organize-recovery'),old=r.auto.attempts[a.organizeRepair.previous];
+        const proof=recovery.failure;
+        if(!recovery.key(r,k,a)||JSON.stringify(proof(this.h,r,a.organizeRepair.previous,old,auto.savedCompletion(r,a.organizeRepair.previous,'organize')))!==JSON.stringify(a.organizeRepair.proof))throw Error('整理のやり直し前に証拠が変わりました。再送しません');
+        delete a.organizeRepairReady;await auto.dispatchAttempt(r,a,k,this.organizeRequest(r,r.items.find(i=>key(i)===key(a)),k));return false;
+      }
       if(a.retryReady){await auto.dispatchAttempt(r,a,k,a.request||this.organizeRequest(r,r.items.find(i=>i.project===a.project&&i.task===a.task),k));return false;}
       const row=auto.savedCompletion?.(r,k,a.phase);
       if(row){this.settled(auto,r,k,a.phase,row);return false;}
@@ -238,12 +244,12 @@ class SimpleIntegration {
   }
   organizeRequest(r,i,k){
     if(i.questionBinding)throw Error('質問待ちの子へ整理は送りません');
-    return {project:i.project,task:i.task,title:lt('統合する成果の整理'),organize:true,role:'コーディング',text:`[integration-auto:${k}:organize]\n目的：開始済み統合「${i.title}」の成果と残件を整理する。\n読む：この子の最新の作業ファイル・成果・保存状態。\nやる：未保存の変更をcommitし、## 成果を正式受領できる形式へ整理。## 残件申告にJSON {"status":"なし|あり","items":"原文の残件、なければなし","undecided":"判断待ち、なければなし","evidence":"確認資料"} を保存する。\n条件：未実施を済にしない。実AI・外部送信・課金・本体反映・子の削除なし。既存記録と原文は保全する。\n出力：保存HEAD・成果・残件をこの子の会話へ返す。\n次：番を終える。Hubが開始済みの統合を続ける。再委任しない。`};
+    return {project:i.project,task:i.task,title:lt('統合する成果の整理'),organize:true,role:'コーディング',text:`[integration-auto:${k}:organize]\n目的：開始済み統合「${i.title}」の成果と残件を整理する。\n読む：この子の最新の作業ファイル・成果・保存状態。\nやる：未保存の変更をcommitし、## 成果を次の形式だけで1行1件に整理する。種類は「ファイル」「本体保存済み」「なし」の3つだけ。「作業用コピー保存済み」等の別名は禁止。例：- ファイル：project:作業/<作業ID>/確認結果.md（確認資料）、または - 本体保存済み：body:.@<実際の保存commit>（保存したコード）。所属する専用コピーの保存履歴も「本体保存済み」を使う。本体への反映済みと偽らず説明に専用コピーへの保存と記す。成果がない場合だけ - なし：<理由> とし、他の種類と併記しない。既存の成果と保存履歴を調べ、場所・commitを推測しない。## 残件申告にJSON {"status":"なし|あり","items":"原文の残件、なければなし","undecided":"判断待ち、なければなし","evidence":"確認資料"} を保存する。\n条件：未実施を済にしない。実AI・外部送信・課金・本体反映・子の削除なし。既存記録と原文は保全する。\n出力：保存HEAD・成果・残件をこの子の会話へ返す。\n次：番を終える。Hubが開始済みの統合を続ける。再委任しない。`};
   }
   organizeStart(request){
     const k=String(request.text||'').match(/^\[integration-auto:([a-f0-9]{64}):organize\]/)?.[1];
     const r=k&&this.h.pending().map(x=>this.h.read(x.project,x.task,x.id)).find(r=>r?.auto?.attempts?.[k]?.phase==='organize'),a=r?.auto?.attempts[k];
-    if(!r||r.auto.stopped||a.project!==request.project||a.task!==request.task||a.delivery?.state!=='intent'||a.delivery.request!==request.requestKey||k!==hash(r.id+'\0'+a.project+'\0'+a.task+'\0organize'))throw Error(lt('停止した統合の最新の記録を確認してください'));
+    if(!r||r.auto.stopped||a.project!==request.project||a.task!==request.task||a.delivery?.state!=='intent'||a.delivery.request!==request.requestKey||!require('./integration-organize-recovery').key(r,k,a))throw Error(lt('停止した統合の最新の記録を確認してください'));
     const context=this.validate(r),p=context.all.find(p=>p.id===a.project),t=p?.tasks.find(t=>t.id===a.task),i=r.items.find(i=>key(i)===key(a));
     if(!this.related(context,p,t)||t.question||t.integrateKeep!==i?.choiceAtStart)throw Error(lt('子の関係・質問・保持選択が変わりました'));
     this.resumeBaseline(r,context);
@@ -251,15 +257,23 @@ class SimpleIntegration {
   organizedItem(r,a,row){
     const i=r.items.find(i=>key(i)===key(a)),context=this.h.ancestor(r.project,r.task,{allowBusy:true}),p=context.all.find(p=>p.id===a.project),t=p?.tasks.find(t=>t.id===a.task);
     if(!i||a.phase!=='organize'||!this.related(context,p,t)||t.question||t.integrateKeep!==i.choiceAtStart)throw Error(lt('子の関係・質問・保持選択が変わりました'));
+    let remaining;
+    try{remaining=continuation.declaration(this.h.store.taskFile(p.id,t.id));}
+    catch(e){throw Object.assign(Error('子の整理後の残件申告を確認できません：「## 残件申告」のJSON（status・items・undecided・evidence）を一つだけ保存してください：'+e.message),{code:'ORGANIZE_DECLARATION_INVALID',stage:'organize-validation'});}
     const now=this.h.details(context,p,t,r.id,i.partial?'partial':'continue');
     // Only this authorized organizer refreshes the current declaration. Ordinary
     // handoff previews retain their frozen declaration and file guards.
-    now.remaining=continuation.declaration(this.h.store.taskFile(p.id,t.id));now.needsRemaining=now.remaining.status==='不明';
-    if(this.blockers(now,i.keep).length||now.needsResults||now.needsRemaining||now.source?.status)throw Error(lt('子の整理後の保存・成果・残件申告を確認できません'));
+    now.remaining=remaining;now.needsRemaining=now.remaining.status==='不明';
+    const blockers=this.blockers(now,i.keep);
+    if(now.needsResults||now.needsRemaining){
+      const reason=now.needsResults?(now.blockers||[]).filter(x=>x.includes('成果')||x.includes('保存済み')).join(' / '):'「## 残件申告」のJSON（status・items・undecided・evidence）を確認してください';
+      throw Object.assign(Error('子の整理後の'+(now.needsResults?'成果の形式・保存証拠':'残件申告')+'を確認できません：'+reason),{code:'ORGANIZE_DECLARATION_INVALID',stage:'organize-validation'});
+    }
+    if(blockers.length||now.source?.status)throw Error(lt('子の整理後の保存・成果・残件申告を確認できません')+(blockers.length?'：'+blockers.join(' / '):''));
     const {current,rebase}=this.resumeBaseline(r,context);
     if(rebase){
       const saved=row?.integrationAuto?.saved,marker=row?.integrationAuto,canonical=require('./resource-scope').canonical;
-      if(!marker?.closed||marker.key!==hash(r.id+'\0'+a.project+'\0'+a.task+'\0organize')||marker.phase!=='organize'||marker.limit||!saved?.head||saved.head!==current.head||!saved.dir||canonical(saved.dir)!==canonical(r.target))throw Error(lt('開始後に統合先HEADが変わりました'));
+      if(!marker?.closed||!require('./integration-organize-recovery').key(r,marker.key,a)||marker.phase!=='organize'||marker.limit||!saved?.head||saved.head!==current.head||!saved.dir||canonical(saved.dir)!==canonical(r.target))throw Error(lt('開始後に統合先HEADが変わりました'));
       const allowed=new Set([...i.files,...now.files].map(f=>path.resolve(f.path)));
       for(const owner of [{dir:p.dir,id:t.id},{dir:context.p.dir,id:context.t.id}]){
         allowed.add(path.join(owner.dir,'.ai','tasks',owner.id+'.md'));

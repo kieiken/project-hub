@@ -12,20 +12,31 @@ const codeFiles=['integration-consultation-close.js','task-integrate.js','task-t
 function codeInputs(){return Object.fromEntries(codeFiles.map(p=>[p,hash(fs.readFileSync(path.join(__dirname,p)))]));}
 function index(h,p,t){return path.join(h.dir,'consultation-closures',path.basename(h.file(p,t)));}
 function regular(f){noLinks(f);const s=fs.statSync(f);if(!s.isFile()||s.nlink!==1)fail('終了記録にリンク・不明な種類があります');return fs.readFileSync(f);}
-function read(h,p,t){
- const f=index(h,p,t);noLinks(f);if(!exists(f))return null;
- const r=JSON.parse(regular(f));
- if(r.version!==1||r.project!==p||r.task!==t||!uuid(r.id)||!['intent','preserved','trash-intent','trashed','retired','complete'].includes(r.stage)||!Array.isArray(r.originals)||r.originals.length!==4)fail('相談終了の記録を確認できません');
+const records=new (require('./record-read-cache').RecordReadCache)(bytes=>({value:JSON.parse(bytes)}));
+const originals=new (require('./record-read-cache').RecordReadCache)(bytes=>({text:bytes.toString('utf8'),sha256:hash(bytes)}));
+function saveClosure(file,r){records.invalidate(file);writes.atomic(file,r);}
+function load(h,f){
+ noLinks(f);const entry=records.read(f,{regular:true});if(!entry)return null;const r=entry.value;
+ if(r.version!==1||!uuid(r.id)||!['intent','preserved','trash-intent','trashed','retired','complete'].includes(r.stage)||!Array.isArray(r.originals)||r.originals.length!==4)fail('相談終了の記録を確認できません');
+ // The former second JSON parse also rejected object-valued identities.
+ if(r.project&&typeof r.project==='object'||r.task&&typeof r.task==='object')fail('相談終了の記録を確認できません');
+ if(f!==index(h,r.project,r.task))fail('相談終了の記録名が一致しません');
  const dir=path.join(path.dirname(f),r.id);
- for(const o of r.originals){if(!['primary','sibling','offer','hold'].includes(o.kind)||o.file!==path.join(dir,o.kind+'.json')||hash(regular(o.file))!==o.sha256)fail('相談終了の原記録が一致しません');}
+ for(const o of r.originals){if(!['primary','sibling','offer','hold'].includes(o.kind)||o.file!==path.join(dir,o.kind+'.json'))fail('相談終了の原記録が一致しません');noLinks(o.file);if(originals.read(o.file,{regular:true})?.sha256!==o.sha256)fail('相談終了の原記録が一致しません');}
  if(new Set(r.originals.map(x=>x.kind)).size!==4)fail('相談終了の原記録が重複しています');
  return r;
 }
-function all(h){
- const dir=path.join(h.dir,'consultation-closures');noLinks(dir);if(!exists(dir))return [];
- return fs.readdirSync(dir).filter(n=>/^[a-f0-9]{64}\.json$/.test(n)).map(n=>{const r=JSON.parse(regular(path.join(dir,n)));if(n!==path.basename(index(h,r.project,r.task)))fail('相談終了の記録名が一致しません');return read(h,r.project,r.task);});
+function read(h,p,t){
+ const r=load(h,index(h,p,t));if(!r)return null;
+ if(r.project!==p||r.task!==t)fail('相談終了の記録を確認できません');
+ return structuredClone(r);
 }
-function original(r,kind){return JSON.parse(regular(r.originals.find(o=>o.kind===kind).file));}
+function all(h){
+ const dir=path.join(h.dir,'consultation-closures');noLinks(dir);if(!exists(dir)){records.prune(dir,[]);return [];}
+ const names=fs.readdirSync(dir).filter(n=>/^[a-f0-9]{64}\.json$/.test(n));records.prune(dir,names);
+ return names.map(n=>{const r=load(h,path.join(dir,n));if(!r)fail('相談終了の記録を確認できません');return r;});
+}
+function original(r,kind){const f=r.originals.find(o=>o.kind===kind).file;noLinks(f);const entry=originals.read(f,{regular:true});if(!entry)fail('相談終了の原記録が一致しません');return JSON.parse(entry.text);}
 function retired(h){return all(h).flatMap(r=>['primary','sibling'].map(kind=>({...original(r,kind),consultationRetired:r.id})));}
 function assertWritable(h,r){
  if(!r)return;
@@ -110,18 +121,18 @@ function apply(h,b){
   checkSources(plan);wait(h,plan);noLinks(dir);fs.mkdirSync(dir,{recursive:true,mode:0o700});
  const originals=plan.originals.map(o=>{const f=path.join(dir,o.kind+'.json');fs.writeFileSync(f,regular(o.path),{flag:'wx',mode:o.mode});fs.chmodSync(f,o.mode);persistence.syncFile(f);if(hash(regular(f))!==o.sha256||(fs.statSync(f).mode&0o777)!==o.mode)fail('元記録を保存できません');return {kind:o.kind,file:f,sha256:o.sha256};});persistence.syncDirectory(dir);
   r={version:1,id,project:plan.project,task:plan.task,childProject:plan.childProject,childTask:plan.childTask,stage:'intent',at:new Date().toISOString(),authorization:b.authorization,review,originals,plan};
-  writes.atomic(file,r);h.tokens.delete(b.token);
+  saveClosure(file,r);h.tokens.delete(b.token);
   const destination=path.join(plan.target,'.ai/work/consultation-preserved',id);noLinks(destination);if(exists(destination))fail('保存先が既にあります');fs.mkdirSync(destination,{recursive:true,mode:0o700});
   const manifest=plan.preserve.map((p,n)=>{const to=path.join(destination,String(n));const entries=duplicate(p.from,to);return {from:p.from,to,entries};});
-  writes.atomic(path.join(destination,'manifest.json'),manifest);r.destination=destination;r.manifest=manifest;r.stage='preserved';writes.atomic(file,r);
+  writes.atomic(path.join(destination,'manifest.json'),manifest);r.destination=destination;r.manifest=manifest;r.stage='preserved';saveClosure(file,r);
   checkSources(plan);wait(h,plan);
   const current=h.removal.describe(plan.childProject,plan.childTask,{removableCopy:true});
   if(current.blockers.length||JSON.stringify(current.move)!==JSON.stringify(plan.move)||JSON.stringify(current.keep)!==JSON.stringify(plan.keep)||JSON.stringify(current.optional)!==JSON.stringify(plan.optional))fail('保存中に片付け範囲が変わりました');
-  r.stage='trash-intent';writes.atomic(file,r);
+  r.stage='trash-intent';saveClosure(file,r);
   const d={project:plan.childProject,task:plan.childTask,title:plan.title};
-  const moved=h.removal.transfer(d,plan.move,'相談終了',{consultationClosure:id});r.removal=moved;writes.atomic(file,r);
+  const moved=h.removal.transfer(d,plan.move,'相談終了',{consultationClosure:id});r.removal=moved;saveClosure(file,r);
   if(!moved.ok)fail('片付けが途中で止まりました。保存済み原文と移動記録を照合し、押し直さないでください');
-  r.stage='trashed';writes.atomic(file,r);
+  r.stage='trashed';saveClosure(file,r);
   exclusiveFinalize(h,r);
   success=true;return {ok:true,complete:true,id,destination,removal:moved.record,mainApplied:false};
  });
@@ -146,15 +157,15 @@ function finalize(h,r){
  // Canonical old lanes are retired only after all source records are preserved
  // and all selected moves are confirmed. Windows' original bytes remain exact.
  for(const kind of ['primary','sibling']){const o=plan.originals.find(o=>o.kind===kind),to=path.join(path.dirname(r.originals[0].file),kind+'.retired.json');
-  if(exists(o.path)){if(hash(regular(o.path))!==o.sha256||exists(to))fail('統合記録が更新されています');fs.renameSync(o.path,to);persistence.syncDirectory(path.dirname(o.path));persistence.syncDirectory(path.dirname(to));}else if(!exists(to)||hash(regular(to))!==o.sha256)fail('統合記録の退避結果を確認できません');}
- r.stage='retired';writes.atomic(index(h,r.project,r.task),r);
+  if(exists(o.path)){if(hash(regular(o.path))!==o.sha256||exists(to))fail('統合記録が更新されています');h.pendingCache?.invalidate(o.path);fs.renameSync(o.path,to);persistence.syncDirectory(path.dirname(o.path));persistence.syncDirectory(path.dirname(to));}else if(!exists(to)||hash(regular(to))!==o.sha256)fail('統合記録の退避結果を確認できません');}
+ r.stage='retired';saveClosure(index(h,r.project,r.task),r);
  const old=original(r,'offer'),f=h.transfer.file(r.childProject,r.childTask),receipt={id:r.id,project:r.childProject,task:r.childTask,title:plan.title,targetProject:r.project,targetTask:r.task,destination:r.destination,files:[],results:original(r,'primary').items[0].results,complete:true,retained:false,cleanup:r.removal.record,consultationClosure:r.id,previousOffer:old.id,sourceHead:plan.sourceHead,mainApplied:false};
  if(exists(f)&&hash(regular(f))!==plan.originals.find(o=>o.kind==='offer').sha256&&JSON.stringify(JSON.parse(regular(f)))!==JSON.stringify(receipt))fail('受領予約が変わりました');
- writes.atomic(f,receipt);
+ h.transfer.pendingCache?.invalidate(f);writes.atomic(f,receipt);
  const holdFile=plan.originals.find(o=>o.kind==='hold').path,hold=original(r,'hold');
  const ended={...hold,held:false,revision:r.id,at:r.at,history:[...hold.history,{before:hold.held,held:false,revision:r.id,at:r.at,consultationClosure:r.id,reason:'本人承認による正式終了・片付け。自動再開なし'}]};
  if(hash(regular(holdFile))!==plan.originals.find(o=>o.kind==='hold').sha256&&JSON.stringify(JSON.parse(regular(holdFile)))!==JSON.stringify(ended))fail('保留記録が変わりました');
- writes.atomic(holdFile,ended);r.receipt=receipt;r.stage='complete';writes.atomic(index(h,r.project,r.task),r);
+ writes.atomic(holdFile,ended);r.receipt=receipt;r.stage='complete';saveClosure(index(h,r.project,r.task),r);
 }
 function status(h,b){const r=read(h,b.project,b.task);return r?{id:r.id,stage:r.stage,complete:r.stage==='complete',destination:r.destination,removal:r.removal?.record,mainApplied:false}:{stage:'not-started',complete:false};}
 // Explicit completion only. A crash before/during a move is not permission to
@@ -173,7 +184,7 @@ function finish(h,b){
  if(JSON.stringify(r.plan.codeInputs)!==JSON.stringify(codeInputs())||!['trash-intent','trashed','retired'].includes(r.stage)||!r.removal?.ok)fail('移動完了の証拠が足りません。再移動せず保管・ゴミ箱の記録を確認してください');
  const lock=require('./integration-sibling').file(h,r.project,r.task)+'.lock';if(regular(lock).toString()!==r.id)fail('今回の終了処理の予約を確認できません');
  return h.transfer.withSaveLock(r.childProject,r.childTask,()=>{
-  if(r.stage==='trash-intent'){r.stage='trashed';writes.atomic(index(h,r.project,r.task),r);}
+  if(r.stage==='trash-intent'){r.stage='trashed';saveClosure(index(h,r.project,r.task),r);}
   exclusiveFinalize(h,r);fs.unlinkSync(lock);persistence.syncDirectory(path.dirname(lock));return status(h,b);
  });
 }

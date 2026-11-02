@@ -25,7 +25,7 @@ const fs=require('node:fs'),path=require('node:path');let input='';process.stdin
 });`,{mode:0o755});
  const reserve=require('node:net').createServer();await new Promise(r=>reserve.listen(0,'127.0.0.1',r));const port=reserve.address().port;await new Promise(r=>reserve.close(r));
  Object.assign(process.env,{PATH:bin+':/usr/bin:/bin',HUB_ROOT:root,HUB_AI_HOME:home,HUB_TRASH:path.join(tmp,'Trash'),HUB_DRY_RUN:'1',HUB_PORT:String(port)});
- ({server,sessions}=require('../server'));await new Promise(r=>server.listen(port,'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;
+ ({server,sessions}=require('../server'));await new Promise(r=>server.listen(port,'127.0.0.1',r));await require('../server').restoreReady;base='http://127.0.0.1:'+server.address().port;
 });
 test.after(async()=>{
  // 途中でassertが失敗しても、待機中の模擬会話を残さない。

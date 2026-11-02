@@ -1,0 +1,18 @@
+(version 1)
+(allow default)
+(deny network*)
+(deny file-read-data
+  (require-all (subpath "/Users") (require-not (vnode-type DIRECTORY))
+    (require-not (require-any
+      (subpath (string-append (param "bundle") "/.venv"))
+      (literal (string-append (param "bundle") "/muse-register-core.py"))
+      (literal (string-append (param "bundle") "/metamuse-hub"))
+      (literal (string-append (param "bridge") "/terminal.py"))
+      (literal (string-append (param "bridge") "/tool-hashes.json"))
+      (subpath (param "private"))))))
+(deny file-write*
+  (require-not (require-any (subpath (param "private")) (literal "/dev/null") (literal "/dev/tty"))))
+(deny process-exec
+  (require-not (require-any
+    (subpath (string-append (param "bundle") "/.venv"))
+    (subpath "/opt/homebrew/Cellar/python@3.12"))))

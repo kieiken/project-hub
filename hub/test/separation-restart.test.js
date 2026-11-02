@@ -34,7 +34,8 @@ test('隔離したHubを実際に停止・再起動しても、順序・依頼ID
  const before=fs.readFileSync(file),taskBefore=fs.readFileSync(path.join(ledger,'.ai/tasks/t.md'));
  const probe=require('node:http').createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const port=probe.address().port;await new Promise(r=>probe.close(r));const base='http://127.0.0.1:'+port;
  let child;const env={...process.env,HUB_ROOT:root,HUB_PORT:String(port),HUB_DRY_RUN:'1',HUB_AI_HOME:path.join(root,'home'),HUB_FREETALK_HOME:path.join(root,'ft'),HUB_AUTO_UPDATE:'0',HUB_AUTO_TRANSLATE:'0',HUB_STORAGE_GUARD:'',HUB_UPDATE_SOURCE:''};
- async function boot(){child=spawn(process.execPath,[path.join(__dirname,'../server.js')],{env,stdio:['ignore','pipe','pipe']});let log='';child.stdout.on('data',x=>log+=x);child.stderr.on('data',x=>log+=x);for(let n=0;n<100;n++){try{if((await fetch(base+'/api/ping',{headers:{Connection:'close'}})).ok)return;}catch{}await new Promise(r=>setTimeout(r,30));}throw Error(log);}
+ const preload=path.join(root,'isolated-home.cjs');fs.writeFileSync(preload,`require('node:os').homedir=()=>${JSON.stringify(path.join(root,'home'))};`);
+ async function boot(){child=spawn(process.execPath,['--require',preload,path.join(__dirname,'../server.js')],{env,stdio:['ignore','pipe','pipe']});let log='';child.stdout.on('data',x=>log+=x);child.stderr.on('data',x=>log+=x);for(let n=0;n<100;n++){try{if((await fetch(base+'/api/ping',{headers:{Connection:'close'}})).ok)return;}catch{}await new Promise(r=>setTimeout(r,30));}throw Error(log);}
  async function stop(){const c=child;if(!c||c.exitCode!==null)return;const done=new Promise(r=>c.once('exit',r));c.kill('SIGTERM');await done;child=null;}
  t.after(stop);
  await boot();const firstPid=child.pid;
@@ -45,4 +46,16 @@ test('隔離したHubを実際に停止・再起動しても、順序・依頼ID
  assert.deepEqual(fs.readFileSync(file),before);assert.deepEqual(fs.readFileSync(path.join(ledger,'.ai/tasks/t.md')),taskBefore);
  const reload=new ChatRunner({dirOf:()=>ledger});assert.deepEqual(reload.queue('P','t'),q);assert.equal(reload.verifyQueues(),true);assert.equal(fs.existsSync(path.join(ledger,'.ai/chat/t.jsonl')),false);
  await stop();
+});
+
+test('R67 admitted ordinary wait keeps reservation; unrelated 409 remains an error',async()=>{
+ let busy=true,runs=0;const r=new RestartControl({blockers:()=>busy?[{kind:'chat'}]:[],admit:async fn=>fn(),verify(){},execute:()=>runs++});
+ r.request(true);await r.tick();assert.equal(r.error,'');assert.ok(r.reserved);busy=false;await r.tick();assert.equal(runs,1);
+ const bad=new RestartControl({blockers:()=>[],admit:async()=>{throw Object.assign(Error('admission failed'),{status:409});},verify(){},execute:()=>assert.fail()});bad.request(true);await bad.tick();assert.equal(bad.error,'admission failed');assert.ok(bad.reserved);
+});
+test('R67 late rejection from a cancelled admitted attempt cannot poison a new reservation',async()=>{
+ let reject;const r=new RestartControl({blockers:()=>[],admit:()=>new Promise((_,no)=>reject=no),verify(){},execute:()=>assert.fail()});r.request(true);const old=r.tick();r.cancel();reject(Error('old failed'));await old;assert.equal(r.error,'');assert.equal(r.reserved,null);
+});
+test('R67 execution failure after sealing is retained without executing again',async()=>{
+ let runs=0;const r=new RestartControl({blockers:()=>[],admit:async fn=>fn(),verify(){},execute:()=>{runs++;throw Error('execute failed');}});r.request(true);await new Promise(setImmediate);assert.equal(r.error,'execute failed');assert.equal(r.committed,true);await r.tick();r.request(true);assert.equal(runs,1);
 });

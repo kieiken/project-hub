@@ -2,6 +2,8 @@
 <html lang="ja" data-theme="dark">
 <head>
 <meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<script src="local-auth.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Project Hub</title>
 <link rel="manifest" href="manifest.json">
@@ -24,10 +26,27 @@
   <button class="tb upd" id="upd" type="button" hidden></button>
   <span class="sp"></span>
   <button class="tb usage-toggle" id="usage-toggle" type="button" aria-expanded="false" aria-controls="usage-drawer" title="利用枠の使用率とリセット時期を見る" data-ui>利用状況</button>
-  <button class="tb turn" id="turn" type="button" aria-pressed="false" data-ui><span class="notice notice-reply" id="turn-n" data-ui>返事待ち 0</span><span class="notice notice-work" id="turn-work-n" data-ui>作業中 0</span><span class="notice notice-confirm" id="turn-done-n" data-ui>完了 0</span></button>
+  <button class="tb turn" id="turn" type="button" aria-pressed="false" data-ui><span class="notice notice-reply" id="turn-n" data-ui>返事待ち 0</span><span class="notice notice-work" id="turn-work-n" data-ui>作業中 0</span><span class="notice notice-results" id="turn-results-n" data-ui>成果確認 0</span><span class="notice notice-confirm" id="turn-done-n" data-ui>完了 0</span></button>
   <button class="tb" id="gear" type="button" aria-pressed="false" data-ui>設定</button>
 </header>
 <div id="app-shell-alert" class="app-shell-alert" hidden aria-live="polite"></div>
+<template id="conversation-search-sidebar-template">
+  <form id="conversation-search-form" class="conversation-search-sidebar" role="search" aria-label="会話を検索">
+    <input id="conversation-search-query" type="search" maxlength="200" autocomplete="off" placeholder="🔍 会話を検索" aria-label="会話の検索語" data-ui>
+    <div class="row"><select id="conversation-search-mode" aria-label="検索範囲" data-ui><option value="simple" data-ui>簡易</option><option value="detailed" data-ui>詳細</option></select><button class="btn sm" type="submit" data-ui>検索</button></div>
+  </form>
+</template>
+<template id="conversation-search-template">
+<section id="conversation-search" class="conversation-search view" aria-labelledby="conversation-search-title">
+  <div class="ph"><h2 id="conversation-search-title" data-ui>会話の検索結果</h2><button class="btn plain sm" id="conversation-search-close" type="button" data-ui>前の画面へ</button><button class="btn plain sm" id="conversation-search-stop" type="button" hidden data-ui>中断</button></div>
+  <p id="conversation-search-scope" class="small"></p>
+  <p class="small" data-ui>語句・全部の語が一致する候補を優先し、一部の語だけが一致するものは関連候補として表示します。意味や同義語を推測する検索ではありません。</p>
+  <details><summary data-ui>検索の範囲と上限</summary><p class="small" data-ui>フリートークと全プロジェクト・子プロジェクト・完了作業の会話本文をローカルで検索します。過去とは整理して正式保管した会話です。認証ファイル・添付内容・CLI生ログ・ゴミ箱・未検証の保管物は対象外です。フリートーク整理でゴミ箱へ移した原文は検索しません。両モードとも1ファイル64MiB・合計512MiB・1万ファイル・候補1000件・120秒まで。更新中や検証できない範囲は件数でお知らせします。</p></details>
+  <p id="conversation-search-status" role="status" aria-live="polite" data-ui>検索語を入力してください。</p>
+  <div id="conversation-search-results" class="conversation-search-scroll"><div id="conversation-search-list"></div><button class="btn plain" id="conversation-search-more" type="button" hidden data-ui>続きを表示</button></div>
+  <section id="conversation-search-context" class="conversation-search-scroll" hidden aria-label="該当発言と前後の会話"><button class="btn plain" id="conversation-search-back" type="button" data-ui>← 検索結果へ戻る</button><h3 id="conversation-search-location"></h3><p class="small" data-ui>読み取り専用です。この表示では作業を既読にせず、下書きや添付も変更しません。</p><div id="conversation-search-rows"></div></section>
+</section>
+</template>
 
 <div class="mobile-information"><button id="mobile-info" class="mobile-strip" type="button" aria-label="情報と操作を開く" aria-expanded="false" aria-controls="mobile-work-info" data-ui>▼</button><span id="mobile-badges"></span></div>
 <div class="app">
@@ -56,6 +75,7 @@
 <script src="model-order.js"></script>
 <script src="special-mode.js"></script>
 <script src="role-settings.js"></script>
+<script src="speech-input.js"></script>
 <script src="ideas.js"></script>
 <link rel="stylesheet" href="extensions-ui.css">
 <script src="extensions-ui.js"></script>
@@ -72,6 +92,7 @@
 <script src="app-settings.js"></script>
 <script src="app-actions.js"></script>
 <script src="app.js"></script>
+<script src="conversation-search.js"></script>
 <script src="app-update.js"></script>
 <script src="onboarding.js"></script>
 <script src="hierarchy.js"></script>

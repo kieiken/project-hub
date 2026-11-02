@@ -17,7 +17,9 @@ const receipt = path.join(root, '_hub/task-handoffs', createHash('sha256').updat
 fs.mkdirSync(path.dirname(receipt), { recursive: true });
 const transfer=new TaskTransfer({store,removal:new (require('../lib/remove').Removal)({store})}), current=store.readTask(store.taskFile(p.id,child.id));
 fs.writeFileSync(receipt,JSON.stringify({id:'received',complete:true,retained:true,project:p.id,task:child.id,received:[{id:'received',head:null,target:{project:p.id,task:parent.id,dir:p.dir},files:[],manifest:[],results:transfer.verifyResults(require('../lib/task-results').readResults(store.taskFile(p.id,child.id)),p,current),taskHash:current.completionHash}]}));
-let refreshed=0,heavy=0,view;
+let refreshed=0,heavy=0,asyncPreviews=0,view;
+const readWorker=require('../lib/integration-read-worker'),integration=readWorker.integration;
+readWorker.integration=function(...args){asyncPreviews++;return integration.apply(this,args);};
 const refresh=StateOffers.prototype.refresh, details=TaskIntegrate.prototype.details;
 StateOffers.prototype.refresh=function(...args){refreshed++;view=this;return refresh.apply(this,args);};
 TaskIntegrate.prototype.details=function(...args){heavy++;return details.apply(this,args);};
@@ -42,9 +44,9 @@ test('正式HTTP：受領検査は別スレッド、任意POSTで捨てず、記
     const s=await state();assert.equal(row(s).pending,true);assert.ok(row(s).reason);assert.equal(row(s).received,null);
     assert.equal(fs.readFileSync(receipt,'utf8'),raw);
     const preview=await fetch(base+'/api/task/integrate/preview',{method:'POST',headers:{'X-Hub':'1','Content-Type':'application/json'},body:JSON.stringify({project:p.id,task:parent.id})});
-    assert.equal(preview.status,409);assert.ok((await preview.json()).error);assert.ok(heavy>0);
+    assert.equal(preview.status,409);assert.ok((await preview.json()).error);assert.equal(asyncPreviews,1);assert.equal(heavy,0);
   } finally {
-    Date.now = now; StateOffers.prototype.refresh=refresh;TaskIntegrate.prototype.details=details;
+    Date.now = now;readWorker.integration=integration; StateOffers.prototype.refresh=refresh;TaskIntegrate.prototype.details=details;
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

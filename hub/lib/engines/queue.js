@@ -7,7 +7,7 @@ module.exports = function createQueueEngine(ctx) {
   return new chat.ChatRunner({stopControl,queueGuard:o=>(getQueueRetreat())?.guard(o),prepareContext:o=>{
     if(o.project==='freetalk'||o.readOnly||o.automation)return o;
     const token=o.ideaRecord?.token||crypto.randomUUID();
-    const instruction=`\n別の改善を思いついた時は原文だけ台帳へ残せます。作る許可は付与しません。POST /api/ideas/add (Hubと同じ接続先), headers X-Hub:1 / X-Idea-Record:${token} / Content-Type:application/json, body {project:${JSON.stringify(o.project)},opId:UUID,text:原文,intent:record}。送信識別は再送時も同じにし、結果不明ならreceiptを照合する。`;
+    const instruction=`\n別の改善を思いついた時は原文だけ台帳へ残せます。作る許可は付与しません。POST /api/ideas/add (Hubと同じ接続先), headers X-Hub:1（ローカル認証は curl -H @"$HUB_HEADERS" を使用。秘密を本文に書かない） / X-Idea-Record:${token} / Content-Type:application/json, body {project:${JSON.stringify(o.project)},opId:UUID,text:原文,intent:record}。送信識別は再送時も同じにし、結果不明ならreceiptを照合する。`;
     return {...o,ideaRecord:{token},basePrompt:(o.basePrompt||'')+instruction};
   }, spoolRoot:path.join(ROOT,'_hub','cli-runs'),onAdoptEnd:(o,row)=>{if(!o.automation&&!o.discussionTurn&&!o.isolatedReview&&!o.selectionOnly&&row.asks?.length)store.updateTask(o.project,o.task,{state:'返事待ち',question:row.asks.map(a=>a.question).join(' / ').slice(0,300)});(getChatEnded())(o.project,o.task);}, dirOf: id => { const p = store.readProject(id); return p ? p.dir : ''; },
     delegates: (p, t) => [...readLog(5000), ...readLog(5000, (getLogFile()).replace(/\.jsonl$/, '.old.jsonl'))].filter(r => r.project === p && r.task === t),
@@ -16,8 +16,8 @@ module.exports = function createQueueEngine(ctx) {
     capacityBackup,
     limitIdentity: o => limitIdentity(rolesData(), o),
     accountFor, fastFor: codexFastFor,
-    onSettled: async (o,row) => { if(o.automation){await (getIdeaRunner()).settled(o,row);return;} if(discussionRuntime.isRequest(o.request)) { await (getDiscussion())?.settled(o,row); return; } if(roleReviewRuntime.isRequest(o.request)) { await (getRoleReview())?.settled(o,row); return; } (getIntegrateAuto()).settled(o,row);setImmediate(()=>{
-      try{if(stopControl.held({project:o.project,task:o.task}))return;stopControl.assert(o,o.stopTicket);(getChats()).assertHandoffReady(o.project,o.task);}catch{return;}
+    onSettled: async (o,row) => { if(o.automation){await (getIdeaRunner()).settled(o,row);return;} if(discussionRuntime.isRequest(o.request)) { await (getDiscussion())?.settled(o,row); return; } if(roleReviewRuntime.isRequest(o.request)) { await (getRoleReview())?.settled(o,row); return; } (getIntegrateAuto()).settled(o,row);setImmediate(async()=>{
+      try{if(stopControl.held({project:o.project,task:o.task}))return;stopControl.assert(o,o.stopTicket);await (getChats()).assertHandoffReadyAsync(o.project,o.task);stopControl.assert(o,o.stopTicket);if(stopControl.held({project:o.project,task:o.task}))return;}catch{return;}
       if(o.selectionOnly){void autoTick(o.project,o.task);return;}
       void (getIntegrateAuto()).tick();if(!o.isolatedReview)void (getResultsGate()).trigger(o.project,o.task,{row,organized:Boolean(o.resultsOrganize)}).catch(e=>record('results-organize-error',{project:o.project,task:o.task},{error:e.message}));
     }); },
@@ -52,16 +52,16 @@ module.exports = function createQueueEngine(ctx) {
       if(o.readOnly)return {dir:p.dir,basePrompt:lt('読み取り専用の共有確認です。ファイルを編集せず、判定のJSONだけを返してください。')};
       const dir = o.dir && fs.existsSync(o.dir) ? o.dir : workDir(p, t).dir;
       if (!dir || !fs.existsSync(dir)) throw Error(lt('作業場所を用意できませんでした'));
-      return { dir, policy: modelPolicy(p, t), basePrompt: taskPrompt(p, t, store.taskFile(p.id, t.id), dir) + lt(' ここは会話画面。人からの依頼に答え、区切りで作業ファイルを更新すること。') };
+      return { dir, policy: modelPolicy(p, t), basePrompt: taskPrompt(p, t, store.taskFile(p.id, t.id), dir, 'chat', undefined, o) + lt(' ここは会話画面。人からの依頼に答え、区切りで作業ファイルを更新すること。') };
     },
     canStart: (ai, model, o) => {
       try{executionGate.assert({dir:o?.dir||store.readProject(o?.project)?.dir,owner:'chat:'+o?.project+':'+o?.task});if(o?.automation)(getIdeaDispatch()).verify(o);}catch(e){return e.message;}
       if (o && !discussionRuntime.isRequest(o.request) && (getDiscussion())?.active(o.project,o.task)) return '話し合いが進行中です。停止または完了後に送ってください';
       if ((getAppUpdate()).applying()) return (getAppUpdate()).busyMessage();
       if ((getRestartControl())?.committed) return lt('再起動を開始しています');
-      if ((getAiTools()).isOperating(ai)) return lt('AI の更新・モデル再取得が進行中です');
+      if ((getAiTools()).isOperating(ai)) return Object.assign(Error(lt('AI の更新・モデル再取得が進行中です')),{code:'HUB_AI_MAINTENANCE'});
       const invalid=modelError(ai,model); if(invalid)return invalid;
-      if (o && (getModelView()).special().enabled && limitEvidence.forRequest({ ...o, ai, model })) return lt('特殊モードのAIが上限中です。解除後に再開してください');
+      if (o && (getModelView()).special().enabled && limitEvidence.forRequest({ ...o, ai, model })) return Object.assign(Error(lt('特殊モードのAIが上限中です。解除後に再開してください')),{code:'HUB_LIMIT_WAIT'});
       if(o) { const p=store.readProject(o.project), t=p?.tasks.find(t=>t.id===o.task);
         if(!p || !t)return lt('作業が見つかりません');
         if(p.kind==='freetalk' && (getFreetalkHistory()).state(t.id).migrated)return lt('移行済みの話題は読み取り専用です');

@@ -8,12 +8,6 @@ cd "$(dirname "$0")"
 PORT="${HUB_PORT:-4545}"
 URL="http://127.0.0.1:$PORT"
 
-# すでに動いていれば、ブラウザで開くだけ
-if curl --noproxy '*' -fs -o /dev/null "$URL/api/state"; then
-  open "$URL"
-  exit 0
-fi
-
 # デスクトップから開くと Node.js の場所が見つからないことがあるので、よくある場所を足す
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.volta/bin:$HOME/.local/bin:$HOME/.grok/bin:$PATH"
 [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
@@ -27,13 +21,19 @@ if [ -z "$NODE" ] || [ ! -x "$NODE" ]; then
   exit 1
 fi
 
+# Existing servers must prove owner identity, not merely occupy the port.
+if "$NODE" app/open-browser.cjs --probe; then
+  "$NODE" app/open-browser.cjs &
+  exit 0
+fi
+
 "$NODE" server.js &
 PID=$!
 
 # 本体の準備ができてからブラウザを開く（最大10秒待つ）
 for _ in $(seq 1 20); do
-  if curl --noproxy '*' -fs -o /dev/null "$URL/api/state"; then
-    open "$URL"
+  if "$NODE" app/open-browser.cjs --probe; then
+    "$NODE" app/open-browser.cjs &
     break
   fi
   if ! kill -0 "$PID" 2>/dev/null; then break; fi

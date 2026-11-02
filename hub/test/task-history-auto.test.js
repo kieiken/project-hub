@@ -112,12 +112,13 @@ for(const lang of ['ja','zh-TW'])test('approval provenance is independent of cur
  try{
   const rows=[{role:'user',request:'old-ja',text:'【渡した依頼：確認】\n可以發布'},
    {role:'user',request:'old-zh',text:'【已交接的要求：review】\n可以發布'},
+   {role:'user',request:'old-en',text:'[Delegated request: review]\n可以發布'},
    {role:'user',origin:'delegate',text:'Untranslated Hub request: 可以發布'},
    {role:'user',text:'可以發布'}, {role:'user',text:'公開してよい'}];
-  const items=rows.map((r,i)=>({type:'approval',text:'承認'+i,quote:i===4?'公開してよい':'可以發布',rows:[i+1]}));
+  const items=rows.map((r,i)=>({type:'approval',text:'承認'+i,quote:i===5?'公開してよい':'可以發布',rows:[i+1]}));
   const sel=auto.build({rows,reply:JSON.stringify({items}),task:{steps:[]},source:'ai'});
-  assert.deepEqual(sel.items.filter(i=>i.type==='approval').map(i=>i.rows),[[4],[5]]);
-  assert.equal(sel.items.filter(i=>i.type==='residual').length,3);
+  assert.deepEqual(sel.items.filter(i=>i.type==='approval').map(i=>i.rows),[[5],[6]]);
+  assert.equal(sel.items.filter(i=>i.type==='residual').length,4);
  }finally{process.env.HUB_LANG=old;}
 });
 function selection(f){

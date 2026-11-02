@@ -14,6 +14,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Security.AccessControl;
 using Microsoft.Win32.SafeHandles;
 public static class HubWindows {
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
@@ -133,6 +134,31 @@ public static class HubWindows {
       if(flush) using(var disk=Open(volume.ToString().TrimEnd('\\'),0x40000000,3,0)) Check(FlushFileBuffers(disk));
       return binding;
     }
+  }
+  public static bool PrivateDirectory(string p, bool create) {
+    string binding=ValidateDirectory(p,null,false), full=Path.GetFullPath(p);
+    var sid=WindowsIdentity.GetCurrent().User;
+    var trusted=new HashSet<string>(StringComparer.Ordinal) { sid.Value,"S-1-5-18","S-1-5-32-544","S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" };
+    var replace=FileSystemRights.Delete|FileSystemRights.DeleteSubdirectoriesAndFiles|FileSystemRights.ChangePermissions|FileSystemRights.TakeOwnership;
+    for(var parent=Directory.GetParent(full);parent!=null;parent=parent.Parent) {
+      var acl=Directory.GetAccessControl(parent.FullName);
+      if(!trusted.Contains(acl.GetOwner(typeof(SecurityIdentifier)).Value)) throw new Exception("update_parent_owner");
+      foreach(FileSystemAccessRule rule in acl.GetAccessRules(true,true,typeof(SecurityIdentifier)))
+        if((rule.PropagationFlags&PropagationFlags.InheritOnly)==0&&rule.AccessControlType==AccessControlType.Allow&&(rule.FileSystemRights&replace)!=0&&!trusted.Contains(rule.IdentityReference.Value)) throw new Exception("update_parent_acl");
+    }
+    if(create) {
+      var acl=new DirectorySecurity(); acl.SetOwner(sid); acl.SetAccessRuleProtection(true,false);
+      acl.AddAccessRule(new FileSystemAccessRule(sid,FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
+      Directory.SetAccessControl(full,acl);
+    }
+    var actual=Directory.GetAccessControl(full);
+    if(!actual.AreAccessRulesProtected||actual.GetOwner(typeof(SecurityIdentifier)).Value!=sid.Value) throw new Exception("update_acl");
+    var rules=actual.GetAccessRules(true,true,typeof(SecurityIdentifier));
+    if(rules.Count!=1) throw new Exception("update_acl");
+    var only=(FileSystemAccessRule)rules[0];
+    if(only.IdentityReference.Value!=sid.Value||only.AccessControlType!=AccessControlType.Allow||(only.FileSystemRights&FileSystemRights.FullControl)!=FileSystemRights.FullControl) throw new Exception("update_acl");
+    ValidateDirectory(full,binding,false);
+    return true;
   }
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool MoveFileExW(string from, string to, uint flags);
   public static bool Rename(string from, string to) {
@@ -270,6 +296,7 @@ public static class HubNativeProgram {
           value=HubWindows.Stop(row.pid,row.sid,row.since,row.command,(bool)r["probe"],Convert.ToInt32(r["caller"])); break;
         case "directory": value=HubWindows.ValidateDirectory((string)r["path"],r.ContainsKey("expected")?(string)r["expected"]:null,false); break;
         case "license-directory": value=HubWindows.ValidateDirectory((string)r["path"],r.ContainsKey("expected")?(string)r["expected"]:null,false); break;
+        case "private-directory": value=HubWindows.PrivateDirectory((string)r["path"],(bool)r["create"]); break;
         case "rename": value=HubWindows.Rename((string)r["from"],(string)r["to"]); break;
         case "file": value=HubWindows.FlushFile((string)r["path"]); break;
         case "secret-get": value=HubWindowsLicense.Get((string)r["account"]); break;

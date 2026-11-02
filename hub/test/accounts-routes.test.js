@@ -19,7 +19,21 @@ const add = async (ai, name) => (await ok('/api/accounts', { ai, name })).accoun
 const select = (id, ai, account) => ok('/api/accounts/select', { task: id, ai, id: account });
 const replies = id => chat.read(dir, id).filter(r => r.role === 'assistant');
 const capture = id => JSON.parse(replies(id).at(-1).text);
-async function wait(pred) { for (let i = 0; i < 250; i++) { if (pred()) return; await new Promise(r => setTimeout(r, 10)); } assert.ok(pred(), 'mock finished'); }
+function waitState(id) {
+  try {
+    const { chats } = require('../server'), project = 'Accounts fixture';
+    const run = id && chats.running.get(chats.key(project, id)), admission = chats.handoffAdmission;
+    const pick = (value, keys) => value && Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
+    console.error('ACCOUNT_WAIT_TIMEOUT ' + JSON.stringify({
+      task: id || null,
+      rows: id ? chat.read(dir, id).slice(-8).map(row => ({ ...pick(row, ['role', 'event', 'ai', 'request', 'turn', 'error']), text: String(row.text || '').slice(-2000) })) : [],
+      queue: id ? chats.queue(project, id).map(row => pick(row, ['id', 'ai', 'request', 'error', 'limitWaiting'])) : [],
+      running: { present: Boolean(run), ...pick(run, ['pending', 'stopped', 'finished', 'finalizing', 'blocked', 'spoolError', 'stopVersion']), request: run?.options?.request, child: run?.child && { dir: run.child.dir, pid: run.child.pid } },
+      handoffAdmission: { present: Boolean(admission), active: Boolean(admission?.active), activeId: admission?.active?.id, pending: Boolean(admission?.pending), pendingId: admission?.pending?.id, closed: admission?.closed, worker: Boolean(admission?.worker) },
+    }));
+  } catch (error) { console.error('ACCOUNT_WAIT_TIMEOUT diagnostic error: ' + error.message); }
+}
+async function wait(pred, id) { const deadline = performance.now() + 15000; while (performance.now() < deadline) { if (pred()) return; await new Promise(r => setTimeout(r, 10)); } waitState(id); assert.ok(pred(), 'mock finished'); }
 test.before(async () => {
   fs.mkdirSync(path.join(root, '_hub'), { recursive: true }); fs.mkdirSync(path.join(dir, '.ai/tasks'), { recursive: true }); fs.mkdirSync(home); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(dir, 'PROJECT.md'), '---\nname: Accounts fixture\nstatus: 進行中\nfolders: {}\nrelated: []\nphases: []\n---\n');
@@ -180,12 +194,12 @@ test('Fast permission alone never accelerates; task picks gate every launch and 
       assert.equal(handoff.args.includes('service_tier="fast"'), fast);
       const count = replies(id).length;
       await ok('/api/chat/send', { task: id, ai: 'codex', fast: true, text: 'mock gating' });
-      await wait(() => replies(id).length === count + 1);
+      await wait(() => replies(id).length === count + 1, id);
       assert.equal(capture(id).args.includes('service_tier="fast"'), fast);
       assert.equal(capture(id).input.split('\n').find(line => line.startsWith('【この番の起動】')).includes('加速ON（Fast）'), fast);
       assert.equal(chat.read(dir, id).findLast(r => r.role === 'user').fast, fast);
       await ok('/api/delegate', { task: id, ai: 'codex', model: 'gpt-6.1-sol', title: 'mock', text: 'mock delegate', fast: true });
-      await wait(() => replies(id).length === count + 2);
+      await wait(() => replies(id).length === count + 2, id);
       assert.equal(capture(id).args.includes('service_tier="fast"'), fast);
     }
     assert.equal(chat.readMeta(dir, one).codexFast, true);

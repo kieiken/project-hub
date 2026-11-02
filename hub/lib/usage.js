@@ -211,7 +211,7 @@ class Usage {
     this.onReset = options.onReset || (() => {});
     this.resetBusy = new Set();
     this.visible = new Map(); this.authCache = new Map(); this.authInflight = new Map(); this.revisions = new Map(); this.authBusy = new Map();
-    this.cache = {}; this.inflight = new Map(); this.lastAttempt = new Map(); this.creditRequested = new Set();
+    this.cache = {}; this.inflight = new Map(); this.lastAttempt = new Map(); this.creditRequested = new Set(); this.creditInflight = new Map(); this.attemptSerial = new Map();
     this.subscriptionWindows = new Map();
   }
   key(ai, account = 'default') { return account === 'default' ? ai : ai + ':' + account; }
@@ -253,18 +253,18 @@ class Usage {
     }))).filter(Boolean);
   }
   async status(force = false, selection = {}, options = {}) {
-    const now = this.now();
     const only = options.only;
     const targets = this.accounts ? await this.targets(selection, only) : ['codex','claude'].map(ai => ({ ai, account: selection[ai] || 'default' })).filter(r => !only || r.ai === only.ai && r.account === only.account);
     await Promise.all(targets.map(({ ai, account, file: installed, revision = this.revision(this.key(ai, account)) }) => {
-      const key = this.key(ai, account), cached = this.cache[key];
+      const key = this.key(ai, account), cached = this.cache[key], now = this.now();
       if (this.resetBusy.has(key)) return;
       // 他アカウントの認証待ち中に破棄されたtargetは、共有・試行時刻の更新より先に拒否する。
       if (revision !== this.revision(key)) return;
       if (this.inflight.has(key)) return this.inflight.get(key);
-      if (force && this.lastAttempt.has(key) && now - this.lastAttempt.get(key) < COOLDOWN) return;
+      if (force && !options.freshCredits && this.lastAttempt.has(key) && now - this.lastAttempt.get(key) < COOLDOWN) return;
       if (!force && cached && (cached.status !== 'ok' || now - Date.parse(cached.fetchedAt) < TTL)) return;
       this.lastAttempt.set(key, now);
+      this.attemptSerial.set(key, (this.attemptSerial.get(key) || 0) + 1);
       const attempt = (async () => {
         const attemptedAt = new Date(now).toISOString();
         try {
@@ -299,24 +299,44 @@ class Usage {
     }));
     return this.snapshot(selection);
   }
-  async checkCredits(ai, account = 'default') {
+  async checkCredits(ai, account = 'default', { fresh = false } = {}) {
     if (!['claude', 'codex'].includes(ai)) return { availability: 'unknown', checkedAt: null };
     const key = this.key(ai, account);
+    if (this.creditInflight.has(key)) {
+      const result = await this.creditInflight.get(key);
+      // Sharing a cache lookup is not sharing an actual query. Its caller may
+      // still need to join the single fresh query at the dispatch boundary.
+      return { ...result, acquisition: result.acquisition === 'cached' ? 'cached' : 'shared' };
+    }
+    const revision = this.revision(key), serial = this.attemptSerial.get(key) || 0, shared = this.inflight.has(key);
     this.creditRequested.add(key);
-    try {
-      // 状態要求のみ。アカウント隔離・同時要求共有・30秒の再取得間隔を維持。
-      await this.status(true, { [ai]: account }, { only: { ai, account } });
-      return this.creditState(ai, account);
-    } finally { this.creditRequested.delete(key); }
+    const check = (async () => {
+      // fresh is used only for a bounded dispatch recheck, never for a retry loop.
+      await this.status(true, { [ai]: account }, { only: { ai, account }, freshCredits: fresh });
+      const proof = revision === this.revision(key) ? this.creditState(ai, account) :
+        { ai, account, availability: 'unknown', checkedAt: null, attemptedAt: null, reason: 'account-changed' };
+      return { ...proof, acquisition: shared ? 'shared' : (this.attemptSerial.get(key) || 0) !== serial ? 'queried' : 'cached' };
+    })();
+    this.creditInflight.set(key, check);
+    try { return await check; }
+    finally { this.creditRequested.delete(key); if (this.creditInflight.get(key) === check) this.creditInflight.delete(key); }
   }
   creditState(ai, account = 'default') {
-    const cached = this.cache[this.key(ai, account)], now = this.now();
+    const key = this.key(ai, account), cached = this.cache[key], now = this.now();
     const fetched = Date.parse(cached?.fetchedAt), attempted = Date.parse(cached?.attemptedAt);
-    // 再起動・認証変更・失敗後はunknown。長くかかった読取も鮮度の範囲外にする。
-    if (cached?.status === 'ok' && cached.creditCheck && attempted <= fetched && fetched <= now && now - attempted < COOLDOWN) {
-      return { ...cached.creditCheck, checkedAt: cached.fetchedAt, attemptedAt: cached.attemptedAt };
-    }
-    return { availability: 'unknown', checkedAt: null, reason: cached?.status === 'ok' ? 'not-fresh' : 'unavailable' };
+    const times = { ai, account, checkedAt: Number.isFinite(fetched) ? cached.fetchedAt : null,
+      attemptedAt: Number.isFinite(attempted) ? cached.attemptedAt : null };
+    const unknown = reason => ({ ...times, availability: 'unknown', reason });
+    if (this.resetBusy.has(key) || this.inflight.has(key)) return unknown('checking');
+    if (!cached) return unknown('no-proof');
+    if (cached.account !== account) return unknown('account-changed');
+    if (cached.status !== 'ok') return unknown('unavailable');
+    if (!cached.creditCheck) return unknown('not-checked');
+    if (!(attempted <= fetched && fetched <= now)) return unknown('invalid-time');
+    // A slow or failed actual read is not retried as if it were an old cache.
+    if (fetched - attempted >= COOLDOWN) return unknown('slow-read');
+    if (now - attempted >= COOLDOWN) return unknown('not-fresh');
+    return { ...times, ...cached.creditCheck };
   }
   subscriptionAvailable(models, account = 'default') {
     const key = this.key('codex', account), cached = this.cache[key], proof = this.subscriptionWindows.get(key), now = this.now();

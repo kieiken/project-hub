@@ -152,12 +152,33 @@ async function showArchives(project,task){
   historyDialog={project,task};const d=await api('/api/task/history/archives?'+new URLSearchParams({project,task}),null,{'X-Hub':'1'});
   historySheet(UI.text('過去の会話'),d.archives.length?d.archives.map(a=>UI.template`<p><button class="btn plain" type="button" data-history-archive="${esc(a.id)}">${esc(a.at)} ／ ${UI.text('会話')} ${a.generation}</button></p>`).join(''):UI.html('<p>保存された過去の会話はありません。</p>'),UI.html('<button class="btn plain sm" type="button" data-history-action="bodyarchives">保管した本文の原文</button>'));
 }
+async function showArchivePage(project,task,id,offset){
+  const d=await api('/api/task/history/archive?'+new URLSearchParams({project,task,archiveId:id,offset}),null,{'X-Hub':'1'});
+  const start=Number(d.offset??offset)||0,prev=start>0?UI.template`<button class="btn plain" data-history-next="${Math.max(0,start-100)}" data-archive-id="${esc(id)}">前の原文</button>`:'';
+  historySheet(UI.text('過去の会話（原文）'),d.rows.map(r=>UI.template`<article><b>${esc(r.role==='user'?UI.text('人'):r.ai||r.role)}</b><pre>${esc(r.text||'')}${r.asks?.length?'\n'+esc(JSON.stringify(r.asks)):''}</pre></article>`).join(''),prev+(Number(offset)+d.rows.length<d.total?UI.template`<button class="btn plain" data-history-next="${Number(offset)+d.rows.length}" data-archive-id="${esc(id)}">続きの原文</button>`:''));
+  return {sheet:$('#task-history-sheet'),start,rows:d.rows};
+}
+// Search destination: open the archived page holding the matched row and mark it.
+async function openArchiveAt(project,task,id,row,matches,mark){
+  cancelMainPreview();historyDialog={project,task};
+  const page=await showArchivePage(project,task,id,Math.floor(Math.max(0,Number(row)||0)/100)*100);
+  const index=Number(row)-page.start,articles=page.sheet.querySelectorAll('.history-content > article');
+  if(!matches(page.rows[index])||!articles[index])return false;
+  mark(articles[index]);return true;
+}
+
 let mainPreviewSerial=0;
 const mainDeliveries=new Map();
 const oneclickPlans=new Map(),oneclickSending=new Set(),oneclickWatching=new Set(),oneclickReads=new Map();
 const oneclickKey=(project,task)=>JSON.stringify([project,task]);
 const sameOneclick=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 function oneclickCurrent(project,task){return view.kind==='work'&&view.project===project&&view.task===task;}
+function oneclickComplete(plan){
+ const m=plan?.main,f=plan?.flow;
+ if(plan?.loading||plan?.error||plan?.recovery)return false;
+ if(f?.stage==='complete')return Boolean(m&&f.sourceHead===m.sourceHead);
+ return Boolean((!f||f.stage==='ready')&&m?.alreadyIncluded===true&&(!m.switchHub||m.switchNeeded===false)&&!(m.waiting||[]).length);
+}
 function oneclickText(flow){
  if(flow?.stage==='complete')return flow.restart?'本体への取り込みと新版の起動確認が完了しました。作業・会話・コピーは残っています。':'本体への取り込みが完了しました。作業・会話・コピーは残っています。';
  if(flow?.stage==='waiting')return '本体への取り込みは完了しています。ほかの保存が終わるまで新版への切替を待っています。';
@@ -174,11 +195,17 @@ function drawOneclickMain(project,task,plan){
  if(!region)return;
  const m=plan.main,flow=plan.flow,progress=flow&&flow.stage!=='ready';
  const waiting=(m?.waiting||[]).map(x=>x.message).join(' / ');
- const message=plan.error|| (progress?oneclickText(flow):waiting||(plan.loading&&!m?'本体と作業用コピーの最新の記録を確認しています。':'このボタン1回で、表示した範囲の取り込みと必要な新版の起動確認まで進みます。'));
+ const message=plan.error|| (progress?oneclickText(flow):oneclickComplete(plan)?'本体への反映と必要な起動確認は完了しています。新しい変更があれば取り込めます。':waiting||(plan.loading&&!m?'本体と作業用コピーの最新の記録を確認しています。':'このボタン1回で、表示した範囲の取り込みと必要な新版の起動確認まで進みます。'));
  const scope=m?UI.template`<p>対象：${esc(m.target)}<br>変更：${m.alreadyIncluded?'本体へ反映済み（追加の変更なし）':UI.template`${m.files}ファイル`}${m.switchHub?UI.template` ／ Hub v${esc(m.switchVersion)}${m.switchNeeded===false?'の起動確認（起動済み・切替不要）':'への切替と起動確認'}`:''}<br>作業・会話・コピー・下書き・残っている手順を保持します。</p><details class="main-merge-residual" data-work-fold="residual"><summary>取り込む保存と残っている手順</summary><p>作業の保存：${esc(m.sourceHead)}<br>本体の保存：${esc(m.targetHead)}</p><pre>${esc(m.residual||'手順の残りなし')}</pre></details>`:'';
  const recovery=plan.recovery?UI.template`<p>前回の衝突中止（${esc(plan.recovery.at)}）を復帰記録と照合してから、表示した最新の保存を取り込みます。この日時の中止を解消した作業が対象です。</p>`:'';
- button.hidden=false;button.disabled=Boolean(plan.loading||plan.error||progress||!m?.token||waiting||oneclickSending.has(oneclickKey(project,task)));
- button.title='表示した範囲を取り込み、作業とコピーを残して必要な新版の起動確認まで進めます';
+ const complete=oneclickComplete(plan);
+ button.hidden=false;button.disabled=Boolean(complete||plan.loading||plan.error||progress||!m?.token||waiting||oneclickSending.has(oneclickKey(project,task)));
+ const checking=!complete&&flow?.stage==='unknown';
+ const stopped=!complete&&(plan.error||['stopped','blocked'].includes(flow?.stage));
+ const busy=!complete&&!checking&&!stopped&&(['approved','waiting','switching'].includes(flow?.stage)||oneclickSending.has(oneclickKey(project,task)));
+ button.classList.toggle('main-merge-busy',Boolean(busy||checking));
+ button.textContent=UI.text(complete?'本体へ反映済み':checking?'結果確認中':stopped?flow?.stage==='blocked'?'取り込み要確認':'取り込み停止':busy?'取り込み中':'本体に取り込む');
+ button.title=UI.text(complete?'本体への反映と必要な起動確認は完了しています。新しい変更があれば取り込めます。':checking?'取り込みの結果を照合しています。送り直しません。':stopped?plan.error||oneclickText(flow):busy?'取り込みと必要な新版の起動確認を進めています。完了まで押せません。':'表示した範囲を取り込み、作業とコピーを残して必要な新版の起動確認まで進めます');
  const targetName=typeof proj==='function'?(proj(project)?.name||project):project;
  const status=plan.error?'停止：'+plan.error:progress?oneclickText(flow):waiting?'待機：'+(m.waiting[0]?.message||waiting).split('\n')[0]+(m.waiting.length>1?UI.template`（ほか${m.waiting.length-1}件）`:''):!m?message:'';
  const brief=m?UI.template`取り込み：${targetName}本体・${m.alreadyIncluded?'反映済み':m.files+'ファイル'}${m.switchHub?UI.template`・Hub v${m.switchVersion}${m.switchNeeded===false?'起動済み':'へ切替'}`:''}・作業とコピーは残します`:'';
@@ -216,7 +243,7 @@ async function prepareOneclickMain(project,task,button){
     else if(d.state==='unknown'){
      plan.flow=await api('/api/task/merge/status',{project,task,flow:true,requestId:old.requestId});
      if(!current())return;
-     if(plan.flow.stage==='ready')plan.flow={stage:'unknown'};
+     if(plan.flow.stage==='ready')plan.flow={stage:'unknown',requestId:old.requestId};
     }
    }else if(old==='uncertain'){
     const d=await api('/api/task/merge/status',{project,task,legacy:true});if(!current())return;
@@ -229,7 +256,7 @@ async function prepareOneclickMain(project,task,button){
   if(!current())return;
   if(plan.flow.stage!=='ready'&&plan.flow.stage!=='complete'&&plan.flow.stage!=='stopped'){plan.loading=false;drawOneclickMain(project,task,plan);watchOneclickMain(project,task,plan.flow.requestId);return;}
   plan.main=await api('/api/task/merge/preview',{project,task});if(!current())return;
-  if(plan.flow?.stage==='complete'&&plan.main.sourceHead!==plan.flow.sourceHead)plan.flow=null;
+  if(plan.flow?.stage==='complete'&&(plan.main.sourceHead!==plan.flow.sourceHead||!plan.main.alreadyIncluded||plan.main.switchNeeded))plan.flow=null;
   if(plan.flow?.stage==='stopped'&&plan.main.sourceHead!==plan.flow.sourceHead&&['aborted','not-sent'].includes(plan.flow.delivery?.state))plan.flow=null;
   if(plan.recovery&&(plan.main.sourceHead!==plan.recovery.sourceHead||plan.main.targetHead!==plan.recovery.targetHead))throw Error('中止記録の確認後に保存が変わりました。送信しません。');
  }catch(e){if(current())plan.error=e.message;}
@@ -241,7 +268,15 @@ function watchOneclickMain(project,task,requestId){
   let terminal=false;
   try{
    const owner=oneclickPlans.get(key);
-   const flow=await api('/api/task/merge/status',{project,task,flow:true,requestId});
+   let flow=await api('/api/task/merge/status',{project,task,flow:true,requestId});
+   if(['ready','unknown'].includes(flow.stage)){
+    const delivery=await api('/api/task/merge/status',{project,task,requestId});
+    if(oneclickPlans.get(key)===owner&&oneclickCurrent(project,task)&&(!owner?.flow?.requestId||owner.flow.requestId===requestId)&&['not-sent','aborted'].includes(delivery.state)&&sameOneclick(mainDelivery(project,task),{state:'uncertain',requestId})){
+     mainDelivery(project,task,null);owner.flow={stage:'stopped'};
+     oneclickWatching.delete(key);await prepareOneclickMain(project,task,document.querySelector('[data-act="merge"]'));return;
+    }
+    if(flow.stage==='ready')flow={stage:'unknown',requestId};
+   }
    const plan=oneclickPlans.get(key);if(plan&&plan===owner&&(!plan.flow?.requestId||plan.flow.requestId===requestId)){plan.flow=flow;drawOneclickMain(project,task,plan);}
    terminal=['complete','blocked','stopped'].includes(flow.stage);
    if(flow.stage==='complete'&&sameOneclick(mainDelivery(project,task),{state:'uncertain',requestId}))mainDelivery(project,task,null);
@@ -253,8 +288,9 @@ function watchOneclickMain(project,task,requestId){
 }
 async function runOneclickMain(project,task){
  const key=oneclickKey(project,task),plan=oneclickPlans.get(key);
- if(oneclickSending.has(key)||plan?.loading||!plan?.main?.token||plan.error||(plan.flow&&plan.flow.stage!=='ready'))return;
+ if(oneclickSending.has(key)||oneclickComplete(plan)||plan?.loading||!plan?.main?.token||plan.error||(plan.flow&&plan.flow.stage!=='ready'))return;
  oneclickReads.delete(key);oneclickSending.add(key);const token=plan.main.token;plan.main.token='';
+ drawOneclickMain(project,task,plan);
  try{
   if(!plan.recovery&&mainDelivery(project,task))throw Error('別の画面から取り込みを送信しています。再送しません。');
   if(plan.recovery){
@@ -270,13 +306,13 @@ async function runOneclickMain(project,task){
   if(out.requestId&&out.requestId!==token&&sameOneclick(marker,mainDelivery(project,task)))mainDelivery(project,task,{state:'uncertain',requestId:out.requestId});
   plan.flow=out.flow||{stage:'approved',requestId:out.requestId||token};drawOneclickMain(project,task,plan);watchOneclickMain(project,task,plan.flow.requestId);
  }catch(e){
-  if(['not-sent','aborted'].includes(e.delivery?.state)){
+  if(['not-sent','aborted'].includes(typeof e.delivery==='string'?e.delivery:e.delivery?.state)){
    if(sameOneclick(mainDelivery(project,task),{state:'uncertain',requestId:token}))mainDelivery(project,task,null);
    plan.error=e.message;plan.flow={stage:'stopped'};
   }else if(plan.flow?.requestId){plan.flow={stage:'unknown',requestId:token,error:e.message};watchOneclickMain(project,task,token);}
   else plan.error=e.message;
   drawOneclickMain(project,task,plan);
- }finally{oneclickSending.delete(key);}
+ }finally{oneclickSending.delete(key);drawOneclickMain(project,task,plan);}
 }
 const mainViewKey=()=>typeof view==='undefined'?null:JSON.stringify([view.kind,view.project,view.task]);
 function mainDelivery(project,task,value){
@@ -324,7 +360,7 @@ document.addEventListener('click',async e=>{
   const bodyArchive=e.target.closest?.('[data-body-archive]');
   if(bodyArchive&&historyDialog){try{await showBodyArchives(historyDialog.project,historyDialog.task,bodyArchive.dataset.bodyArchive);}catch(err){toast(UI.message(err.message));}return;}
   const archive=e.target.closest?.('[data-history-archive]'),next=e.target.closest?.('[data-history-next]');
-  if(archive||next){try{const {project,task}=historyDialog,id=archive?.dataset.historyArchive||next.dataset.archiveId,offset=next?.dataset.historyNext||0;const d=await api('/api/task/history/archive?'+new URLSearchParams({project,task,archiveId:id,offset}),null,{'X-Hub':'1'});historySheet(UI.text('過去の会話（原文）'),d.rows.map(r=>UI.template`<article><b>${esc(r.role==='user'?UI.text('人'):r.ai||r.role)}</b><pre>${esc(r.text||'')}${r.asks?.length?'\n'+esc(JSON.stringify(r.asks)):''}</pre></article>`).join(''),Number(offset)+d.rows.length<d.total?UI.template`<button class="btn plain" data-history-next="${Number(offset)+d.rows.length}" data-archive-id="${esc(id)}">続きの原文</button>`:'');}catch(err){toast(UI.message(err.message));}return;}
+  if(archive||next){try{const {project,task}=historyDialog,id=archive?.dataset.historyArchive||next.dataset.archiveId,offset=next?.dataset.historyNext||0;await showArchivePage(project,task,id,offset);}catch(err){toast(UI.message(err.message));}return;}
   const b=e.target.closest?.('[data-history-action]');if(!b||historySaving)return;
   if(b.dataset.historyAction==='close'){cancelMainPreview();$('#task-history-sheet').hidden=true;return;}
   if(b.dataset.historyAction==='auto-cancel'){const box=$('#history-progress');if(!box)return;b.disabled=true;try{drawAuto(box.dataset.p,box.dataset.t,await api('/api/task/history/auto/cancel',{project:box.dataset.p,task:box.dataset.t}));refreshAuto(box.dataset.p,box.dataset.t);}catch(err){toast(UI.message(err.message));b.disabled=false;}return;}
@@ -465,4 +501,4 @@ function receiveAuto(project,task,view){
 function resetAuto(project,task){
   if(continueRequest(project,task)||autoLast?.project===project&&autoLast?.task===task&&autoActive(autoLast.view.auto)){void refreshAuto(project,task).catch(err=>continueNotice(project,task,UI.message(err.message)));return true;}return false;
 }
-globalThis.HubTaskHistory={drawAuto,refreshAuto,receiveAuto,resetAuto};
+globalThis.HubTaskHistory={drawAuto,refreshAuto,receiveAuto,resetAuto,openArchiveAt};

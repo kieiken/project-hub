@@ -129,7 +129,7 @@ test('packaged confirmation remains pending after 304, failed or interrupted sta
   }
 });
 test('saved unopened queues prevent applying but permit verified restarting; applying rejects new mutations', async () => {
-  assert.equal(updateOptions.busy(), true);
+  assert.equal(await updater.strictBusy(), true);
   assert.equal((await post('/api/restart')).status,200);restart.committed=false;
   for (const route of ['/api/quit', '/api/app/rebuild']) assert.equal((await post(route)).status, 409);
   // Loading the saved queue must retain its request, not consume it.
@@ -147,17 +147,17 @@ test('unrelated background helpers do not block updates, but project AI and save
   background = [{ pid: 90001, ai: 'codex', project: null, task: null, command: 'codex app-server', cwd: '/outside' },
     { pid: 90002, ai: 'codex', project: null, task: null, command: 'codex exec-server', cwd: '/outside' }];
   try {
-    assert.equal(updateOptions.busy(), false);
+    assert.equal(await updater.strictBusy(), false);
     assert.equal((await (await fetch(base + '/api/state')).json()).background.length, 0);
     for (const route of ['/api/quit', '/api/restart']) assert.equal((await post(route)).status, 200);restart.committed=false;
     background.push({ pid: 90003, ai: 'codex', project: 'P', task: 't', command: 'codex', cwd: project });
-    assert.equal(updateOptions.busy(), true);
+    assert.equal(await updater.strictBusy(), true);
     for (const route of ['/api/quit', '/api/restart']) assert.equal((await post(route)).status, 409);
     background.pop();
     // A different unopened task proves the on-disk queue is checked, not just an in-memory queue.
     fs.writeFileSync(path.join(project, '.ai/tasks/u.md'), '---\nid: u\ntitle: u\nstate: 未着手\nworkspaceMode: direct\n---\n');
     fs.writeFileSync(path.join(project, '.ai/chat/u.queue.json'), JSON.stringify([{ id: 'later', text: 'still waiting' }]));
-    assert.equal(updateOptions.busy(), true);
+    assert.equal(await updater.strictBusy(), true);
     assert.equal((await post('/api/restart')).status, 200);restart.committed=false;
   } finally { background = []; }
 });
@@ -165,7 +165,7 @@ test('unrelated background helpers do not block updates, but project AI and save
 test('shell rebuild route authenticates, refuses update and dry mode, and exposes shell state',async()=>{
  assert.equal((await post('/api/app/rebuild',{},{})).status,403);
  assert.equal((await post('/api/chat/unqueue',{project:'P',task:'u',id:'later'})).status,200);
- assert.equal(updateOptions.busy(),false);
+ assert.equal(await updater.strictBusy(),false);
  updater.running=Promise.resolve();assert.equal((await post('/api/app/rebuild')).status,409);updater.running=null;
  updater.data.phase='installing';assert.equal((await post('/api/app/rebuild')).status,409);updater.data.phase='idle';
  const dry=await post('/api/app/rebuild');assert.equal(dry.status,409);assert.match((await dry.json()).error,/試験中/);

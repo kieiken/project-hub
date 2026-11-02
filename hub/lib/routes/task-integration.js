@@ -1,7 +1,7 @@
 'use strict';
 
 module.exports = function taskintegrationRoutes(ctx) {
-  const { send, lt, store, inWork, copyMissing, expandHome, gitw, mainMergeDelivery, getMainMergeFlow, workRoot, mainMergeTokens, crypto, integrationBlockers, HUB_INSTANCE, lastMerge, record, taskIntegrate, launch, sessions, taskTransfer, setUnread, integrationFailure, integrationAbandon, integrateAuto, pruneUnread, resultsGate, executionRoles, delegateRequest } = ctx;
+  const { send, lt, store, inWork, copyMissing, expandHome, gitw, mainMergeDelivery, getMainMergeFlow, workRoot, mainMergeTokens, crypto, integrationBlockers, integrationBlockersAsync, HUB_INSTANCE, lastMerge, record, taskIntegrate, launch, sessions, taskTransfer, setUnread, integrationFailure, integrationAbandon, integrateAuto, pruneUnread, resultsGate, executionRoles, delegateRequest } = ctx;
   return {
     consultationClose: {
       matches: (req,url) => req.method==='POST'&&/^\/api\/task\/integrate\/consultation-close\/(preview|apply|status|finish)$/.test(url.pathname),
@@ -14,43 +14,43 @@ module.exports = function taskintegrationRoutes(ctx) {
     },
     wait: {
       matches: (req, url) => req.method === 'GET' && url.pathname === '/api/task/integrate/wait',
-      handle(req, res, url, b) {
-        return send(res,200,{waiting:integrateAuto.waiting(Object.fromEntries(url.searchParams))});
+      async handle(req, res, url, b) {
+        return send(res,200,{waiting:await integrateAuto.waitingAsync(Object.fromEntries(url.searchParams))});
       },
     },
     mergeStatus: {
       matches: (req, url) => url.pathname === '/api/task/merge/status',
-      handle(req, res, url, b) {
+      async handle(req, res, url, b) {
         try {
           const p=store.readProject(b.project),t=p?.tasks.find(t=>t.id===b.task);
           if(!t||!inWork(p,t)||copyMissing(p,t))return send(res,200,{state:'unknown'});
-          const sourceDir=expandHome(t.workdir),targetDir=gitw.mainOf(sourceDir),scope={project:b.project,task:b.task,sourceDir,targetDir};
-          if(b.flow===true)return send(res,200,getMainMergeFlow().status(scope,b.requestId));
-          return send(res,200,b.requestId!==undefined?mainMergeDelivery.status({...scope,id:b.requestId}):b.legacy===true?mainMergeDelivery.legacy({...scope,abortAt:b.abortAt,confirm:b.confirm,sourceHead:b.sourceHead,targetHead:b.targetHead}):{state:'unknown'});
+          const sourceDir=expandHome(t.workdir),targetDir=await gitw.mainOfAsync(sourceDir),scope={project:b.project,task:b.task,sourceDir,targetDir};
+          if(b.flow===true)return send(res,200,await getMainMergeFlow().statusAsync(scope,b.requestId));
+          return send(res,200,b.requestId!==undefined?await mainMergeDelivery.statusAsync({...scope,id:b.requestId,mainMergeTokens}):b.legacy===true?await mainMergeDelivery.legacyAsync({...scope,abortAt:b.abortAt,confirm:b.confirm,sourceHead:b.sourceHead,targetHead:b.targetHead}):{state:'unknown'});
         }catch{return send(res,200,{state:'unknown'});}
       },
     },
     mergePreview: {
       matches: (req, url) => url.pathname === '/api/task/merge/preview',
-      handle(req, res, url, b) {
+      async handle(req, res, url, b) {
         const check=require('../main-merge-check');
         try {
           const p=store.readProject(b.project),file=p&&store.taskFile(b.project,b.task);
           if(!p||!file)return send(res,409,{error:lt('作業が見つかりません'),delivery:{state:'not-sent'}});
           const t=store.readTask(file);
           if(!inWork(p,t)||copyMissing(p,t))return send(res,409,{error:lt('作業用コピーが見つかりません'),delivery:{state:'not-sent'}});
-          const sourceDir=expandHome(t.workdir),mergeTarget=gitw.mainOf(sourceDir);
-          if(mainMergeDelivery.unresolved({project:b.project,task:b.task,sourceDir,targetDir:mergeTarget}))return send(res,409,{error:lt('取り込みの結果が未確認です。再送せず、送信番号の結果を照合してください'),delivery:{state:'unknown'}});
-          const sc=check.check(gitw,sourceDir,'source'),tc=check.check(gitw,mergeTarget,'target');
+          const sourceDir=expandHome(t.workdir),mergeTarget=await gitw.mainOfAsync(sourceDir);
+          if(await mainMergeDelivery.unresolvedAsync({project:b.project,task:b.task,sourceDir,targetDir:mergeTarget}))return send(res,409,{error:lt('取り込みの結果が未確認です。再送せず、送信番号の結果を照合してください'),delivery:{state:'unknown'}});
+          const sc=await check.checkAsync(gitw,sourceDir,'source'),tc=await check.checkAsync(gitw,mergeTarget,'target');
           if(sc.blocker||tc.blocker)return send(res,409,check.refusal(sc.blocker||tc.blocker));
           const source=sc.snapshot,main=tc.snapshot;
-          const preview=gitw.preview({targetGuard:dir=>require('../integration-writes').inspect(gitw,dir),dir:sourceDir,workRoot:workRoot(p),target:mergeTarget});
+          const preview=await gitw.previewAsync({root:store.root,dir:sourceDir,workRoot:workRoot(p),target:mergeTarget});
           if(!preview)return send(res,409,check.refusal({side:'target',kind:'unreadable',paths:[],reason:lt('取り込む範囲を読み取れません'),next:lt('本体と作業用コピーのGit履歴を確認してから、最新の記録を確認してください')}));
           const token=crypto.randomUUID();
           for(const [id,v]of mainMergeTokens)if(Date.now()-v.at>600000)mainMergeTokens.delete(id);
-          const switchPlan=getMainMergeFlow().approval({sourceDir,targetDir:mergeTarget,source,target:main});
+          const switchPlan=await getMainMergeFlow().approvalAsync({sourceDir,targetDir:mergeTarget,source,target:main});
+          const waiting=await integrationBlockersAsync(b,{op:'main-merge'});
           mainMergeTokens.set(token,{at:Date.now(),project:b.project,task:b.task,source,target:main,targetDir:mergeTarget,...switchPlan});
-          const waiting=integrationBlockers(b,{op:'main-merge'});
           return send(res,200,{waiting,token,sourceHead:source.head,targetHead:main.head,target:mergeTarget,files:preview.files,noChanges:preview.noChanges,...switchPlan,residual:t.steps.filter(s=>!s.done).map(s=>s.text).concat(t.question||[]).join('\n'),cleanupBlocked:Boolean(t.continuation||t.question||t.steps.some(s=>!s.done)||store.listProjects().some(q=>q.tasks.some(x=>require('../../public/project-order').ancestorsOf(q,x,store.listProjects()).some(a=>a.project.id===p.id&&a.task.id===t.id))))});
         } catch {return send(res,409,check.refusal({side:'target',kind:'unreadable',paths:[],reason:lt('本体と作業用コピーの保存状態を読み取れません'),next:lt('Gitと読取権限を確認してから、最新の記録を確認してください')}));}
       },
@@ -184,8 +184,8 @@ module.exports = function taskintegrationRoutes(ctx) {
     },
     preview: {
       matches: (req, url) => url.pathname === '/api/task/integrate/preview',
-      handle(req, res, url, b) {
-        try{return send(res,200,integrateAuto.preview(b));}catch(e){integrationFailure(b,e,'preview');return send(res,409,{error:e.message});}
+      async handle(req, res, url, b) {
+        try{return send(res,200,await integrateAuto.previewAsync(b));}catch(e){integrationFailure(b,e,'preview');return send(res,409,{error:e.message});}
       },
     },
     resume: {

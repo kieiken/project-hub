@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Security.Principal;
+using System.Security.Cryptography;
 using System.Security.AccessControl;
 using System.Web.Script.Serialization;
 using System.Collections.Generic;
@@ -129,6 +130,7 @@ public sealed class HubWindow : Form {
       var environment=await CoreWebView2Environment.CreateAsync(null,Value("profile"),null);
       await view.EnsureCoreWebView2Async(environment);
       var core=view.CoreWebView2;
+      await core.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache);
       core.Settings.AreDevToolsEnabled=false; core.Settings.AreDefaultContextMenusEnabled=false;
       core.Settings.AreHostObjectsAllowed=false; core.Settings.IsWebMessageEnabled=false;
       core.Settings.IsStatusBarEnabled=false;
@@ -138,10 +140,37 @@ public sealed class HubWindow : Form {
       core.FrameNavigationStarting+=delegate(object sender,CoreWebView2NavigationStartingEventArgs e) { if(!Internal(e.Uri)) e.Cancel=true; };
       core.NewWindowRequested+=delegate(object sender,CoreWebView2NewWindowRequestedEventArgs e) { e.Handled=true; Navigate(e.Uri,e.IsUserInitiated); };
       core.DownloadStarting+=delegate(object sender,CoreWebView2DownloadStartingEventArgs e) { e.Cancel=true; Explain("専用窓からのダウンロードには対応していません。"); };
-      core.PermissionRequested+=delegate(object sender,CoreWebView2PermissionRequestedEventArgs e) { e.State=CoreWebView2PermissionState.Deny; };
+      core.PermissionRequested+=async delegate(object sender,CoreWebView2PermissionRequestedEventArgs e) {
+        e.State=CoreWebView2PermissionState.Deny;
+        e.SavesInProfile=false;
+        if(e.PermissionKind!=CoreWebView2PermissionKind.Microphone||!e.IsUserInitiated||!Internal(e.Uri)||!Internal(core.Source)) return;
+        var permission=e.GetDeferral();
+        try {
+          string ticket=await core.ExecuteScriptAsync("window.HubVoice?.permissionTicket() || ''");
+          if(String.IsNullOrEmpty(ticket)||ticket=="\"\""||ticket=="null"||!Internal(core.Source)||closing||failed) return;
+          if(MessageBox.Show(this,"音声入力のためにマイクを使います。音声はブラウザ提供元などで処理される場合があります。", "音声入力",MessageBoxButtons.OKCancel,MessageBoxIcon.Question)!=DialogResult.OK) return;
+          // Recheck after the dialog: navigation or sending may have invalidated the original request.
+          string pending=await core.ExecuteScriptAsync("window.HubVoice?.permissionTicket() || ''");
+          if(pending==ticket&&Internal(core.Source)&&!closing&&!failed) e.State=CoreWebView2PermissionState.Allow;
+        } catch { /* Deny on navigation, unsupported runtime or script failure. */ }
+        finally { permission.Complete(); }
+      };
+      // WebSocket bypasses this event. The backend's win32-window-policy
+      // sends an explicit HTTP-only connect-src for this launch/port instead.
+      // Do not rely on this resource handler to block WebSocket handshakes.
       core.AddWebResourceRequestedFilter("*",CoreWebView2WebResourceContext.All);
-      core.WebResourceRequested+=delegate(object sender,CoreWebView2WebResourceRequestedEventArgs e) {
+      core.WebResourceRequested+=async delegate(object sender,CoreWebView2WebResourceRequestedEventArgs e) {
         string u=e.Request.Uri;
+        if(Internal(u)) {
+          var defer=e.GetDeferral();
+          try {
+            if(!await Identity(false)) e.Response=environment.CreateWebResourceResponse(new MemoryStream(new byte[0]),403,"Unverified Hub","Content-Type: text/plain");
+            else if(e.ResourceContext==CoreWebView2WebResourceContext.Document&&(new Uri(u).AbsolutePath=="/"||new Uri(u).AbsolutePath=="/index.html")) e.Request.Headers.SetHeader("X-Hub-Token",OwnerMac("local-api"));
+          }
+          catch { e.Response=environment.CreateWebResourceResponse(new MemoryStream(new byte[0]),403,"Unverified Hub","Content-Type: text/plain"); }
+          finally { defer.Complete(); }
+          return;
+        }
         if(!Internal(u)&&!u.StartsWith("data:",StringComparison.OrdinalIgnoreCase)&&!(u.StartsWith("blob:",StringComparison.OrdinalIgnoreCase)&&Internal(u.Substring(5))))
           e.Response=environment.CreateWebResourceResponse(new MemoryStream(new byte[0]),403,"Blocked","Content-Type: text/plain");
       };
@@ -165,8 +194,11 @@ public sealed class HubWindow : Form {
       server.BeginOutputReadLine(); server.BeginErrorReadLine(); watch.Start();
       var deadline=DateTime.UtcNow.AddSeconds(60);
       while(DateTime.UtcNow<deadline&&!server.HasExited) {
-        try { if(await Identity(true)) { view.Enabled=true; core.Navigate(origin); status.Text=""; status.Visible=false; Console.WriteLine("保存先："+Value("root")); return; } }
+        try { if(await Identity(true)) { var cookie=core.CookieManager.CreateCookie("hub_owner_"+Convert.ToInt32(config["port"]),Guid.NewGuid().ToString("N"),"127.0.0.1","/"); cookie.Expires=DateTime.UtcNow.AddHours(8); cookie.IsHttpOnly=true; cookie.SameSite=CoreWebView2CookieSameSiteKind.Lax; core.CookieManager.AddOrUpdateCookie(cookie); view.Enabled=true; core.Navigate(origin); status.Text=""; status.Visible=false; Console.WriteLine("保存先："+Value("root")); return; } }
         catch(WebException) { } // GET readiness only; no mutation replay.
+        catch(IOException) { } // Owner record publication may still be in progress.
+        catch(System.Security.SecurityException) { }
+        catch(UnauthorizedAccessException) { }
         await Task.Delay(400);
       }
       throw new Exception("準備を確認できません。自動で強制終了しません。端末の記録を確認してください。");
@@ -193,6 +225,7 @@ public sealed class HubWindow : Form {
       try {
         var r=(HttpWebRequest)WebRequest.Create(origin+route);
         r.Proxy=null; r.AllowAutoRedirect=false; r.Timeout=RequestTimeoutMilliseconds; r.ReadWriteTimeout=RequestTimeoutMilliseconds; r.KeepAlive=false;
+        if(!route.StartsWith("/api/ping?challenge=",StringComparison.Ordinal)) r.Headers["X-Hub-Token"]=OwnerMac("local-api");
         if(body!=null) {
           r.Method="POST"; r.Headers["X-Hub"]="1"; r.ContentType="application/json";
           byte[] bytes=Encoding.UTF8.GetBytes(json.Serialize(body)); r.ContentLength=bytes.Length;
@@ -210,8 +243,36 @@ public sealed class HubWindow : Form {
       finally { if(diagnosticStage!=null) QuitDiagnostic(diagnosticStage,elapsed,result); }
     });
   }
+
+  string OwnerSecret() {
+    string dir=Environment.GetEnvironmentVariable("HUB_AUTH_DIR");
+    if(String.IsNullOrEmpty(dir)) dir=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ProjectHub","run");
+    for(string p=dir;p!=null;p=Path.GetDirectoryName(p))
+      if(Directory.Exists(p)&&(File.GetAttributes(p)&FileAttributes.ReparsePoint)!=0) throw new Exception("owner_path_reparse");
+    string file=Path.Combine(dir,"owner-"+Convert.ToInt32(config["port"])+".json");
+    if((File.GetAttributes(file)&FileAttributes.ReparsePoint)!=0) throw new Exception("owner_file_reparse");
+    var sid=WindowsIdentity.GetCurrent().User;
+    foreach(FileSystemSecurity acl in new FileSystemSecurity[] { Directory.GetAccessControl(dir),File.GetAccessControl(file) }) {
+      if(acl.GetOwner(typeof(SecurityIdentifier)).Value!=sid.Value) throw new Exception("owner_acl");
+      foreach(FileSystemAccessRule rule in acl.GetAccessRules(true,true,typeof(SecurityIdentifier)))
+        if(rule.AccessControlType==AccessControlType.Allow&&rule.IdentityReference.Value!=sid.Value) throw new Exception("owner_acl");
+    }
+    var record=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(file,Encoding.UTF8));
+    string token=(string)record["token"];
+    if(token.Length!=64||Convert.ToInt32(record["pid"])!=server.Id) throw new Exception("owner_file_mismatch");
+    return token;
+  }
+  string OwnerMac(string message) {
+    string token=OwnerSecret(); byte[] key=new byte[32];
+    for(int i=0;i<32;i++) key[i]=Convert.ToByte(token.Substring(i*2,2),16);
+    using(var hmac=new HMACSHA256(key)) return BitConverter.ToString(hmac.ComputeHash(Encoding.UTF8.GetBytes(message))).Replace("-","").ToLowerInvariant();
+  }
   async Task<bool> Identity(bool state, string diagnosticStage=null) {
     if(server==null||server.HasExited) return false;
+    string challenge=Guid.NewGuid().ToString("N");
+    var proof=await Request("/api/ping?challenge="+challenge,null,diagnosticStage); object pi,signature;
+    if(proof.status!=200||!proof.body.TryGetValue("instance",out pi)||!proof.body.TryGetValue("proof",out signature)||
+      OwnerMac(challenge+"\n"+Convert.ToString(pi)+"\n"+Convert.ToInt32(config["port"]))!=Convert.ToString(signature)) return false;
     var r=await Request("/api/ping",null,diagnosticStage); var b=r.body;
     if(r.status!=200||Convert.ToInt32(b["pid"])!=server.Id||!Same((string)b["runtimePath"],Value("runtime"))||
       !Same((string)b["windowRoot"],Value("root"))||(string)b["windowLaunch"]!=Value("nonce")||String.IsNullOrEmpty((string)b["instance"])) return false;

@@ -69,7 +69,7 @@ test('browser bootstrap is synchronous and escapes script endings', () => {
   vm.runInNewContext(script, context);
   assert.equal(context.window.HUB_LOCALE.locale, 'zh-TW');
   assert.equal(context.window.HUB_LOCALE.language, 'zh-TW');
-  assert.equal(context.window.HUB_LOCALE.messages['作業が見つかりません'], '找不到作業');
+  assert.equal(context.window.HUB_LOCALE.messages['作業が見つかりません'], '找不到工作');
 });
 
 test('Chinese and Japanese task sections share steps, completion and append logic', () => {
@@ -120,14 +120,15 @@ test('Chinese and Japanese task sections share steps, completion and append logi
 
 test('MCP descriptions are Chinese while names, arguments and question markers stay compatible', () => {
   const report = TOOLS.find(tool => tool.name === 'hub_report');
-  assert.match(report.description, /回報至作業檔案/);
+  assert.match(report.description, /回報到作業檔案/);
   assert.match(report.inputSchema.properties.text.description, /繁體中文/);
   assert.deepEqual(report.inputSchema.required, ['project', 'task', 'text']);
-  assert.match(report.inputSchema.properties.request.description, /委託 ID.*hub_dot_inbox/);
-  assert.match(report.description, /禁止從外部回報 GPT 子作業/);
+  assert.match(report.inputSchema.properties.request.description, /內部自動 Chat 的指示 ID/);
+  assert.match(report.description, /禁止向 GPT 子作業進行外部回報/);
+  assert.match(report.description, /## やったこと/); // Stored protocol heading stays Japanese.
   assert.equal(TOOLS.some(tool => tool.name === 'hub_gpt_inbox'),false);
-  assert.match(TOOLS.find(tool => tool.name === 'hub_dot_inbox').description, /尚未處理的 Dot 委託/);
-  const parsed = parseAsk('說明\n[[質問]]\n選擇（可複選）\n1. 第一項（推薦）\n2. 第二項\n[[/質問]]');
+  assert.equal(TOOLS.some(tool => tool.name === 'hub_dot_inbox'),false);
+  const parsed = parseAsk('說明\n[[質問]]\n選擇（複数可）\n1. 第一項（推薦）\n2. 第二項\n[[/質問]]');
   assert.equal(parsed.text, '說明');
   assert.equal(parsed.asks[0].multi, true);
   assert.deepEqual(parsed.asks[0].options, ['第一項（推薦）', '第二項']);
@@ -184,7 +185,9 @@ test('HTTP locale and Chinese generated projects work without translating user f
   assert.ok(changelog[0].items.length > 0);
   const chineseLog = fs.readFileSync(path.join(__dirname, '../docs/CHANGELOG.md'), 'utf8');
   // Frozen pack documents do not track each Japanese core release.
-  assert.equal(changelog[0].version, chineseLog.match(/^## (\d+\.\d+\.\d+)/m)[1]);
+  // The pack now also has its own text-update entry; use the first actual
+  // heading, rather than skipping it to an older numbered core release.
+  assert.equal(changelog[0].version, chineseLog.match(/^## (.+)$/m)[1].replace(/\s*\([^)]*\)\s*$/, ''));
   for (const item of changelog[0].items) assert.ok(chineseLog.includes(item));
   // Older language-introduction releases may fall outside the latest 12 entries.
   const firstItem = filename => fs.readFileSync(filename === 'CHANGELOG.zh-TW.md' ? path.join(__dirname, '../docs/CHANGELOG.md') : path.resolve(__dirname, '../../../hub', filename), 'utf8').match(/^- (.+)$/m)[1];

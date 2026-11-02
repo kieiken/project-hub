@@ -32,6 +32,12 @@ class EmergencyRestart {
     })().finally(()=>{this.flight=null;});return this.flight;
   }
   tick(){
+    if(!this.restart.admit)return this.tickChecked();
+    if(this.checking)return this.checking;
+    const r=this.control.data.restart;if(r?.phase!=='waiting'&&r?.phase!=='committed')return;
+    this.checking=this.restart.admit(()=>this.tickChecked()).catch(e=>this.fail(e.message)).finally(()=>{this.checking=null;});return this.checking;
+  }
+  tickChecked(){
     const r=this.control.data.restart;if(r?.phase==='committed'&&!this.restart.committed&&this.restart.error){this.fail(this.restart.error);return;}if(!r||r.phase!=='waiting'||this.flight)return;
     try{
       const view=this.status();
@@ -45,7 +51,7 @@ class EmergencyRestart {
       // Validate before writing the intent and again inside the formal commit.
       this.restart.verify();
       if(!this.save({...r,phase:'committed',reason:'停止・保存を確認しました。Hubを再起動しています'}))return;
-      this.restart.request();
+      const result=this.restart.request();if(result?.catch)void result.catch(e=>this.fail(e.message));
     }catch(e){this.save({...r,phase:'blocked',reason:e.message});}
   }
   pending(){return Boolean(this.control.restarting);}

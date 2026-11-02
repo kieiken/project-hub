@@ -1,6 +1,34 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),Module=require('node:module'),crypto=require('node:crypto'),vm=require('node:vm');
 const compiler=require('../release-app/compile.cjs'),repo=path.resolve(__dirname,'../..');
+test('all packaged Mac shells retain the reviewed owner screenshot receiver and temporary-file boundary',()=>{
+  const owner=fs.readFileSync(path.join(repo,'hub/app/window.swift'),'utf8');
+  const receiver=owner.slice(owner.indexOf('// BEGIN PROMISED DROP BATCH'),owner.indexOf('\nclass AppDelegate:')).trim();
+  assert.ok(receiver.includes('let temporary = !receivers.isEmpty || bitmapType != nil'));
+  assert.ok(receiver.includes('temporary: temporary, cleanup: cleanup'));
+  const staging=fs.readFileSync(path.join(repo,'hub/staging-app/Window.swift'),'utf8');
+  const purchase=require('../purchase-test-app/build.cjs').windowSource(staging);
+  const release=purchase.replaceAll('4588','4545').replaceAll('購入試験版','Project Hub').replaceAll('purchase-test-app/','release-app/');
+  for(const source of [staging,purchase,release]){
+    assert.ok(source.includes(receiver),'exact reviewed aggregation, URL/promise selection, ticket, timeout and cleanup');
+    assert.match(source,/web = DropWebView\(frame: \.zero, configuration: config\)/);
+    assert.match(source,/web\.registerForDraggedTypes\(NSFilePromiseReceiver\.readableDraggedTypes/);
+    assert.match(source,/web\.navigationDelegate = self; web\.uiDelegate = self/);
+    assert.equal((source.match(/class DropWebView:/g)||[]).length,1);
+  }
+});
+test('packaged screenshot receiver compiles in staging and transformed purchase shells',{skip:process.platform!=='darwin'},t=>{
+  const folder=temp(t),staging=fs.readFileSync(path.join(repo,'hub/staging-app/Window.swift'),'utf8');
+  const shutdown=fs.readFileSync(path.join(repo,'hub/staging-app/Shutdown.swift'),'utf8');
+  for(const [name,window,stop] of [
+    ['staging',staging,shutdown],
+    ['purchase',require('../purchase-test-app/build.cjs').windowSource(staging),shutdown.replaceAll('4587','4588')]
+  ]){
+    const source=path.join(folder,name+'.swift'),helper=path.join(folder,name+'-shutdown.swift');
+    fs.writeFileSync(source,window);fs.writeFileSync(helper,stop);
+    require('node:child_process').execFileSync('/usr/bin/swiftc',['-typecheck',helper,source,'-framework','Cocoa','-framework','WebKit'],{timeout:120000});
+  }
+});
 function generated(name,cache={}){
   if(cache[name])return cache[name];
   const file=path.join(repo,'hub/release-app',name+'.cjs'),m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));

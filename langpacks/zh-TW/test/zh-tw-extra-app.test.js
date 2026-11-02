@@ -3,11 +3,7 @@
 process.env.HUB_LANG = 'ja';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 const vm = require('node:vm');
-
-const source = fs.readFileSync(path.resolve(__dirname, '../../../hub/public/app.js'), 'utf8');
 
 function app(userAgent = '') {
   const elements = new Map();
@@ -24,7 +20,7 @@ function app(userAgent = '') {
       scrollTop: 0, scrollHeight: 100, clientHeight: 100,
       dataset: {}, handlers: {}, attributes: {}, addEventListener(name, cb) { this.handlers[name] = cb; },
       setAttribute(name, value) { this.attributes[name] = String(value); },
-      querySelector() { return null; }, querySelectorAll() { return []; }, insertAdjacentHTML() {}, focus() { document.activeElement = this; },
+      contains() { return false; }, querySelector() { return null; }, querySelectorAll() { return []; }, insertAdjacentHTML() {}, focus() { document.activeElement = this; },
     });
     return elements.get(key);
   }
@@ -52,7 +48,7 @@ function app(userAgent = '') {
     confirm: () => true,
   });
   context.window.HubChatHistory = require('../../../hub/public/chat-history');
-  vm.runInContext(source, context);
+  require('./ui-locale-fixture').loadApp(context);
   return { context, document, elements, element, events, documentListeners, timers, timeouts, details, stream: () => stream };
 }
 

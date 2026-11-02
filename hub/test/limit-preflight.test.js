@@ -60,11 +60,23 @@ function evidence(valid = true, until = Date.now() + 3600000) {
   return { version: 2, hold: true, lastLimitAt: new Date(at).toISOString(), untilSource: valid ? 'usage' : 'unknown', at: new Date(at).toISOString(), source: 'cli-limit', project: 'Other', task: 'other', request: 'earlier', validUntil: valid ? new Date(until).toISOString() : null, checkedAt: valid ? new Date(at + 1).toISOString() : null };
 }
 const full = (name = 'Fable') => ({ subscription_type: 'max', rate_limits_available: true, rate_limits: { model_scoped: [{ display_name: name, utilization: 100, resets_at: new Date(Date.now() + 3600000).toISOString() }] } });
+async function closeFixture() {
+  if (!server) return;
+  // PTY fixtures wait for stdin indefinitely. A server restart must retire
+  // these sessions too; otherwise old owners survive into restoration.
+  const active = [...sessions.map.values()].filter(s => !s.exited);
+  sessions.stopAll();
+  await Promise.all(active.map(s => s.finishedP));
+  const running = [...require('../server').chats.running.values()];
+  await Promise.all(running.map(r => r.settledP).filter(Boolean));
+  require('../server').stopControl.cleanExit();
+  await new Promise(r => server.close(r));
+}
 async function restart(e = null) {
-  if (server) { require('../server').stopControl.cleanExit(); await new Promise(r => server.close(r)); }
+  await closeFixture();
   fs.writeFileSync(file, typeof e === 'string' ? e : JSON.stringify(e ? { 'claude-fable-5-1': e } : {}));
   delete require.cache[require.resolve('../server')];
-  ({ server, sessions } = require('../server')); await new Promise(r => server.listen(Number(process.env.HUB_PORT), '127.0.0.1', r));
+  ({ server, sessions } = require('../server')); await new Promise(r => server.listen(Number(process.env.HUB_PORT), '127.0.0.1', r));await require('../server').restoreReady;
 }
 async function confirmRestored() {
   usageData = full();
@@ -93,11 +105,11 @@ process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{
 });process.on('SIGTERM',()=>process.exit(143));
 `, { mode: 0o755 });
   Object.assign(process.env, { PATH: bin + ':/usr/bin:/bin', HUB_ROOT: root, HUB_PORT: '0', HUB_DRY_RUN: '1', HUB_AI_HOME: path.join(tmp, 'home'), HUB_TRASH: path.join(tmp, 'trash') });
-  ({ server, sessions } = require('../server')); await new Promise(r => server.listen(0, '127.0.0.1', r));
+  ({ server, sessions } = require('../server')); await new Promise(r => server.listen(0, '127.0.0.1', r));await require('../server').restoreReady;
   const port = server.address().port; base = 'http://127.0.0.1:' + port; process.env.HUB_PORT = String(port);
   await restart();
 });
-test.after(async () => { if (server) await new Promise(r => server.close(r)); Usage.prototype.status = originalStatus; Usage.prototype.checkCredits = originalCreditCheck; });
+test.after(async () => { await closeFixture(); Usage.prototype.status = originalStatus; Usage.prototype.checkCredits = originalCreditCheck; });
 
 test('Credit confirmation settings survive restart, stay independent and omitted old-client updates preserve them', async () => {
   config(); await restart();
@@ -339,11 +351,32 @@ test('順番待ちと保存キュー再開も有効証拠なら同じ依頼をAs
   fs.writeFileSync(queueFile, JSON.stringify([{ id: 'saved', ai: 'claude', model: 'Fable 5.1', role: 'チェック', requireModel: true, requiredModel: 'claude-fable-5-1', text: 'scenario=ok' }]));
   const result = await (await post('/api/chat/send', saved, { fromQueue: 'saved' })).json(); assert.equal(result.model, 'GPT-6-Astra'); await reply(saved); assert.deepEqual(JSON.parse(fs.readFileSync(queueFile)), []);
 });
-test('自動交代オフ・対象外モデルは維持し、保存された別backupは実際に選ぶ', async () => {
+test('自動交代オフと未保持モデルは維持し、手動の別モデルも作業のbackupを選ぶ', async () => {
   for (const [auto, backup, role, model] of [[false, 'GPT-6-Astra', 'チェック', 'Fable 5.1'], [true, 'GPT-6-Astra', '文章', 'Fable 5.1'], [true, 'GPT-6.1-Sol', 'チェック', 'Fable 5.1'], [true, 'GPT-6-Astra', 'チェック', 'Opus 5.5']]) {
-    config(auto, backup); await restart(evidence()); const id = task(role); const result = await (await send(id, 'ok', { model })).json(); const switched = auto && backup === 'GPT-6.1-Sol' && role === 'チェック' && model === 'Fable 5.1';
-    assert.equal(result.model, switched ? backup : model); assert.equal((await reply(id)).ai, switched ? 'codex' : 'claude'); assert.equal(rows(id).filter(r => r.limitSwitch).length, switched ? 2 : 0);
+    config(auto, backup); await restart(evidence()); const id = task(role); const result = await (await send(id, 'ok', { model })).json(); const switched = auto && model === 'Fable 5.1';
+    const target = role === '文章' ? 'GPT-6.1-Sol' : backup;
+    assert.equal(result.model, switched ? target : model); assert.equal((await reply(id)).ai, switched ? 'codex' : 'claude'); assert.equal(rows(id).filter(r => r.limitSwitch).length, switched ? 2 : 0);
   }
+});
+test('再起動後も手動Opusの有効な上限は作業の交代先へ送り、両側上限なら起動しない', async () => {
+  config(); usageData = null; codexUsageData = null;
+  await restart(JSON.stringify({ 'claude-opus-5-5': evidence() }));
+  const saved = fs.readFileSync(rolesFile, 'utf8'); // 起動時の設定履歴初期化後を基準にする。
+  const before = launches('claude'), id = task('司令塔');
+  const response = await send(id, 'ok', { model: 'Opus 5.5' });
+  assert.equal(response.status, 200); assert.equal((await response.json()).model, 'GPT-6-Astra');
+  const row = await reply(id); assert.equal(row.ai, 'codex');
+  assert.equal(launches('claude'), before);
+  const event = rows(id).find(r => r.limitSwitch);
+  assert.equal(event.limitSwitch.sourceModel, 'Opus 5.5'); assert.equal(event.limitSwitch.sourceLimitSlot, 'main');
+  const input = JSON.parse(row.text).input;
+  assert.equal(input.split('scenario=ok').length - 1, 1);
+  await restart(JSON.stringify({ 'claude-opus-5-5': evidence(), 'gpt-6-astra': evidence() }));
+  const waiting = task('司令塔'), codexBefore = launches('codex');
+  const blocked = await send(waiting, 'ok', { model: 'Opus 5.5' });
+  assert.equal(blocked.status, 409); assert.match((await blocked.json()).error, /引き継ぎ先も上限中、または交代先が使えないため待機/);
+  assert.equal(launches('claude'), before); assert.equal(launches('codex'), codexBefore);
+  assert.equal(replies(waiting).length, 0); assert.equal(fs.readFileSync(rolesFile, 'utf8'), saved);
 });
 test('正式上限の終了後に取った利用枠を次の委任で再利用し、Fableの再失敗を省く', async () => {
   config(false); usageData = full(); await restart(); const first = task();

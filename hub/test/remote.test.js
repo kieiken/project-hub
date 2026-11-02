@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { Remote, isRemote, whoOf, cookieOf } = require('../lib/remote');
+const { Remote, isRemote, validRemote, whoOf, cookieOf } = require('../lib/remote');
 
 const tmp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-remote-'));
 const root = path.join(tmp, 'workspace'), pdir = path.join(root, 'Product', 'サンプルアプリ');
@@ -34,6 +34,7 @@ const remoteReq = (p, { body, cookie, headers = {}, method } = {}) => call(p, {
 let server, sessions, deletionFixture;
 test.before(async () => {
   fs.mkdirSync(path.join(root, '_hub'), { recursive: true });
+  fs.writeFileSync(FILE, JSON.stringify({host:HOST}));
   fs.cpSync(path.join(__dirname, '../seed/サンプルアプリ'), pdir, { recursive: true });
   const body = path.join(tmp, 'SampleApp'); fs.mkdirSync(body, { recursive: true });
   const projectFile = path.join(pdir, 'PROJECT.md');
@@ -164,23 +165,22 @@ test('オンにすると合言葉でログインし、札（Cookie）が無け�
   assert.doesNotMatch(JSON.stringify(r), new RegExp(cookie.split('=')[1]));
 });
 
-test('追加した中継の印だけでも認証を要求し、認証後も変更元の確認とローカル専用制限を守る', async () => {
-  for (const [name, value] of [['Forwarded', 'for=203.0.113.10;proto=https'], ['X-Real-IP', '203.0.113.11'], ['Via', '1.1 proxy']]) {
-    const headers = { Host: HOST, [name]: value };
-    assert.equal((await call('/api/state', { headers })).status, 401, name);
-    const page = await call('/', { headers }); assert.equal(page.status, 302); assert.equal(page.headers.get('location'), '/login');
-    assert.equal((await call('/api/state', { headers: { ...headers, Cookie: 'hub_session=forged' } })).status, 401);
-    const auth = { ...headers, 'X-Hub': '1', Origin: `https://${HOST}` };
-    const res = await call('/api/login', { method: 'POST', headers: auth, body: { passcode: 'iphone-pass-1' } });
-    assert.equal(res.status, 200, name);
-    const authenticated = { ...auth, Cookie: res.headers.get('set-cookie').split(';')[0] };
-    assert.equal((await call('/api/state', { headers: authenticated })).status, 200);
-    assert.equal((await call('/api/roles', { method: 'POST', headers: { ...authenticated, Origin: 'https://evil.example' }, body: {} })).status, 403);
-    assert.equal((await call('/api/app/rebuild', { method: 'POST', headers: authenticated, body: {} })).status, 403);
-    assert.equal((await call('/api/move/status', { headers: authenticated })).status, 403);
-    assert.equal((await call('/api/logout', { method: 'POST', headers: authenticated, body: {} })).status, 200);
+test('unrecognized proxy headers are rejected before consuming any login budget', async () => {
+  const before=fs.readFileSync(FILE,'utf8');
+  for(const headers of [
+    {Host:'evil.example','X-Forwarded-Host':'evil.example'},
+    ...['Forwarded','X-Real-IP','Via','X-Forwarded-For','X-Forwarded-Proto','Tailscale-User-Login'].map(h=>({Host:HOST,[h]:'forged'})),
+    {...REMOTE,'X-Forwarded-Host':'other.tail1234.ts.net'},
+    {...REMOTE,Host:'other.tail1234.ts.net','X-Forwarded-Host':'other.tail1234.ts.net'},
+    {...REMOTE,'X-Forwarded-Proto':'http'}, {...REMOTE,'Tailscale-User-Login':''}
+  ]) {
+    for(let i=0;i<6;i++)assert.equal((await call('/api/login',{method:'POST',headers:{...headers,'X-Hub':'1'},body:{passcode:'wrong'}})).status,403);
+    assert.equal((await call('/login',{headers})).status,403);
+    assert.equal((await call('/api/state',{headers})).status,403);
   }
-  assert.equal((await local('/api/state')).status, 200);
+  assert.equal(fs.readFileSync(FILE,'utf8'),before);
+  assert.equal((await remoteReq('/api/login',{body:{passcode:'iphone-pass-1'}})).status,200);
+  assert.equal((await local('/api/state')).status,200);
 });
 
 test('ログイン後は作業と設定をMacと同じ条件で操作し、未認証・別サイトからの変更は断る', async () => {
@@ -230,15 +230,6 @@ test('同じ相手から5回まちがえると423で15分止まり、別の相�
   assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(FILE, 'utf8')).failures).includes('guest@example.com'), true);
 });
 
-test('ForwardedとX-Real-IPだけの接続にも同じ相手の5回制限を適用する', async () => {
-  for (const headers of [{ Forwarded: 'for=203.0.113.20' }, { 'X-Real-IP': '203.0.113.21' }]) {
-    const request = passcode => call('/api/login', { method: 'POST', headers: { Host: HOST, 'X-Hub': '1', Origin: `https://${HOST}`, ...headers }, body: { passcode } });
-    for (let i = 0; i < 4; i++) assert.equal((await request('wrong')).status, 401);
-    assert.equal((await request('wrong')).status, 423);
-    assert.equal((await request('iphone-pass-1')).status, 423);
-  }
-});
-
 test('ログアウトはその端末だけ、すべての端末から出るは Mac から', async () => {
   const res = await remoteReq('/api/login', { body: { passcode: 'iphone-pass-1' } }), second = res.headers.get('set-cookie').split(';')[0];
   const out = await remoteReq('/api/logout', { cookie, body: {} });
@@ -261,4 +252,36 @@ test('deletion APIs preview without moving, reject changed content, preserve par
  const unread=JSON.parse(fs.readFileSync(path.join(root,'_hub/unread.json'))).items;assert.equal(unread.includes('サンプルアプリ\u0000'+f.child),false);assert.equal(unread.includes('サンプルアプリ\u0000'+f.parent),true);assert.equal(fs.readFileSync(f.parentChat,'utf8'),'parent result');
  const history=await (await local('/api/hierarchy/remove/history',{})).json();assert.equal(history.history[0].id,moved.record);
  res=await local('/api/hierarchy/remove/restore',{record:moved.record,confirm:true});assert.equal(res.status,200);assert.equal((await res.json()).restored,2);assert.equal(fs.readFileSync(f.childChat,'utf8'),'child result changed');assert.equal(fs.readFileSync(f.parentChat,'utf8'),'parent result');
+});
+
+test('trusted device and owner recovery resist anonymous lockout without erasing failures',()=>{
+ let now=Date.now();const r=new Remote({file:path.join(tmp,'device-recovery.json'),now:()=>now});r.update({enabled:true,passcode:'owner-device-pass'});
+ const known=r.login('owner-device-pass','owner');assert.equal(known.ok,true);
+ for(let i=0;i<20;i++)r.login('wrong','spoof-'+i);const count=r.load().failures.length;
+ assert.equal(r.login('owner-device-pass','new').status,423);assert.equal(r.login('owner-device-pass','spoofed-forwarded','',{deviceToken:'made-up'}).status,423);
+ assert.equal(r.login('owner-device-pass','owner','',{deviceToken:known.deviceToken}).ok,true);assert.equal(r.load().failures.length,count);
+ const wrongOnce=r.enrollment().code;assert.equal(r.login('wrong','new','',{enrollment:wrongOnce}).status,423);assert.equal(r.login('owner-device-pass','new','',{enrollment:wrongOnce}).status,423);
+ const once=r.enrollment().code;assert.equal(r.login('owner-device-pass','new','',{enrollment:once}).ok,true);assert.equal(r.login('owner-device-pass','new','',{enrollment:once}).status,423);
+ assert.equal(r.load().failures.length,count+1);r.logoutAll();assert.equal(r.load().failures.length,count+1);
+ r.update({passcode:'replacement-pass'});assert.equal(r.load().failures.length,count+1);assert.equal(r.login('replacement-pass','owner','',{deviceToken:known.deviceToken}).ok,true);
+ for(let i=0;i<5;i++)r.login('wrong','owner','',{deviceToken:known.deviceToken});assert.equal(r.login('replacement-pass','owner','',{deviceToken:known.deviceToken}).status,423);
+ r.forgetDevices();assert.equal(r.login('replacement-pass','owner','',{deviceToken:known.deviceToken}).status,423);const expired=r.enrollment().code;now+=10*60000+1;assert.equal(r.login('replacement-pass','new','',{enrollment:expired}).status,423);assert.equal(JSON.stringify(r.load()).includes(known.deviceToken),false);
+});
+test('remote callers cannot issue enrollment or revoke device trust',async()=>{
+ const result=await(await local('/api/remote/enrollment',{})).json();assert.match(result.code,/^[\w-]{32}$/);
+ assert.equal((await remoteReq('/api/remote/enrollment',{body:{},cookie})).status,403);assert.equal((await remoteReq('/api/remote/forget-devices',{body:{},cookie})).status,403);
+});
+
+test('trusted-device revocation also ends sessions and use extends trust without resetting failures',()=>{
+ let now=Date.now();const r=new Remote({file:path.join(tmp,'revoke-spec.json'),now:()=>now});r.update({enabled:true,passcode:'revocation-pass'});
+ const result=r.login('revocation-pass','owner');const created=r.load().devices[0].at;
+ now+=120000;assert.ok(r.check(result.token));assert.ok(r.load().devices[0].at>created);
+ r.login('bad','attacker');const failures=r.load().failures.length;
+ r.forgetDevices();assert.equal(r.check(result.token),null);assert.equal(r.load().failures.length,failures);
+});
+test('proxy tuple requires expected Tailscale host, HTTPS forwarding and a login name',()=>{
+ assert.equal(validRemote({headers:Object.fromEntries(Object.entries(REMOTE).map(([k,v])=>[k.toLowerCase(),v]))},HOST),true);
+ for(const h of ['host','x-forwarded-host','x-forwarded-proto','tailscale-user-login']){
+ const headers=Object.fromEntries(Object.entries(REMOTE).map(([k,v])=>[k.toLowerCase(),v]));delete headers[h];assert.equal(validRemote({headers},HOST),false,h);
+ }
 });

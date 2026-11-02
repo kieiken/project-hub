@@ -18,6 +18,8 @@ function fixture(){
  const proof={complete:true,sent:false,auditStart:'2026-10-11T02:00:00Z',auditEnd:'2026-10-11T04:00:00Z',sources:[]};
  let record=structuredClone(r),saves=0;
  const integrate={dir:integrationDir,store:{readProject:()=>({id:'p',dir:'fixture'})},ancestor:()=>({t:{},target:'copy',p:{id:'p',dir:'fixture'}}),read:()=>structuredClone(record),save:r=>{record=structuredClone(r);saves++;},tokens:new Map(),gitw:{inspect:()=>({head:'head',status:''}),merging:()=>false},resumeRecord:()=>{const r=structuredClone(record);r.auto.stopHistory=[...(r.auto.stopHistory||[]),r.auto.stopped];delete r.auto.stopped;return r;}};
+ integrate.file=(p,t)=>path.join(integrationDir,p+'-'+t+'.json');integrate.records=()=>[integrate.read()];integrate.store.listProjects=()=>[];
+ r.auto.scope=structuredClone(r.items.map(({project,task})=>({project,task})));record=structuredClone(r);
  const auto=new IntegrateAuto({integrate,dispatch:async()=>({ok:true,delivery:{state:'accepted'}})});auto.deliveryEvidence=()=>proof;auto.probeRequest=r=>assignment(r,data);
  return {r,k,proof,auto,integrate,get record(){return record;},get saves(){return saves;}};
 }

@@ -10,13 +10,14 @@ if(process.env.HUB_COLOCATED_BEFORE==='1')for(const name of ['integration-safety
 }
 const {IntegrateAuto}=require('../lib/integrate-auto');let auto;const tick=IntegrateAuto.prototype.tick;IntegrateAuto.prototype.tick=async function(){auto=this;};
 const originalPreview=IntegrateAuto.prototype.preview;IntegrateAuto.prototype.preview=function(...a){auto=this;this.dispatch=async q=>{requests.push(q);return {delivery:{state:'accepted'}};};this.pendingRequest=()=>true;return originalPreview.apply(this,a);};
+const originalPreviewAsync=IntegrateAuto.prototype.previewAsync;IntegrateAuto.prototype.previewAsync=function(...a){auto=this;this.dispatch=async q=>{requests.push(q);return {delivery:{state:'accepted'}};};this.pendingRequest=()=>true;return originalPreviewAsync.apply(this,a);};
 const {Store}=require('../lib/store'),chat=require('../lib/chat'),git=require('../lib/git'),writes=require('../lib/integration-writes'),safety=require('../lib/integration-safety');
 const store=new Store(root),runtime=require('../server'),server=runtime.server;let base,serial=0;
 const g=(d,...args)=>execFileSync('git',['-C',d,...args],{encoding:'utf8',stdio:'pipe'}).trim();
 const write=(f,s)=>{fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,s);return f;};
 const request=async(route,b)=>{const r=await fetch(base+route,{method:'POST',headers:{'X-Hub':'1','Content-Type':'application/json',Connection:'close'},body:JSON.stringify(b)});const out=await r.json();return {status:r.status,out};};
 test.before(async()=>{await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;await new Promise(setImmediate);});
-test.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));IntegrateAuto.prototype.tick=tick;IntegrateAuto.prototype.preview=originalPreview;fs.rmSync(tmp,{recursive:true,force:true});});
+test.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));IntegrateAuto.prototype.tick=tick;IntegrateAuto.prototype.preview=originalPreview;IntegrateAuto.prototype.previewAsync=originalPreviewAsync;fs.rmSync(tmp,{recursive:true,force:true});});
 const requests=[];
 function fixture(colocated=true,count=2,organize=false){
  const p=store.createProject({name:'Colocated-'+(++serial)}).project,body=colocated?p.dir:path.join(tmp,'body-'+serial);fs.mkdirSync(body,{recursive:true});
@@ -82,7 +83,7 @@ test('未保存製品はpreviewで保存指示・HTTP拒否を記録、外部.ai
 });
 test('Hub書込みの後も外部chmod・index・HEAD・成果・親子関係の変更は保護',async()=>{
  const f=fixture(),log=path.join(f.p.dir,'.ai/chat',f.parent.id+'.jsonl');chat.append(f.p.dir,f.parent.id,{text:'owned'});const index=path.join(g(f.body,'rev-parse','--absolute-git-dir'),'index'),b=fs.readFileSync(index);writes.inspect(git,f.body);assert.deepEqual(fs.readFileSync(index),b,'readonly index');
- fs.chmodSync(log,0o600);assert.match(writes.inspect(git,f.body).status,/chat/);fs.chmodSync(log,0o644);g(f.body,'add',path.relative(f.body,log));assert.match(writes.inspect(git,f.body).status,/chat/);g(f.body,'reset','-q','HEAD','--',path.relative(f.body,log));
+ const originalMode=fs.statSync(log).mode&0o777,externalMode=originalMode===0o600?0o644:0o600;fs.chmodSync(log,externalMode);assert.notEqual(fs.statSync(log).mode&0o777,originalMode,'fixture really changes mode');assert.match(writes.inspect(git,f.body).status,/chat/);fs.chmodSync(log,originalMode);g(f.body,'add',path.relative(f.body,log));assert.match(writes.inspect(git,f.body).status,/chat/);g(f.body,'reset','-q','HEAD','--',path.relative(f.body,log));
  const d=await f.preview();store.appendSection(f.p.id,f.children[0].id,'成果','- 追加：未受領の成果');const changed=await f.preview();assert.notEqual(changed.confirmationHash,d.confirmationHash);
  const fail=await request('/api/task/integrate',{...f.common,token:d.token,confirm:true,auto:true,mode:'single',selected:[{project:f.p.id,task:f.children[0].id,keep:true}]});assert.equal(fail.status,409);assert.equal(f.r(),null);
 });

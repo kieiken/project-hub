@@ -10,24 +10,24 @@ const safeChatUrl = value => {
   catch { return ''; }
 };
 const STATES = ['未着手', '実行中', '返事待ち', '停止', '上限で停止', '完了'];
-const RESULTS_WAIT = t => t.resultsPending && t.resultsPending.auto !== 'running';
+const RESULTS_WAIT = t => t.resultsPending && t.resultsPending.auto !== 'running' && t.resultsPending.code !== 'checking';
 const NEEDS = t => RESULTS_WAIT(t) || t.completionPending || t.state === '返事待ち' || t.state === '上限で停止' || (t.question && t.state !== '完了');
 // 返事が必要（あなたの番の数に入れる）。完了に移すだけのものは入れない
 // Only recorded requests need a reply. Terminal silence also occurs during work.
-const REPLY = (p, t) => RESULTS_WAIT(t) || t.chatQueueBlocked || t.state === '返事待ち' || t.state === '上限で停止' || (t.question && t.state !== '完了');
-const WORKING = (p, t) => Boolean(live(p.id, t.id) || (t.chatQueueCount > 0 && !t.chatQueueBlocked) || t.resultsPending?.auto === 'running' || bgOf(p.id, t.id).length || (state.webchat?.jobs || []).some(j => j.project === p.id && j.task === t.id && ['queued', 'checking', 'sending', 'tools', 'reporting'].includes(j.state)));
-// 通知は必ず1区分。返事を優先し、稼働・順番待ちの間は完了報告へ入れない。
-const notificationKind = (p, t) => REPLY(p, t) ? 'reply' : WORKING(p, t) ? 'work' : t.completionPending ? 'done' : '';
+const REPLY = (p, t) => t.chatQueueBlocked || t.state === '返事待ち' || t.state === '上限で停止' || (t.question && t.state !== '完了');
+const WORKING = (p, t) => Boolean(live(p.id, t.id) || (t.chatQueueCount > 0 && !t.chatQueueBlocked) || t.resultsPending?.auto === 'running' || t.resultsPending?.code === 'checking' || bgOf(p.id, t.id).length || (state.webchat?.jobs || []).some(j => j.project === p.id && j.task === t.id && ['queued', 'checking', 'sending', 'tools', 'reporting'].includes(j.state)));
+// 成果不備だけでは返事を求めない。実質問・停止対応 → 稼働 → 成果確認 → 完了承認の順に一度だけ数える。
+const notificationKind = (p, t) => REPLY(p, t) ? 'reply' : WORKING(p, t) ? 'work' : RESULTS_WAIT(t) ? 'results' : t.completionPending ? 'done' : '';
 const CONFIRM = (p, t) => notificationKind(p, t) === 'done';
 const CLI = o => /claude|codex|agy|grok/i.test(o || '') || !o;
 const aiOf = o => (/grok/i.test(o || '') ? 'grok' : /agy/i.test(o || '') ? 'agy' : /codex/i.test(o || '') ? 'codex' : 'claude');
 const AIS = ['claude', 'codex', 'agy', 'grok'];
-const AI_ICON = { claude: 'C', codex: 'X', agy: 'G', grok: 'K', chatgpt: 'G', 'chatgpt-chat': 'G', dot: 'D' };
+const AI_ICON = { muse: 'M', claude: 'C', codex: 'X', agy: 'G', grok: 'K', chatgpt: 'G', 'chatgpt-chat': 'G', dot: 'D' };
 const AI_KEY = { claude: 'claude-code', codex: 'codex', agy: 'agy', grok: 'grok' };
 const effortsFor = ai => ai === 'agy' ? ['高'] : (state.efforts || []).filter(e => ai !== 'grok' || e !== 'Ultra');
-const effortHidden = ai => ['agy', 'chatgpt'].includes(ai);
+const effortHidden = ai => ['agy', 'chatgpt', 'muse'].includes(ai);
 const aiUnavailable = ai => ai === 'agy' ? !state.agyAvailable : ai === 'grok' ? !state.grokAvailable : false;
-const AI_LABEL = { claude: 'Claude Code', codex: 'Codex', agy: 'Agy CLI', grok: 'Grok', chatgpt: 'ChatGPT', 'chatgpt-chat': UI.text('ChatGPT（Chat）'), dot: 'Dot' };
+const AI_LABEL = { muse: 'Muse', claude: 'Claude Code', codex: 'Codex', agy: 'Agy CLI', grok: 'Grok', chatgpt: 'ChatGPT', 'chatgpt-chat': UI.text('ChatGPT（Chat）'), dot: 'Dot' };
 // 未保存の新規開始とツリーからの子作業に使う初期AI。役割の担当設定とは別。
 const INITIAL_PICK = { ai: 'codex', model: 'GPT-6.1-Sol', effort: '高' };
 const initialPick = () => state?.initialPick || INITIAL_PICK;
@@ -310,6 +310,7 @@ document.addEventListener('input',/* @app-callback app-freetalk.js:appFreetalkCa
 // ---- 全体 ----
 /* @app-function app-tree.js:updateTurnCounts */
 function render() {
+  window.HubConversationSearch?.beforeRender();
   if(typeof invalidateMainNavigation==='function')invalidateMainNavigation();
   drawShellAlerts();
   if (view.kind !== 'settings') { clearTimeout(aiToolsWatchTimer); aiToolsWatchTimer = null; }
@@ -320,12 +321,14 @@ function render() {
   $('#gear').setAttribute('aria-pressed', view.kind === 'settings');
   renderTree();
   if (view.kind !== 'work') closePanes();
-  if (view.kind === 'settings') renderSettings();
+  if (view.kind === 'search' && window.HubConversationSearch) window.HubConversationSearch.mount();
+  else if (view.kind === 'settings') renderSettings();
   else if (view.kind === 'newproject') renderNewProject();
   else if (!state.projects.length) renderEmpty();
   else if (view.kind === 'turn') renderTurn(waiting);
   else if (view.kind === 'work') renderWork();
   else renderOverview(proj(view.project));
+  window.HubConversationSearch?.afterRender();
   renderedMainKey = mainKey();
   window.HubMobile?.badges();
   window.HubOnboarding?.sync();
@@ -336,7 +339,7 @@ function render() {
 /* @app-function app-project.js:nextName */
 /* @app-function app-project.js:renderEmpty */
 
-let turnTab = 'reply'; // reply＝返事待ち ／ work＝作業中 ／ done＝完了報告
+let turnTab = 'reply'; // reply＝返事待ち ／ work＝作業中 ／ results＝成果確認 ／ done＝完了報告
 /* @app-function app-project.js:renderTurn */
 // 子プロジェクトに分ける：1行に1つ「名前｜やること」。名前が無ければ元の名前＋番号。それぞれ作って、最初の作業をすぐ AI に頼む
 /* @app-function app-project.js:splitProject */
@@ -478,7 +481,8 @@ let discussionUIInstance;
 /* @app-function app-composer.js:chatPick */
 /* @app-function app-composer.js:syncSpecialPick */
 // 文の中の URL とファイルの場所を押せるようにする（URL＝ブラウザで開く・コピー、場所＝開き方を選ぶ）
-const LINK_RE = /\[([^\]\n]+)\]\((<[^>\n]+>|[^)\s]+(?:\([^)\s]*\)[^)\s]*)*)\)|(https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'*+,;=%()]+)|`([^`\n]+)`|((?:~\/|\/(?:Users|Volumes|private|tmp|opt|home)\/)[^\s<>"'`()（）「」『』【】\[\]、。，]+)|((?<![\p{L}\p{N}_\/.:@-])(?:[\p{L}\p{N}_.@-]+\/)+[\p{L}\p{N}_@-]+\.[A-Za-z0-9]{1,6})(?![\p{L}\p{N}_\/])/gu;
+// [名前](行先) は [ だけを拾い、続きは markdownLinks で確かめる（[ ごとに長い行を読み直さない）。
+const LINK_RE = /\[|(https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'*+,;=%()]+)|`([^`\n]+)`|((?:~\/|\/(?:Users|Volumes|private|tmp|opt|home)\/)[^\s<>"'`()（）「」『』【】\[\]、。，]+)|((?<![\p{L}\p{N}_\/.:@-])(?:[\p{L}\p{N}_.@-]+\/)+[\p{L}\p{N}_@-]+\.[A-Za-z0-9]{1,6})(?![\p{L}\p{N}_\/])/gu;
 const urlLink = (u, label) => UI.template`<a href="#" class="lk" data-url="${esc(u)}" title="ブラウザで開く">${esc(label || u)}</a><button type="button" class="cp" data-copy="${esc(u)}" title="コピー" aria-label="コピー">⧉</button>`;
 const pathLink = (x, label) => UI.template`<a href="#" class="lk lp" data-path="${esc(x)}" title="ファイル・フォルダの開き方を選ぶ">${esc(label || x)}</a>`;
 // Local image links use Hub's authenticated viewer on both Mac and phones.
@@ -486,6 +490,7 @@ const imagePathLink = (p, label) => UI.template`<a href="#" class="chat-image" d
 // URL の終わりの句読点や、対になっていない ) ] は URL に含めない
 /* @app-function app-messages.js:trimUrl */
 const isPath = x => /^(~\/|\/)/.test(x) || (/\//.test(x) && !/\s{2,}/.test(x) && !/^[\/.]$/.test(x));
+/* @app-function app-messages.js:markdownLinks */
 /* @app-function app-messages.js:linkify */
 // 囲みの中はリンクにせず、そのままコピーできる形にする。
 var UI = globalThis.HubI18n || {text: x=>x, html:x=>x, label:x=>x, message:x=>x, valueAttribute:()=>'', dateLocale:'ja-JP', template:(strings,...values)=>strings.reduce((s,x,i)=>s+x+(i<values.length?values[i]:''),'')};
@@ -499,7 +504,8 @@ document.addEventListener('click', /* @app-callback app-files.js:appFilesCallbac
 const IN_APP = /ProjectHubApp/.test(navigator.userAgent);
 const fsize = n => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 let fileViewer = null;
-const fileViewUrl = p => '/api/file/view?project=' + encodeURIComponent(view.project || '') + '&task=' + encodeURIComponent(view.task || '') + '&path=' + encodeURIComponent(p);
+const localResourceUrl = url => globalThis.HubLocalAuth?.url(url) || url;
+const fileViewUrl = p => localResourceUrl('/api/file/view?project=' + encodeURIComponent(view.project || '') + '&task=' + encodeURIComponent(view.task || '') + '&path=' + encodeURIComponent(p));
 /* @app-function app-files.js:finishFileViewer */
 /* @app-function app-files.js:closeFileViewer */
 /* @app-function app-files.js:prepareFileViewerFrame */
@@ -542,6 +548,8 @@ const isToolRow = r => r.tool || !/やり直/.test(r.text || ''); // 前の記�
 // 保存済みの旧要約は原文を変更せず、続きと判断待ちの区画を表示の先頭へ。
 /* @app-function app-messages.js:continuationSummary */
 /* @app-function app-messages.js:msgHtml */
+/* @app-function app-messages.js:automaticRequest */
+/* @app-function app-messages.js:requestBodyHtml */
 /* @app-function app-messages.js:baseMsgHtml */
 // 質問ごとに選択と自由入力を保持し、最後にまとめて送る。
 const askDrafts = new Map();
@@ -550,6 +558,7 @@ const askPending = new Set();
 // 作業・原文・回答欄を限定し、新質問や受付済みの欄には引き継がない。
 const askAttempts = new Map();
 const cleanOpt = o => o.replace(/[（(]おすすめ[）)]/g, '').trim();
+/* @app-function app-messages.js:drawPendingQuestion */
 /* @app-function app-messages.js:askHtml */
 /* @app-function app-messages.js:askValues */
 /* @app-function app-messages.js:askAnswer */
@@ -562,6 +571,7 @@ const cleanOpt = o => o.replace(/[（(]おすすめ[）)]/g, '').trim();
 let busyTimer = null;
 const queueDrafts = new Map();
 /* @app-function app-chat.js:refreshRequestStatus */
+/* @app-function app-chat.js:chatHistoryPending */
 /* @app-function app-chat.js:openChat */
 
 // 取り込み案内は task-history が所有する。ここでは既存の反映証拠だけを更新する。
@@ -636,7 +646,8 @@ const phoneLabelDrafts = new Map(), phoneLabelQueue = [], phoneLabelErrors = new
 let phoneLabelActive = null;
 /* @app-function app-settings-ai.js:phoneLabelStatus */
 /* @app-function app-settings-ai.js:phoneLabelMode */
-const phoneSettingsKey = () => JSON.stringify([state.phoneLabels, orderedModels()]);
+/* @app-function app-settings-ai.js:phoneLabelKeys */
+const phoneSettingsKey = () => JSON.stringify([state.phoneLabels, phoneLabelKeys()]);
 /* @app-function app-settings-ai.js:phoneLabelsHtml */
 /* @app-function app-settings-ai.js:drawPhoneLabels */
 /* @app-function app-settings-ai.js:savePhoneLabels */
@@ -692,6 +703,11 @@ const SETTINGS_TABS = { basic: UI.text('基本'), ai: 'AI', connect: UI.text('�
 /* @app-function app-settings.js:stopResultText */
 /* @app-function app-settings.js:drawEmergencyStatus */
 /* @app-function app-settings.js:refreshEmergencyStatus */
+let museSettingsEpoch = 0;
+let museUsageBusy = false;
+/* @app-function app-settings.js:museSettingsHtml */
+/* @app-function app-settings.js:loadMuseSettings */
+document.addEventListener('click', /* @app-callback app-settings.js:appSettingsMuseCallback */appSettingsMuseCallback());
 document.addEventListener('click',/* @app-callback app-settings.js:appSettingsCallback3230 */appSettingsCallback3230());
 setInterval(/* @app-callback app-settings.js:appSettingsCallback3248 */appSettingsCallback3248(),3000);
 let settingsTab = localStorage.getItem('hub.settingsTab') || 'basic';
@@ -773,6 +789,14 @@ const ACTION = { gptchat: UI.text('GPT子への依頼を保存した'), dot: UI.
 // 空の作業を片付ける：探した結果（画面を描き直しても残す）
 let emptyFound = null;
 /* @app-function app-settings.js:emptyHtml */
+// Shared by normal navigation and validated search destinations.
+function navigateView(destination, fromSidebar = false) {
+  view = { ...destination };
+  if (fromSidebar) closeDrawer();
+  if (view.kind === 'work' && view.task) markRead(view.project, view.task);
+  showInTree(); save(); render();
+}
+
 // ---- 操作 ----
 /* @app-function app-actions.js:act */
 
@@ -790,10 +814,22 @@ document.addEventListener('click', e => {
   const go = e.target.closest('[data-go]');
   if (go) {
     if (go.dataset.go === 'newproject') newProjectPreset = null;
-    view = { kind: go.dataset.go, project: go.dataset.p || view.project, task: go.dataset.t || null };
-    if (go.closest('#list')) closeDrawer(); // スマホの引き出しから選んだ時（描き直す前に判断する）
-    if (view.kind === 'work' && view.task) markRead(view.project, view.task);
-    showInTree(); save(); render(); return;
+    navigateView({ kind: go.dataset.go, project: go.dataset.p || view.project, task: go.dataset.t || null }, !!go.closest('#list')); return;
+  }
+  const progressButton=e.target.closest?.('[data-progress-toggle]'), progressHost=progressButton?.closest('[data-work-progress]');
+  if(progressHost&&view.kind==='work'&&progressHost.dataset.p===view.project&&progressHost.dataset.t===view.task){
+    const key=JSON.stringify([view.project,view.task]);
+    if(!workFolds.has(key))workFolds.set(key,new Map());
+    workFolds.get(key).set('progress',progressButton.dataset.progressToggle==='open');
+    syncWorkProgress();
+    progressHost.querySelector('button')?.focus({preventScroll:true});
+    return;
+  }
+  if (e.target.id === 'set-work-progress') {
+    try { localStorage.setItem('hub-work-progress', e.target.checked ? '1' : '0'); }
+    catch { e.target.checked=showWorkProgress(); toast(UI.text('表示設定を保存できませんでした。')); return; }
+    if(e.target.checked)for(const folds of workFolds.values())folds.delete('progress');
+    syncWorkProgress(); return;
   }
   if (e.target.id === 'set-enter') { try { localStorage.setItem('hub-enter', e.target.checked ? '1' : '0'); } catch (err) { /* 無視 */ } toast(e.target.checked ? UI.text('Enter だけで送ります') : UI.text('⌘ + Enter で送ります')); return; }
   if (e.target.id === 'set-detail') { try { localStorage.setItem('hub-detail', e.target.checked ? '1' : '0'); } catch (err) { /* 無視 */ } toast(e.target.checked ? UI.text('細かい作業を出します') : UI.text('細かい作業を隠します')); return; }
@@ -819,7 +855,8 @@ document.addEventListener('toggle', e => {
     const id = e.target.dataset.p;
     if (e.target.open) {projectNotesOpen.add(id);void loadProjectNotes(id);} else projectNotesOpen.delete(id);
   }
-  if (e.target.classList && e.target.classList.contains('steps')) stepsOpen = e.target.open;
+  if (e.target.classList && e.target.classList.contains('steps')) { stepsOpen = e.target.open; if(e.target.open)syncTaskSteps(); }
+  if (e.target.matches?.('details[data-work-fold="management"]')&&e.target.open)syncTaskSteps();
   if (e.target.id === 'logd' && e.target.open) loadLog();
   if (e.target.id === 'verd') { verOpen = e.target.open; if (verOpen) loadChangelog(); }
 }, true);
@@ -971,7 +1008,15 @@ document.addEventListener('click', async e => {
 document.addEventListener('click', /* @app-callback app-actions.js:appActionsCallback4224 */appActionsCallback4224());
 /* @app-function app-actions.js:setBodyFolder */
 // アプリの窓に落とした時（本当の場所が分かる）：Mac アプリから呼ばれる
+let nativeDropSequence = 0;
+const nativeDropTickets = new Map();
 window.hubNativeDrop = /* @app-callback app-files.js:appFilesCallback4244 */appFilesCallback4244();
+/* @app-function app-files.js:droppedFiles */
+/* @app-function app-files.js:beginNativeDrop */
+/* @app-function app-files.js:consumeNativeDrop */
+/* @app-function app-files.js:failNativeDrop */
+window.hubNativeDrop.begin = beginNativeDrop;
+window.hubNativeDrop.fail = failNativeDrop;
 window.hubNativePaste = /* @app-callback app-files.js:appFilesCallback4290 */appFilesCallback4290();
 // スマホ：☰ で左の一覧を出し入れ。一覧で何かを選んだらしまう
 $('#menu-toggle').addEventListener('click', () => { const on = document.body.classList.toggle('show-list'); $('#menu-toggle').setAttribute('aria-expanded', String(on)); });
@@ -1028,7 +1073,7 @@ async function pollState() {
       if (!keepMain) updateStatus();
       if (view.kind === 'work') {
         const p = proj(view.project), t = taskOf(p, view.task);
-        if (t?.copy && !t.mergeExcluded) loadPreview(p.id, t.id);
+        if (!chatHistoryPending() && t?.copy && !t.mergeExcluded) loadPreview(p.id, t.id);
       }
     }
   } catch (e) { /* 次に */ }

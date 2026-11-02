@@ -10,7 +10,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const g = require('../lib/git');
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-git-'));
+// Git resolves macOS /var aliases; use the same canonical fixture root.
+const tmp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-git-'));
 process.env.HUB_TRASH = path.join(tmp, 'Trash');
 const sh = (dir, ...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).trim();
 const W = path.join(tmp, 'Work', 'P');
@@ -40,6 +41,72 @@ function repo(name) {
   sh(d, 'add', '-A'); sh(d, 'commit', '-q', '-m', 'init');
   return d;
 }
+
+test('非同期予告はHTTP応答を止めず、同時の同一要求だけ共有し次回は読み直す', async t => {
+  const http = require('node:http'), writes = require('../lib/integration-writes');
+  const main = repo('Product/async-preview'), workRoot = path.join(tmp, 'Work', 'async-preview');
+  const ledger = path.join(main, '.ai/tasks/t.md');
+  fs.mkdirSync(path.dirname(ledger), { recursive: true });
+  fs.writeFileSync(ledger, 'original\n'); sh(main, 'add', '-A'); sh(main, 'commit', '-qm', 'ledger');
+  const copy = g.prepare({ base: main, workRoot, taskId: 'copy' }).dir;
+  writes.register(tmp); writes.write(ledger, () => fs.writeFileSync(ledger, 'Hub record\n'));
+  fs.writeFileSync(path.join(copy, 'a.txt'), 'copy change\n');
+  const options = { dir: copy, workRoot, root: tmp };
+  const expected = () => g.preview({ dir: copy, workRoot, targetGuard: dir => writes.inspect(g, dir) });
+  const sourceHead = sh(copy, 'rev-parse', 'HEAD'), targetHead = sh(main, 'rev-parse', 'HEAD');
+  const server = http.createServer((req, res) => res.end('rows'));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+  let finished = false;
+  const pending = g.previewAsync(options);
+  assert.strictEqual(g.previewAsync(options), pending);
+  pending.then(() => { finished = true; });
+  assert.strictEqual(await (await fetch('http://127.0.0.1:' + server.address().port)).text(), 'rows');
+  assert.strictEqual(finished, false, 'HTTP must complete while real Git preview is still running');
+  assert.deepStrictEqual(await pending, expected());
+  assert.strictEqual((await pending).mainDirty, false, 'registered Hub ledger provenance is preserved in the worker');
+  fs.writeFileSync(path.join(copy, 'new.txt'), 'new\n');
+  fs.writeFileSync(ledger, 'external edit\n');
+  const next = g.previewAsync(options);
+  assert.notStrictEqual(next, pending);
+  assert.deepStrictEqual(await next, expected());
+  assert.strictEqual((await next).files, 2);
+  assert.strictEqual((await next).mainDirty, true);
+  assert.strictEqual(sh(copy, 'rev-parse', 'HEAD'), sourceHead);
+  assert.strictEqual(sh(main, 'rev-parse', 'HEAD'), targetHead);
+  assert.strictEqual(fs.readFileSync(ledger, 'utf8'), 'external edit\n');
+});
+
+test('非同期予告は競合結果を保持し、不正要求や対象なしの後も次の要求を処理する', async () => {
+  const main = repo('async-conflict'), workRoot = path.join(tmp, 'Work', 'async-conflict');
+  const copy = g.prepare({ base: main, workRoot, taskId: 'copy' }).dir;
+  fs.writeFileSync(path.join(copy, 'a.txt'), 'copy\n'); sh(copy, 'commit', '-qam', 'copy');
+  fs.writeFileSync(path.join(main, 'a.txt'), 'main\n'); sh(main, 'commit', '-qam', 'main');
+  const options = { dir: copy, workRoot, root: tmp };
+  await assert.rejects(g.previewAsync({ ...options, dir: 'relative' }), /invalid preview paths/);
+  assert.strictEqual(await g.previewAsync({ ...options, dir: path.join(tmp, 'missing') }), null);
+  const expected = g.preview({ dir: copy, workRoot, targetGuard: dir => require('../lib/integration-writes').inspect(g, dir) });
+  assert.strictEqual(expected.conflict, true);
+  assert.deepStrictEqual(await g.previewAsync(options), expected);
+  assert.strictEqual(sh(main, 'status', '--porcelain'), '');
+  assert.strictEqual(sh(copy, 'status', '--porcelain'), '');
+});
+
+test('非同期予告は照合記録の読取失敗を伝え、失敗結果を保持せず次回復旧する', async () => {
+  const root = path.join(tmp, 'async-error'), main = repo('async-error/Product/main'), workRoot = path.join(root, 'Work');
+  const copy = g.prepare({ base: main, workRoot, taskId: 'copy' }).dir;
+  fs.writeFileSync(path.join(main, 'external.txt'), 'external\n');
+  fs.mkdirSync(path.join(root, '_hub'));
+  const journal = path.join(root, '_hub/integration-writes.json');
+  fs.writeFileSync(journal, '{invalid');
+  const options = { dir: copy, workRoot, root };
+  await assert.rejects(g.previewAsync(options));
+  fs.writeFileSync(journal, '{}');
+  const result = await g.previewAsync(options);
+  assert.strictEqual(result.mainDirty, true);
+  assert.strictEqual(result.noChanges, false);
+  assert.strictEqual(fs.readFileSync(path.join(main, 'external.txt'), 'utf8'), 'external\n');
+});
 
 test('Git のある本体：作業ごとに作業用コピーができ、取り込むと片付く', () => {
   const main = repo('code');

@@ -5,8 +5,75 @@
 // - 何か失敗したら、黙らずに画面に理由を出す。記録は ~/Library/Logs/ProjectHub.log
 import Cocoa
 import WebKit
+import CryptoKit
 import UniformTypeIdentifiers
 
+
+
+// Owner-only run files are capabilities, never printed or put in navigation URLs.
+struct LocalOwner {
+    let port: Int
+    var directory: String { ProcessInfo.processInfo.environment["HUB_AUTH_DIR"] ?? NSHomeDirectory() + "/Library/Application Support/ProjectHub/run" }
+    func record() -> [String: Any]? {
+        let file = directory + "/owner-\(port).json"
+        for p in [directory, file] {
+            var st = stat()
+            guard lstat(p, &st) == 0, st.st_uid == getuid(), st.st_mode & 0o077 == 0, st.st_mode & S_IFMT != S_IFLNK else { return nil }
+        }
+        var parent = (directory as NSString).deletingLastPathComponent
+        while parent != "/" {
+            var st = stat()
+            guard lstat(parent, &st) == 0, st.st_mode & S_IFMT != S_IFLNK else { return nil }
+            parent = (parent as NSString).deletingLastPathComponent
+        }
+        let fd = open(file, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else { return nil }; defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_uid == getuid(), st.st_mode & 0o077 == 0, st.st_mode & S_IFMT == S_IFREG, st.st_nlink == 1, st.st_size < 8192 else { return nil }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        guard let obj = (try? JSONSerialization.jsonObject(with: handle.readDataToEndOfFile())) as? [String: Any],
+              let token = obj["token"] as? String, token.count == 64, token.allSatisfy({ $0.isHexDigit }), obj["port"] as? Int == port else { return nil }
+        return obj
+    }
+    func digest(_ text: String) -> String? {
+        guard let token = record()?["token"] as? String else { return nil }
+        let bytes = stride(from: 0, to: 64, by: 2).map { i -> UInt8 in
+            let a = token.index(token.startIndex, offsetBy: i), b = token.index(a, offsetBy: 2)
+            return UInt8(token[a..<b], radix: 16)!
+        }
+        return HMAC<SHA256>.authenticationCode(for: Data(text.utf8), using: SymmetricKey(data: Data(bytes))).map { String(format: "%02x", $0) }.joined()
+    }
+    var capability: String? { digest("local-api") }
+    func matches(challenge: String, instance: String, proof: String) -> Bool {
+        guard !instance.isEmpty, let expected = digest("\(challenge)\n\(instance)\n\(port)") else { return false }
+        return expected == proof
+    }
+    func identity() -> String? {
+        let challenge = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let url = URL(string: "http://127.0.0.1:\(port)/api/ping?challenge=\(challenge)")!
+        var req = URLRequest(url: url); req.timeoutInterval = 3; req.cachePolicy = .reloadIgnoringLocalCacheData
+        let sem = DispatchSemaphore(value: 0); var instance: String?
+        let session = URLSession(configuration: .ephemeral, delegate: NoOwnerRedirect(), delegateQueue: nil)
+        session.dataTask(with: req) { data, res, _ in
+            defer { sem.signal() }
+            guard (res as? HTTPURLResponse)?.statusCode == 200, let data = data,
+                  let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let i = o["instance"] as? String, let proof = o["proof"] as? String,
+                  self.matches(challenge: challenge, instance: i, proof: proof) else { return }
+            instance = i
+        }.resume()
+        _ = sem.wait(timeout: .now() + 4); session.invalidateAndCancel(); return instance
+    }
+    func cookie(instance: String) -> HTTPCookie? {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/") else { return nil }
+        let value = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        // Parse Set-Cookie using Foundation's official HTTP attributes.
+        return HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": "hub_owner_\(port)=\(value); Path=/; HttpOnly; SameSite=Lax; Max-Age=28800"], for: url).first
+    }
+}
+final class NoOwnerRedirect: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+}
 
 // BEGIN PACKAGED RECOVERY
 // Foundation-only: the same path checks/rename recovery are exercised by fixtures.
@@ -229,7 +296,6 @@ func validPackMetadata(_ manifest: [String: Any], _ backend: [String: Any]) -> B
 }
 func validPackMessages(_ messages: [String: String]) -> Bool {
     // Match langpack.js dataMessages: translated text cannot add markup/attributes.
-    let html = try! NSRegularExpression(pattern: #"</?[a-zA-Z!]"#)
     let tagPattern = try! NSRegularExpression(pattern: #"<[^>]*>"#)
     let nonASCII = try! NSRegularExpression(pattern: #"[^\x00-\x7f]"#)
     // JavaScript whitespace and word boundaries, rather than ICU's broader ones.
@@ -245,10 +311,18 @@ func validPackMessages(_ messages: [String: String]) -> Bool {
             return Array(presentation.stringByReplacingMatches(in: tag, range: range(tag), withTemplate: "$1=\"\"").utf16)
         }
     }
-    for (source, value) in messages where html.firstMatch(in: value, range: range(value)) != nil {
+    let slots = try! NSRegularExpression(pattern: #"\$\{[0-9]+\}"#)
+    func placeholders(_ text: String) -> [String] {
+        slots.matches(in: text, range: range(text)).map { (text as NSString).substring(with: $0.range) }.sorted()
+    }
+    for (source, value) in messages {
+        if value.utf16.contains(0xE000) || value.utf16.contains(0xE001) || placeholders(source) != placeholders(value)
+            || value.range(of: #"<\s*/?\s*\$\{"#, options: .regularExpression) != nil { return false }
+        if !value.utf16.contains(0x3C) { continue }
         if tags(source) != tags(value) { return false }
         let remaining = tagPattern.stringByReplacingMatches(in: value, range: range(value), withTemplate: "")
-        if html.firstMatch(in: remaining, range: range(remaining)) != nil { return false }
+        let original = tagPattern.stringByReplacingMatches(in: source, range: range(source), withTemplate: "")
+        if remaining.utf16.filter({ $0 == 0x3C }).count != original.utf16.filter({ $0 == 0x3C }).count { return false }
     }
     return true
 }
@@ -282,7 +356,8 @@ func loadNativeMessages() {
         // Node may use a Web-only pack; native menus then keep their Japanese text.
         hubPackDir = directory
         if let data = try? Data(contentsOf: URL(fileURLWithPath: directory + "/native.json")),
-           let messages = (try? JSONSerialization.jsonObject(with: data)) as? [String: String] { nativeMessages = messages }
+           let messages = (try? JSONSerialization.jsonObject(with: data)) as? [String: String],
+           validPackMessages(messages) { nativeMessages = messages }
         return
     }
     requestedLanguage = "ja"
@@ -294,9 +369,17 @@ func tr(_ ja: String, _ values: String...) -> String {
     var translated = text
     for match in matches.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
         if let index = Int((text as NSString).substring(with: match.range(at: 1))),
-           index < values.count, let range = Range(match.range, in: translated) { translated.replaceSubrange(range, with: values[index]) }
+           index < values.count, let range = Range(match.range, in: translated) {
+            let html = ja.range(of: #"</?[a-zA-Z][^>]*>"#, options: .regularExpression) != nil
+            translated.replaceSubrange(range, with: html ? escapeNativeHTML(values[index]) : values[index])
+        }
     }
     return translated
+}
+func escapeNativeHTML(_ value: String) -> String {
+    value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+        .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+        .replacingOccurrences(of: "'", with: "&#39;")
 }
 
 let port = (Bundle.main.object(forInfoDictionaryKey: "HubPort") as? String) ?? "4545"
@@ -333,8 +416,11 @@ func findNode(path: String) -> String? {
 // （前は一覧 /api/state に1.5秒で聞いていたため、台帳が大きいと「動いていない」と間違え、2つ目を起動して失敗していた）
 let packagedRecovery = PackagedRecovery(root: hubWorkspace, app: Bundle.main.bundleURL.path,
     version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+let localOwner = LocalOwner(port: Int(port) ?? 4545)
 func localJSON(_ route: String) -> [String: Any]? {
     var request = URLRequest(url: baseURL.appendingPathComponent(route)); request.timeoutInterval = 3
+    guard localOwner.identity() != nil, let token = localOwner.capability else { return nil }
+    request.setValue(token, forHTTPHeaderField: "X-Hub-Token")
     let semaphore = DispatchSemaphore(value: 0)
     var result: [String: Any]?
     URLSession.shared.dataTask(with: request) { data, response, _ in
@@ -354,23 +440,11 @@ func updateServerReady() -> Bool {
     return installed["version"] as? String == pending["version"] as? String && installed["instance"] as? String == ping["instance"] as? String
 }
 
-func serverAlive() -> Bool {
-    let sem = DispatchSemaphore(value: 0)
-    var ok = false
-    var req = URLRequest(url: baseURL.appendingPathComponent("api/ping"))
-    req.timeoutInterval = 4
-    URLSession.shared.dataTask(with: req) { _, res, _ in
-        ok = (res as? HTTPURLResponse) != nil
-        sem.signal()
-    }.resume()
-    _ = sem.wait(timeout: .now() + 5)
-    return ok
-}
+func serverAlive() -> Bool { localOwner.identity() != nil }
 // 記録の最後の数行（止まった理由を画面に出すため）
 func logTail(_ n: Int) -> String {
     guard let s = try? String(contentsOfFile: logPath, encoding: .utf8) else { return "" }
     return s.split(separator: "\n").suffix(n).joined(separator: "\n")
-        .replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
 }
 
 // Mac の「ファイルとフォルダ」の許可（書類・デスクトップ・ダウンロード）
@@ -400,6 +474,8 @@ func serverCanRead() -> Bool {
     let sem = DispatchSemaphore(value: 0)
     var ok = true   // 答えが無い古い本体は、読めるものとして扱う
     var req = URLRequest(url: baseURL.appendingPathComponent("api/access"))
+    guard localOwner.identity() != nil, let token = localOwner.capability else { return false }
+    req.setValue(token, forHTTPHeaderField: "X-Hub-Token")
     req.timeoutInterval = 1.5
     URLSession.shared.dataTask(with: req) { data, res, _ in
         if (res as? HTTPURLResponse)?.statusCode == 200, let d = data,
@@ -414,6 +490,8 @@ func quitServer(reason: String = "access") -> Bool {
     let sem = DispatchSemaphore(value: 0)
     var ok = false
     var req = URLRequest(url: baseURL.appendingPathComponent("api/quit"))
+    guard localOwner.identity() != nil, let token = localOwner.capability else { return false }
+    req.setValue(token, forHTTPHeaderField: "X-Hub-Token")
     req.httpMethod = "POST"
     req.setValue("1", forHTTPHeaderField: "X-Hub")
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -440,15 +518,133 @@ func page(_ title: String, _ body: String) -> String {
     """
 }
 
-// ファイル・フォルダを落とした時、本当の場所（パス）を画面に渡す
-// （Web の画面だけでは、落とした物の場所が分からないため）。スクショの一時画像など場所の無い物は、これまでどおり画面に任せる
+// BEGIN PROMISED DROP BATCH
+// Foundation-only aggregation: never deliver partial/failed promises or twice.
+final class PromisedDropBatch {
+    private var expected: Int?
+    private var received = 0
+    private var paths: [String] = []
+    private var failed = false
+    private var finished = false
+    private let complete: ([String]?) -> Void
+    init(count: Int? = nil, complete: @escaping ([String]?) -> Void) {
+        expected = count; self.complete = complete
+    }
+    // fileNames is populated only AFTER receivePromisedFiles has been called.
+    func seal(count: Int) { guard expected == nil, count > 0 else { return }; expected = count; finishIfReady() }
+    private func finishIfReady() {
+        guard !finished, let expected = expected, received >= expected else { return }
+        finished = true; complete(!failed && received == expected ? paths : nil)
+    }
+    func receive(_ path: String?) {
+        guard !finished else { return }
+        if let path = path, !paths.contains(path) { paths.append(path) } else { failed = true }
+        received += 1; finishIfReady()
+    }
+    @discardableResult func cancel() -> Bool {
+        guard !finished else { return false }; failed = true; return true
+    }
+}
+
+func promisedDropPath(_ url: URL, in directory: URL) -> String? {
+    guard url.isFileURL,
+          let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+          values.isRegularFile == true, values.isSymbolicLink != true else { return nil }
+    // Foundation may return /private/var for a /var destination. Compare the
+    // resolved parents, while still rejecting symlinks and nested/outside files.
+    let file = url.standardizedFileURL.resolvingSymlinksInPath()
+    let parent = directory.standardizedFileURL.resolvingSymlinksInPath()
+    return file.deletingLastPathComponent().path == parent.path ? file.path : nil
+}
+// END PROMISED DROP BATCH
+
+// Receive promises during performDragOperation itself. AppKit does not permit
+// receivePromisedFiles from a later asynchronous JavaScript completion handler.
 class DropWebView: WKWebView {
+    private let dropQueue: OperationQueue = {
+        let queue = OperationQueue(); queue.maxConcurrentOperationCount = 1; return queue
+    }()
+    private func promises(_ sender: NSDraggingInfo) -> [NSFilePromiseReceiver] {
+        return sender.draggingPasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self], options: nil) as? [NSFilePromiseReceiver] ?? []
+    }
+    private func hasBitmap(_ sender: NSDraggingInfo) -> Bool {
+        return sender.draggingPasteboard.availableType(from: [.png, .tiff]) != nil
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if !promises(sender).isEmpty || hasBitmap(sender) { return .copy }
+        return super.draggingEntered(sender)
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if !promises(sender).isEmpty || hasBitmap(sender) { return .copy }
+        return super.draggingUpdated(sender)
+    }
+    private func deliver(_ paths: [String], ticket: String, temporary: Bool = false, cleanup: (() -> Void)? = nil) {
+        callAsyncJavaScript("return await window.hubNativeDrop(paths, ticket, {temporary})", arguments: ["paths": paths, "ticket": ticket, "temporary": temporary], in: nil, in: .page) { _ in cleanup?() }
+    }
+    private func failed(_ ticket: String, reason: String) {
+        callAsyncJavaScript("window.hubNativeDrop.fail(ticket, reason)", arguments: ["ticket": ticket, "reason": reason], in: nil, in: .page) { _ in }
+    }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
-        if urls.isEmpty { return super.performDragOperation(sender) }
-        let paths = urls.map { $0.path }
-        guard let data = try? JSONSerialization.data(withJSONObject: paths), let json = String(data: data, encoding: .utf8) else { return false }
-        evaluateJavaScript("window.hubNativeDrop && window.hubNativeDrop(\(json))", completionHandler: nil)
+        let receivers = promises(sender)
+        let board = sender.draggingPasteboard
+        let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        let bitmapType = receivers.isEmpty && urls.isEmpty ? board.availableType(from: [.png, .tiff]) : nil
+        if receivers.isEmpty && urls.isEmpty && bitmapType == nil { return super.performDragOperation(sender) }
+        // Join asynchronous DOM capture with native preparation in either order.
+        // Starting preparation here is synchronous; delivery waits for BOTH.
+        var ticket: String?, ticketReady = false, resultReady = false
+        var earlyFailure: String?
+        var paths: [String]?, reason = "promise", cleanup: (() -> Void)?
+        let temporary = !receivers.isEmpty || bitmapType != nil
+        func finish() {
+            guard ticketReady && resultReady else { return }; resultReady = false
+            guard let ticket = ticket else { cleanup?(); return }
+            if let paths = paths { self.deliver(paths, ticket: ticket, temporary: temporary, cleanup: cleanup) }
+            else { self.failed(ticket, reason: reason); cleanup?() }
+        }
+        evaluateJavaScript("window.hubNativeDrop && window.hubNativeDrop.begin ? window.hubNativeDrop.begin() : null") { value, error in
+            ticket = error == nil ? value as? String : nil; ticketReady = true
+            if let reason = earlyFailure, let ticket = ticket { self.failed(ticket, reason: reason) }
+            finish()
+        }
+        if !temporary {
+            if urls.allSatisfy({ $0.isFileURL && FileManager.default.fileExists(atPath: $0.path) }) { paths = urls.map { $0.path } }
+            reason = "file-url"; resultReady = true; finish(); return true
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ProjectHub-drop-" + UUID().uuidString, isDirectory: true)
+        do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
+        catch { reason = "temporary-directory"; resultReady = true; finish(); return true }
+        cleanup = { try? FileManager.default.removeItem(at: directory); return }
+        if let type = bitmapType {
+            reason = "image-data"
+            do {
+                guard let data = board.data(forType: type), let image = NSBitmapImageRep(data: data),
+                      let png = image.representation(using: .png, properties: [:]) else { throw CocoaError(.fileReadCorruptFile) }
+                let file = directory.appendingPathComponent("screenshot.png")
+                try png.write(to: file, options: .withoutOverwriting)
+                paths = promisedDropPath(file, in: directory).map { [$0] }
+            } catch { reason = "image-data" }
+            resultReady = true; finish(); return true
+        }
+        let batch = PromisedDropBatch { received in paths = received; resultReady = true; finish() }
+        // Do not delete a directory while a producer may still be writing it.
+        // Late callbacks clean up; a producer which never returns leaves a temp
+        // directory for macOS to reclaim, never a path in an AI input field.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+            if batch.cancel() { earlyFailure = "timeout"; if let ticket = ticket { self.failed(ticket, reason: "timeout") } }
+        }
+        for receiver in receivers {
+            receiver.receivePromisedFiles(atDestination: directory, options: [:], operationQueue: dropQueue) { url, error in
+                let path = error == nil ? promisedDropPath(url, in: directory) : nil
+                DispatchQueue.main.async {
+                    if path == nil { reason = error == nil ? "file-location" : "promise" }
+                    batch.receive(path)
+                }
+            }
+        }
+        let count = receivers.reduce(0) { $0 + $1.fileNames.count }
+        if count > 0 { batch.seal(count: count) }
+        else { batch.cancel(); reason = "promise-count"; earlyFailure = reason; if let ticket = ticket { failed(ticket, reason: reason) } }
         return true
     }
 }
@@ -460,6 +656,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     var updateRequestInFlight = false
     var updateRelaunching = false
     var server: Process?
+    var pageInstance: String?
+    var navigationChallenge: String?
+    var responseInstance: String?
+
+    // Public WebKit media permission API only. Never grant camera or embedded/foreign origins.
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        let sameOrigin = origin.protocol == baseURL.scheme && origin.host == baseURL.host && origin.port == baseURL.port
+        guard type == .microphone, frame.isMainFrame, sameOrigin,
+              webView.url?.scheme == baseURL.scheme, webView.url?.host == baseURL.host,
+              webView.url?.port == baseURL.port else { decisionHandler(.deny); return }
+        webView.evaluateJavaScript("window.HubVoice?.permissionPending() === true") { value, error in
+            // Prompt, rather than silently grant. OS permission remains under the person's control.
+            let stillLocal = webView.url?.scheme == baseURL.scheme && webView.url?.host == baseURL.host && webView.url?.port == baseURL.port
+            decisionHandler(error == nil && (value as? Bool) == true && stillLocal ? .prompt : .deny)
+        }
+    }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
                  defaultText: String?, initiatedByFrame frame: WKFrameInfo,
@@ -499,9 +713,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
         log("アプリを開きました（本体の場所: \(hubDir)）")
         let conf = WKWebViewConfiguration()
+        conf.websiteDataStore = .nonPersistent()
         let shellHash = Bundle.main.object(forInfoDictionaryKey: "HubShellHash") as? String ?? "unknown"
-        conf.applicationNameForUserAgent = "ProjectHubApp/\(shellHash.prefix(12))"   // 画面側で「アプリの中」と分かるように
+        conf.applicationNameForUserAgent = "ProjectHubApp/\(shellHash.prefix(12)) HubVoice/1"   // 音声入力の許可設定を持つ外側のアプリを画面で識別する
         web = DropWebView(frame: .zero, configuration: conf)
+        web.registerForDraggedTypes(NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) } + [.png, .tiff])
         web.navigationDelegate = self
         web.uiDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
@@ -518,7 +734,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         buildMenu()
         updateTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in self?.pollAppUpdate() }
         web.loadHTMLString(page(tr("起動しています…"), tr("<p>数秒お待ちください。</p>")), baseURL: nil)
-        DispatchQueue.global().async { self.startAndLoad() }
+        installLoopbackRules {
+            DispatchQueue.global().async { self.startAndLoad() }
+        }
     }
 
     func startAndLoad() {
@@ -555,7 +773,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         let confirmingUpdate = packagedRecovery.token() != nil
         if !confirmingUpdate && serverAlive() && serverCanRead() {
             log("台帳を読める本体が動いています")
-            DispatchQueue.main.async { self.web.load(URLRequest(url: baseURL)) }
+            DispatchQueue.main.async { self.loadOwned(URLRequest(url: baseURL)) }
             return
         }
         // 本体を新しく起動する時は、書類フォルダの許可を確かめる
@@ -569,7 +787,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         }
         if !confirmingUpdate && serverAlive() {
             log("本体はすでに動いています")
-            DispatchQueue.main.async { self.web.load(URLRequest(url: baseURL)) }
+            DispatchQueue.main.async { self.loadOwned(URLRequest(url: baseURL)) }
             return
         }
         let path = loginShellPath()
@@ -624,7 +842,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
         for _ in 0..<50 {
             if updateServerReady() {
                 log("本体の準備ができました")
-                DispatchQueue.main.async { self.web.load(URLRequest(url: baseURL)) }
+                DispatchQueue.main.async { self.loadOwned(URLRequest(url: baseURL)) }
                 return
             }
             if !p.isRunning { break }
@@ -773,7 +991,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     }
 
     @objc func reload() {
-        if packagedRecovery.token() == nil && serverAlive() { web.load(URLRequest(url: baseURL)) } else { DispatchQueue.global().async { self.startAndLoad() } }
+        if packagedRecovery.token() == nil && serverAlive() { loadOwned(URLRequest(url: baseURL)) } else { DispatchQueue.global().async { self.startAndLoad() } }
     }
     @objc func openLog() { NSWorkspace.shared.open(URL(fileURLWithPath: logPath)) }
 
@@ -848,17 +1066,106 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDe
     // 窓を閉じたら終了。本体（と作業中の AI）は裏で動き続ける
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
 
+
+    func installLoopbackRules(_ completion: @escaping () -> Void) {
+        // WebKit's rule compiler does not support regex disjunctions.
+        // One scheme/host per rule; the final exception is our exact HTTP origin.
+        var rules: [[String: Any]] = []
+        // Reject credentials in every authority, before our exact-origin exception.
+        rules.append(["trigger": ["url-filter": "^[a-z]+://[^/?#]*@"], "action": ["type": "block"]])
+        for scheme in ["http", "https", "ws", "wss"] {
+            for host in ["127\\.0\\.0\\.1", "localhost\\.?", "[a-z0-9.-]+\\.localhost\\.?", "\\[::1\\]", "\\[::ffff:127\\.0\\.0\\.1\\]", "\\[::ffff:7f00:1\\]"] {
+                rules.append(["trigger": ["url-filter": "^\(scheme)://\(host)[:/]"], "action": ["type": "block"]])
+            }
+        }
+        rules.append(["trigger": ["url-filter": "^http://127\\.0\\.0\\.1:\(baseURL.port ?? 4545)/"], "action": ["type": "ignore-previous-rules"]])
+        guard let data = try? JSONSerialization.data(withJSONObject: rules), let json = String(data: data, encoding: .utf8) else { return }
+        WKContentRuleListStore.default().compileContentRuleList(forIdentifier: "HubLoopback", encodedContentRuleList: json) { list, _ in
+            guard let list = list else { self.showError("画面を開けません", "<p>接続先の制限を準備できませんでした。</p>"); return }
+            self.web.configuration.userContentController.add(list); completion()
+        }
+    }
+    func loadOwned(_ request: URLRequest, instance: String? = nil) {
+        guard let instance = instance else { web.load(request); return } // Navigation delegate proves identity first.
+        guard let token = localOwner.capability else { return }
+        var request = request
+        request.setValue(token, forHTTPHeaderField: "X-Hub-Token")
+        guard let cookie = localOwner.cookie(instance: instance) else { return }
+        web.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { self.web.load(request) }
+    }
+    func verifyNavigation(_ request: URLRequest, completion: @escaping (WKNavigationActionPolicy) -> Void) {
+        DispatchQueue.global().async {
+            let instance = localOwner.identity()
+            DispatchQueue.main.async {
+                guard let instance = instance else { completion(.cancel); return }
+                if let nonce = request.value(forHTTPHeaderField: "X-Hub-Navigation"), nonce == self.navigationChallenge {
+                    completion(.allow); return
+                }
+                completion(.cancel)
+                var checked = request
+                let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+                checked.setValue(nonce, forHTTPHeaderField: "X-Hub-Navigation"); checked.cachePolicy = .reloadIgnoringLocalCacheData
+                self.navigationChallenge = nonce
+                self.responseInstance = nil
+                let load = { self.loadOwned(checked, instance: instance) }
+                if self.pageInstance != instance {
+                    self.pageInstance = nil
+                    self.web.configuration.websiteDataStore.removeData(ofTypes: [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache], modifiedSince: .distantPast, completionHandler: load)
+                } else { load() }
+            }
+        }
+    }
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        guard response.isForMainFrame, let r = response.response as? HTTPURLResponse else { decisionHandler(.allow); return }
+        guard let nonce = navigationChallenge, let instance = r.value(forHTTPHeaderField: "X-Hub-Instance"),
+              let proof = r.value(forHTTPHeaderField: "X-Hub-Proof"), localOwner.matches(challenge: nonce, instance: instance, proof: proof) else { self.pageInstance = nil; self.responseInstance = nil; decisionHandler(.cancel); return }
+        responseInstance = instance; navigationChallenge = nil; decisionHandler(.allow)
+    }
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) { if let instance = responseInstance { pageInstance = instance }; responseInstance = nil }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { responseInstance = nil }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { responseInstance = nil }
+
     // 外のサイトへのリンクは通常のブラウザで開く
     func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         // 画面の設定から：hubapp://access（確かめる）／ hubapp://access?reset=1（確認をもう一度出す）
         if let u = a.request.url, u.scheme == "hubapp" {
-            if u.host == "access" { askAccess(reset: (u.query ?? "").contains("reset=1")) }
-            if u.host == "reveal" { revealFromPage(u) }
+            // Hub 本体（最上位の画面）からの依頼だけ受ける。PDF などを表示した iframe や、別の場所の画面からは何もしない
+            let source = a.sourceFrame
+            guard source.isMainFrame, a.targetFrame?.isMainFrame == true,
+                  source.securityOrigin.protocol == baseURL.scheme, source.securityOrigin.host == baseURL.host,
+                  source.securityOrigin.port == baseURL.port else {
+                log("Hub 本体以外からの hubapp の依頼を断りました（\(u.host ?? "")）")
+                decisionHandler(.cancel); return
+            }
+            let loaded = pageInstance
+            DispatchQueue.global().async {
+                let instance = localOwner.identity()
+                DispatchQueue.main.async {
+                    guard let loaded = loaded, instance == loaded, self.pageInstance == loaded else { return }
+                    if u.host == "access" { self.askAccess(reset: (u.query ?? "").contains("reset=1")) }
+                    if u.host == "reveal" { self.revealFromPage(u) }
+                }
+            }
             decisionHandler(.cancel); return
+        }
+        if let u = a.request.url, ["127.0.0.1", "localhost", "::1", "[::1]"].contains(u.host ?? ""),
+           u.scheme != baseURL.scheme || u.host != baseURL.host || u.port != baseURL.port {
+            decisionHandler(.cancel); return
+        }
+        if let u = a.request.url, a.targetFrame?.isMainFrame == true, let current = w.url,
+           pageInstance != nil, (a.request.httpMethod ?? "GET") == "GET", u.fragment != nil,
+           (u.fragment != current.fragment || a.navigationType == .linkActivated),
+           var to = URLComponents(url: u, resolvingAgainstBaseURL: false), var from = URLComponents(url: current, resolvingAgainstBaseURL: false) {
+            to.fragment = nil; from.fragment = nil
+            if to == from { decisionHandler(.allow); return }
         }
         if let u = a.request.url, let host = u.host, host != "127.0.0.1", host != "localhost",
            let scheme = u.scheme, scheme.hasPrefix("http") {
             NSWorkspace.shared.open(u); decisionHandler(.cancel); return
+        }
+        if let u = a.request.url, a.targetFrame?.isMainFrame == true, u.scheme == baseURL.scheme, u.host == baseURL.host, u.port == baseURL.port {
+            verifyNavigation(a.request, completion: decisionHandler); return
         }
         decisionHandler(.allow)
     }

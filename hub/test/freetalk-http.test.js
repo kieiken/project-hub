@@ -4,7 +4,7 @@ process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const { Store } = require('../lib/store'), chat = require('../lib/chat');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(),'hub-freetalk-http-'));
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'hub-freetalk-http-')));
 const root = path.join(tmp,'root'), home = path.join(tmp,'home'), bin = path.join(tmp,'bin');
 fs.mkdirSync(bin); fs.mkdirSync(path.join(root,'_hub'),{recursive:true});
 fs.copyFileSync(path.join(__dirname,'../../docs/project-hub/templates/_hub/roles.yaml'),path.join(root,'_hub/roles.yaml'));
@@ -270,4 +270,86 @@ test('生成画像は終了行に保存し、freetalkでもMacと認証済みス
   assert.equal(remote.status,200);assert.equal((await remote.json()).remote,true);
   const response=await fetch(url,{headers:auth});assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/png');
   assert.deepEqual(Buffer.from(await response.arrayBuffer()),fs.readFileSync(file));
+});
+
+test('Muse in freetalk: browser send/read isolate topics and fence stale, busy and migrated conversations',async t=>{
+  const {MuseSettings}=require('../lib/muse-settings'),crypto=require('node:crypto');
+  let sends=0,reads=0,finish;
+  // Only the external helper is substituted; HTTP guards, workspace validation,
+  // durable send/read journals, conversation persistence and busy gates are real.
+  t.mock.method(MuseSettings.prototype,'folder',()=>'/synthetic/unused-bundle');
+  t.mock.method(MuseSettings.prototype,'directChat',async(project,task,file)=>{
+    sends++;const e=JSON.parse(fs.readFileSync(file));
+    assert.equal(e.project,'freetalk');assert.equal(e.task,task);
+    assert.equal(e.request.question,'Only this visible question');
+    assert.deepEqual(Object.keys(e.request).sort(),['expires_at','materials','question','request_key']);
+    assert.deepEqual(e.request.materials,[]);
+    return new Promise(r=>finish=()=>r({status:'sent',discussion_id:'discussion-'+task,exchange_id:'exchange-'+task}));
+  });
+  t.mock.method(MuseSettings.prototype,'directRead',async(project,task,file)=>{
+    reads++;const e=JSON.parse(fs.readFileSync(file));assert.equal(e.request.discussion_id,'discussion-'+task);
+    return {status:'received',text:'External reply for '+task,discussion_id:'discussion-'+task,exchange_id:'exchange-'+task};
+  });
+  const c=await(await post('/api/freetalk/topic')).json(),d=await(await post('/api/freetalk/topic')).json();
+  chat.append(pdir,d.id,{role:'user',text:'Other topic must stay private'});
+  const other=fs.readFileSync(chat.files(pdir,d.id).log);
+  const headers={'X-Hub':'1',Origin:base};
+  const body={project:'freetalk',task:c.id,id:'direct_'+crypto.randomUUID(),generation:1,question:'Only this visible question',materials:[]};
+  assert.equal((await post('/api/muse/chat',body)).status,403,'browser origin is required');
+  for(const generation of [undefined,0,2])assert.equal((await post('/api/muse/chat',{...body,generation},headers)).status,409);
+  assert.equal(sends,0);
+  const inFlight=post('/api/muse/chat',body,headers);await wait(()=>sends===1);
+  assert.match((await(await fetch(base+'/api/freetalk/status?project=freetalk&task='+c.id)).json()).reason,/作業中/);
+  const duplicate=await post('/api/muse/chat',{...body,id:'direct_'+crypto.randomUUID()},headers);
+  assert.equal(duplicate.status,409);assert.equal(sends,1);
+  const stopRead=await post('/api/muse/read',{project:'freetalk',task:c.id,id:'read_'+crypto.randomUUID(),sourceId:body.id,generation:1},headers);
+  assert.equal(stopRead.status,409);assert.equal(reads,0);
+  finish();assert.equal((await(await inFlight).json()).state,'sent');
+  const pending=await(await fetch(base+'/api/muse/chat?project=freetalk&task='+c.id,{headers:{'X-Hub':'1'}})).json();
+  assert.equal(pending.pending.id,body.id);assert.equal(pending.pending.state,'sent');
+  const read={project:'freetalk',task:c.id,id:'read_'+crypto.randomUUID(),sourceId:body.id,generation:1};
+  assert.equal((await post('/api/muse/read',{...read,generation:2},headers)).status,409);assert.equal(reads,0);
+  assert.equal((await(await post('/api/muse/read',read,headers)).json()).state,'received');
+  assert.equal(reads,1);assert.equal(sends,1);
+  assert.equal((await(await post('/api/muse/read',read,headers)).json()).state,'received');assert.equal(reads,1);
+  assert.deepEqual(chat.read(pdir,c.id).map(r=>[r.role,r.ai]),[['user','muse'],['event','muse'],['assistant','muse']]);
+  assert.match(chat.contextPacket(chat.read(pdir,c.id)),/external_muse_reference/);
+  assert.deepEqual(fs.readFileSync(chat.files(pdir,d.id).log),other);
+  assert.equal((await(await fetch(base+'/api/muse/chat?project=freetalk&task='+d.id,{headers:{'X-Hub':'1'}})).json()).pending,null);
+  // A migrated topic remains read-only, including Muse direct operations.
+  const history=path.join(pdir,'.ai/freetalk',c.id+'.json');fs.mkdirSync(path.dirname(history),{recursive:true});
+  fs.writeFileSync(history,JSON.stringify({generation:1,migrated:{project:'Synthetic'}}));
+  assert.equal((await post('/api/muse/chat',{...body,id:'direct_'+crypto.randomUUID()},headers)).status,409);
+  assert.equal(sends,1);
+});
+
+test('Muse in freetalk: exchange limit stays unblocked and follow-up recovery never resends',async t=>{
+  const {MuseSettings}=require('../lib/muse-settings'),crypto=require('node:crypto');
+  let sends=0,checks=0;
+  t.mock.method(MuseSettings.prototype,'folder',()=>'/synthetic/unused-bundle');
+  t.mock.method(MuseSettings.prototype,'directChat',async()=>{
+    sends++;
+    if(sends===1)return {status:'not-sent',diagnostic:{code:'exchange_limit',phase:'send_prepare',open_confirmed:true}};
+    return {status:'unknown',diagnostic:{code:'send_uncertain',phase:'send',open_confirmed:true}};
+  });
+  t.mock.method(MuseSettings.prototype,'directInspect',async(project,task,file)=>{
+    checks++;const e=JSON.parse(fs.readFileSync(file)),raw=fs.readFileSync(path.join(pdir,'.ai/muse-approvals/.decisions',task,e.id+'.json')),d=JSON.parse(raw);
+    return {status:'not-sent',scope:'follow-up-none',open_confirmed:true,project,task,id:e.id,discussion_id:'existing-discussion',
+      requestSHA:d.requestSHA,decisionSHA:crypto.createHash('sha256').update(raw).digest('hex'),markerSHA:'a'.repeat(64),digest:d.digest};
+  });
+  const topic=await(await post('/api/freetalk/topic')).json(),headers={'X-Hub':'1',Origin:base};
+  const body={project:'freetalk',task:topic.id,id:'direct_'+crypto.randomUUID(),generation:1,question:'Synthetic question',materials:[]};
+  const limited=await(await post('/api/muse/chat',body,headers)).json();
+  assert.equal(limited.state,'not-sent');assert.match(limited.notice,/今回の質問は送っていません/);
+  const pending=async()=> (await(await fetch(base+'/api/muse/chat?project=freetalk&task='+topic.id,{headers:{'X-Hub':'1'}})).json()).pending;
+  assert.equal(await pending(),null);
+  const next={...body,id:'direct_'+crypto.randomUUID()};
+  assert.equal((await(await post('/api/muse/chat',next,headers)).json()).state,'unknown');assert.equal(sends,2);
+  const reconcile={project:'freetalk',task:topic.id,id:next.id,generation:1};
+  assert.equal((await post('/api/muse/reconcile',reconcile)).status,403);assert.equal(checks,1);
+  const result=await(await post('/api/muse/reconcile',reconcile,headers)).json();
+  assert.equal(result.state,'not-sent');assert.match(result.notice,/題名としても届いていません/);
+  assert.equal(await pending(),null);assert.equal(sends,2);assert.equal(checks,2);
+  assert.equal((await(await post('/api/muse/reconcile',reconcile,headers)).json()).notice,result.notice);
+  assert.equal(checks,2);assert.equal(sends,2);
 });

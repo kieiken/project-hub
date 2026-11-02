@@ -15,6 +15,7 @@ function fixture(modern=false){
   record.auto.scope=record.items.map(({project,task,source,files,results,taskHash,review,disposition})=>({project,task,source,files,results,taskHash,review,disposition}));
   let dirty=false,merged=true,pending=false,sends=0,receipts=0;
   const integrate={dir:integrationDir,tokens:new Map(),read:()=>structuredClone(record),save:r=>{record=structuredClone(r);},pending:()=>[{project:'p',task:'parent'}],store:{readProject:()=>({id:'p',dir:'fixture'})},ancestor:()=>({t:{},target:'copy',p:{id:'p',dir:'fixture'}}),resumePreview:()=>({blockers:[]}),resumeRecord:b=>{assert.equal(b.token,'fresh');const r=structuredClone(record);r.auto.stopHistory=[r.auto.stopped];delete r.auto.stopped;return r;},gitw:{inspect:()=>({head:saved,status:dirty?'dirty':''}),merging:()=>false,isAncestor:(dir,h,descendant)=>[before,source,saved].includes(h)&&!(h===source&&!merged)},run:r=>{receipts++;r.items[0].state='保持受領済み';r.complete=true;integrate.save(r);}};
+  integrate.file=(p,t)=>path.join(integrationDir,p+'-'+t+'.json');integrate.records=()=>[integrate.read()];integrate.store.listProjects=()=>[];
   const auto=new IntegrateAuto({integrate,dispatch:async()=>{sends++;return{delivery:{state:'accepted'}};},mergeMain:()=>assert.fail('旧本体intentを再送しない')});
   auto.savedCompletion=(r,key,phase)=>phase==='code'?row:undefined;auto.pendingRequest=()=>pending;
   auto.questionResolution=(r,key,a,old)=>q.resolution(rows,{k:key,a,row:old});

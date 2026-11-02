@@ -5,7 +5,8 @@ const order = require('../public/model-order');
 const special = require('../public/special-mode');
 const launch = require('./launch'), { EFFORTS } = require('./roles');
 const INITIAL_PICK = { ai: 'codex', model: 'GPT-6.1-Sol', effort: '高' };
-const validPhoneKey = key => key === 'chatgpt|auto' || order.valid([key]);
+const externalPhoneKey = key => key === 'chatgpt|auto' || key === 'muse|direct';
+const validPhoneKey = key => externalPhoneKey(key) || order.valid([key]);
 const validPhoneName = name => typeof name === 'string' && name.length <= 24 && !/[\u0000-\u001f\u007f\u2028\u2029]/.test(name);
 class ModelView {
   constructor(file) { this.file = file; }
@@ -24,7 +25,7 @@ class ModelView {
   phone(data = this.read()) {
     const p = data.phone;
     if (!p || !['short', 'full'].includes(p.labels) || !p.names || typeof p.names !== 'object' || Array.isArray(p.names)) return { labels: 'short', names: {} };
-    const names = Object.fromEntries(Object.entries(p.names).filter(([key, name]) => validPhoneKey(key) && validPhoneName(name) && name.trim()).slice(0, 501).map(([key, name]) => [key, name.trim()]));
+    const names = Object.fromEntries(Object.entries(p.names).filter(([key, name]) => validPhoneKey(key) && validPhoneName(name) && name.trim()).slice(0, 502).map(([key, name]) => [key, name.trim()]));
     return { labels: p.labels, names };
   }
   setPhone(spec, models) {
@@ -32,7 +33,7 @@ class ModelView {
     const keys = Object.keys(spec);
     const mode = keys.length === 1 && keys[0] === 'labels' && ['short', 'full'].includes(spec.labels);
     const name = keys.length === 2 && keys.includes('key') && keys.includes('name') && validPhoneKey(spec.key) && validPhoneName(spec.name)
-      && (spec.key === 'chatgpt|auto' || order.ordered(models).includes(spec.key));
+      && (externalPhoneKey(spec.key) || order.ordered(models).includes(spec.key));
     if (!mode && !name) return { status: 400, error: lt('名前は一覧のモデルを指定し、24字以内・改行なしで入力してください') };
     const data = this.read(true), phone = this.phone(data);
     if (mode) phone.labels = spec.labels;

@@ -23,7 +23,7 @@ function guidance(p, t, { where = 'chat', copy = false, copyMissing = false, mer
     where === 'terminal' ? lt('人はターミナルか別の画面を見ている可能性がある。作業画面を開いているとは断定しない。') : lt('この作業の会話画面なら、以下の作業操作はその画面の上部でできる。'),
   ];
   if (t.question && t.state !== '完了') lines.push(lt('作業の完了：質問への返事が先。完了の操作はまだ出ない。まず質問に答える。'));
-  else if (t.resultsPending) lines.push(t.resultsPending.auto === 'running' ? lt('作業の完了：AIが成果の記録を整えています。整ってから完了確認が出ます。') : lt('作業の完了：成果の記録が整っていません。上部の帯の［成果の整理を頼む］でAIへ依頼できます。'));
+  else if (t.resultsPending) lines.push(t.resultsPending.code === 'checking' ? lt('作業の完了：成果を確認中です。確認が終わるまで完了の承認や成果整理の依頼はできません。') : t.resultsPending.auto === 'running' ? lt('作業の完了：AIが成果の記録を整えています。整ってから完了確認が出ます。') : lt('作業の完了：成果の記録に確認が必要です。質問への返事待ちではありません。AIと順番待ちの終了後、作業画面の［完了・成果の確認］に［成果の整理を頼む］が出ていればAIへ依頼できます。'));
   else if (t.completionPending) lines.push(lt('作業の完了：作業画面の上部に黄色い帯「AI が手順をすべて済にしました。完了に移しますか？」と［完了に移す］［まだ続ける］がある。作業一覧の行の下、［あなたの番］の［完了］にも同じ操作がある。'));
   else if (t.state === '完了') lines.push(lt('作業の完了：完了済み。続ける時は作業画面の上部に［再開する］がある。'));
   else lines.push(lt('作業の完了：作業画面の上部に［完了に移す］がある（今は確認の黄色い帯なし）。'));

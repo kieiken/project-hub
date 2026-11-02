@@ -5,7 +5,7 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
 const chat = require('../lib/chat');
 const { Store } = require('../lib/store');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-answer-sync-'));
+const tmp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-answer-sync-'));
 const root = path.join(tmp,'workspace'), dir = path.join(root,'Product','回答の見本'), bin = path.join(tmp,'bin');
 let server, base;
 const store = new Store(root);
@@ -54,7 +54,7 @@ test('送信時と異なる新しい質問は成功時にも消さない',async(
 });
 test('起動待ちの間に更新された新質問を上書きしない',async()=>{
  reset();const original=chat.ChatRunner.prototype.send;
- chat.ChatRunner.prototype.send=function(o){const r=original.call(this,o);return {...r,started:r.started.then(ok=>{fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace(question,'起動待ち中の新質問'));return ok;})};};
+ chat.ChatRunner.prototype.send=async function(o){const r=await original.call(this,o);return {...r,started:r.started.then(ok=>{fs.writeFileSync(file,fs.readFileSync(file,'utf8').replace(question,'起動待ち中の新質問'));return ok;})};};
  try{const res=await send({});assert.equal(res.status,200);assert.equal((await res.json()).answeredQuestion,null);assert.equal(read().question,'起動待ち中の新質問');assert.equal(read().state,'返事待ち');}finally{chat.ChatRunner.prototype.send=original;}
 });
 test('順番待ちでも受付時に解除し、既存の指示順を保持する',async()=>{
@@ -68,6 +68,53 @@ test('送らずに消す操作は会話とAI起動を増やさない',async()=>{
  const state=await (await fetch(base+'/api/state',{headers:{Connection:'close'}})).json();assert.equal(state.chatting.length,0);
 });
 
+const savedQuestion=()=>chat.append(dir,key.task,{role:'assistant',text:'説明',asks:[{question:'下書きを残しますか？',options:['残す（おすすめ：公開しません）','待つ'],multi:false}]});
+test('restored question: recovery failure refuses an answer without sending, queuing or marking it answered',async t=>{
+ reset();const q=savedQuestion(),answerSource=require('../lib/pending-question').source(q),before=chat.read(dir,key.task),taskBefore=fs.readFileSync(file);
+ t.mock.method(require('../lib/task-history').TaskHistory.prototype,'pendingQuestion',()=>{throw Error('fixture archive unavailable');});
+ const res=await send({text:'残す',answerSource});assert.equal(res.status,409);const body=await res.json();assert.equal(body.delivery,'not-sent');assert.match(body.error,/質問が変わりました/);
+ assert.deepEqual(chat.read(dir,key.task),before);assert.deepEqual(fs.readFileSync(file),taskBefore);
+ const runner=require('../server').chats;assert.equal(runner.busy(key.project,key.task),null);assert.deepEqual(runner.queue(key.project,key.task),[]);
+ const record=fs.readFileSync(path.join(root,'_hub/log.jsonl'),'utf8').trim().split('\n').map(JSON.parse).findLast(r=>r.action==='question-display-read-error');
+ assert.equal(record.project,key.project);assert.equal(record.task,key.task);assert.equal(record.phase,'answer');assert.equal(record.error,'fixture archive unavailable');
+});
+test('restored question: recovery failure still dismisses task metadata without recording an answer',async t=>{
+ reset();savedQuestion();const before=chat.read(dir,key.task);
+ t.mock.method(require('../lib/task-history').TaskHistory.prototype,'pendingQuestion',()=>{throw Error('fixture archive unavailable');});
+ const res=await post('/api/task',{question:'',state:'実行中',dismissQuestion:true});assert.equal(res.status,200);
+ assert.equal(read().question,'');assert.equal(read().state,'実行中');assert.deepEqual(chat.read(dir,key.task),before);
+ const record=fs.readFileSync(path.join(root,'_hub/log.jsonl'),'utf8').trim().split('\n').map(JSON.parse).findLast(r=>r.action==='question-display-read-error');
+ assert.equal(record.phase,'dismiss');assert.equal(record.error,'fixture archive unavailable');
+});
+test('restored question: accepting a free response records its identity and reload cannot resurrect it',async()=>{
+ reset();const q=savedQuestion(),answerSource=require('../lib/pending-question').source(q);
+ const res=await send({text:'もう少し相談したい',answerSource});assert.equal(res.status,200);
+ const rows=chat.read(dir,key.task);assert.equal(rows.filter(r=>r.answeredQuestionSource===answerSource).length,1);
+ assert.equal(require('../lib/pending-question').pending(rows),null);
+});
+test('restored question: rejected/stale sends keep the question and never record an answer',async()=>{
+ reset();const q=savedQuestion(),answerSource=require('../lib/pending-question').source(q);
+ assert.equal((await send({text:'自由回答',answerSource,model:'unknown-model'})).status,409);
+ assert.equal(chat.read(dir,key.task).some(r=>r.answeredQuestionSource===answerSource),false);
+ const newer=savedQuestion();assert.notEqual(require('../lib/pending-question').source(newer),answerSource);
+ assert.equal((await send({text:'古い回答',answerSource})).status,409);
+ assert.ok(require('../lib/pending-question').pending(chat.read(dir,key.task)));
+});
+test('restored question: accepted queue answers close only their own question, before the queued AI starts',async()=>{
+ reset();assert.equal((await send({text:'別の作業中'})).status,200);
+ const q=savedQuestion(),answerSource=require('../lib/pending-question').source(q);
+ const body=await (await send({mode:'queue',text:'条件つきで残す',answerSource})).json();assert.equal(body.queued,true);
+ assert.equal(require('../lib/pending-question').pending(chat.read(dir,key.task)),null);
+ savedQuestion();assert.ok(require('../lib/pending-question').pending(chat.read(dir,key.task)));
+});
+test('restored question: dismissing it sends nothing and persists the display resolution',async()=>{
+ reset();const q=savedQuestion(),answerSource=require('../lib/pending-question').source(q),before=chat.read(dir,key.task);
+ const res=await post('/api/task',{question:'',state:'実行中',dismissQuestion:true,memo:'人が質問を AI に送らずに消した'});assert.equal(res.status,200);
+ const after=chat.read(dir,key.task);assert.equal(after.filter(r=>r.role==='user').length,before.filter(r=>r.role==='user').length);
+ assert.equal(after.at(-1).answeredQuestionSource,answerSource);assert.equal(require('../lib/pending-question').pending(after),null);
+ const state=await (await fetch(base+'/api/state',{headers:{Connection:'close'}})).json();assert.equal(state.chatting.length,0);
+});
+
 // 下書きなどのDOMを保持したまま上部だけ同期する。新質問・別作業・古い取得を区別する。
 const app=require('./fixtures/app-source.cjs').readApp();
 const helper=app.slice(app.indexOf('let sendWorkAnswer = null;'),app.indexOf('\nfunction syncChatHandoff()'));
@@ -75,10 +122,10 @@ function ui() {
  const t={id:'answer',question,state:'返事待ち'},p={id:'p',tasks:[t]},slot={dataset:{question},innerHTML:'question'},badge={className:'pill',textContent:'返事待ち'},select={value:'返事待ち'},msgs={scrollTop:173};
  const retained={draft:'書きかけ',image:'見本画像',model:'GPT-6.1-Sol',effort:'極高'};
  const input={disabled:false},upper={querySelectorAll:()=>[input]},ask={dataset:{askKey:'old'},classList:{add:()=>{ask.done=true}},querySelector:()=>status},status={textContent:''};
- const c={UI:require('./ui-locale-fixture')(),view:{kind:'work',project:'p',task:'answer'},proj:()=>p,taskOf:()=>t,esc:x=>x,richText:x=>x,chatSending:new Set(),chatAttachmentKey:()=> 'p/answer',document:{addEventListener:()=>{},querySelector:()=>null,querySelectorAll:()=>[ask]},updateAskControls:()=>{},refreshAsks:()=>{},askDrafts:new Map([['old','選択A']]),window:{HubMobile:{badges:()=>{c.badges++}}},stateLoadEpoch:0,badges:0,loads:0,tree:0,counts:0,toast:()=>{},updateTurnCounts:()=>{c.counts++},renderTree:()=>{c.tree++},load:async()=>{c.loads++},$:s=>({'#work-question':slot,'#msgs':msgs,'.whead .pill':badge,'.wfoot [data-act="state"]':select,'#ask-form':upper}[s])};vm.createContext(c);vm.runInContext(helper,c);return {c,t,p,slot,badge,select,msgs,retained,ask,status,input};
+ const c={UI:require('./ui-locale-fixture')(),syncWorkProgress:()=>{c.progressSynced++},progressSynced:0,view:{kind:'work',project:'p',task:'answer'},proj:()=>p,taskOf:()=>t,esc:x=>x,richText:x=>x,chatSending:new Set(),chatAttachmentKey:()=> 'p/answer',document:{addEventListener:()=>{},querySelector:()=>null,querySelectorAll:()=>[ask]},updateAskControls:()=>{},refreshAsks:()=>{},askDrafts:new Map([['old','選択A']]),window:{HubMobile:{badges:()=>{c.badges++}}},stateLoadEpoch:0,badges:0,loads:0,tree:0,counts:0,toast:()=>{},updateTurnCounts:()=>{c.counts++},renderTree:()=>{c.tree++},load:async()=>{c.loads++},$:s=>({'#work-question':slot,'#msgs':msgs,'.whead .pill':badge,'.wfoot [data-act="state"]':select,'#ask-form':upper}[s])};vm.createContext(c);vm.runInContext(helper,c);return {c,t,p,slot,badge,select,msgs,retained,ask,status,input};
 }
 test('受付成功で上部と件数を即時更新し、下書きと読書位置は保持する',async()=>{
- const f=ui();await f.c.acceptedWorkAnswer(f.p,f.t,question,{answeredQuestion:question},'old');assert.equal(f.slot.innerHTML,'');assert.equal(f.badge.textContent,'実行中');assert.equal(f.select.value,'実行中');assert.equal(f.c.counts,1);assert.equal(f.c.badges,1);assert.equal(f.c.loads,1);assert.equal(f.c.stateLoadEpoch,1);assert.equal(f.msgs.scrollTop,173);assert.equal(f.ask.done,true);assert.deepEqual(f.retained,{draft:'書きかけ',image:'見本画像',model:'GPT-6.1-Sol',effort:'極高'});
+ const f=ui();await f.c.acceptedWorkAnswer(f.p,f.t,question,{answeredQuestion:question},'old');assert.equal(f.slot.innerHTML,'');assert.equal(f.c.progressSynced,1);assert.equal(f.badge.textContent,'実行中');assert.equal(f.select.value,'実行中');assert.equal(f.c.counts,1);assert.equal(f.c.badges,1);assert.equal(f.c.loads,1);assert.equal(f.c.stateLoadEpoch,1);assert.equal(f.msgs.scrollTop,173);assert.equal(f.ask.done,true);assert.deepEqual(f.retained,{draft:'書きかけ',image:'見本画像',model:'GPT-6.1-Sol',effort:'極高'});
 });
 test('上部と下部が同時に送信できず、失敗後は再操作できる',()=>{
  const f=ui();f.c.chatSending.add('p/answer');f.c.updateWorkAnswerControls();assert.equal(f.input.disabled,true);f.c.chatSending.delete('p/answer');f.c.updateWorkAnswerControls();assert.equal(f.input.disabled,false);assert.equal(f.t.question,question);

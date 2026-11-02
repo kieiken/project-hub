@@ -6,6 +6,11 @@ function once(s,a,b){assert.equal(s.split(a).length,2,'release_source_boundary_c
 function common(s){return s.replaceAll('../staging-app/runtime.cjs','./core.cjs').replaceAll('../staging-app/protocol.cjs','./protocol.cjs').replaceAll('purchase-test-app/','release-app/').replaceAll('purchase-test-manifest.json','release-manifest.json').replaceAll('public-purchase-test','public-release').replaceAll('TrialUpdate','ReleaseUpdate').replaceAll('purchase-runtime-v1','release-runtime-v1').replaceAll('試験登録','利用コードの登録').replaceAll('試験用の発行先','利用権の発行先').replaceAll('購入試験版は作業','Project Hubは作業').replaceAll('購入試験版を起動','Project Hubを起動');}
 function runtime(s){
   s=common(s);
+  s=once(s,"  Object.assign(process.env, launch);",`  // Keep owner capabilities beneath the already verified management root.
+  // AppData ancestors may grant replacement rights to other Windows accounts.
+  if (process.platform === 'win32') process.env.HUB_AUTH_DIR = path.join(root, '_hub', 'run');
+  Object.assign(process.env, launch);`);
+  s=once(s,"} catch(e) {req.resume();send(res,409,{error:require('./workspace.cjs').errorMessage(e)});}","} catch(e) {req.resume();send(res,409,{error:e.code==='folder_picker_unavailable'?'フォルダー選択画面を開けませんでした。保存先は変更していません。フォルダーの場所を入力して内容を確認することもできます。':require('./workspace.cjs').errorMessage(e)});}");
   const start=s.indexOf('function workspaceFor('),end=s.indexOf('function prepareWindowsWorkspace(');
   assert.ok(start>0&&end>start);
   s=s.slice(0,start)+`function workspaceFor(home,platform=process.platform) {
@@ -83,6 +88,7 @@ const assert=require('node:assert/strict'),policy=require('../lib/license/policy
 function supported(platform=process.platform,arch=process.arch,node=process.versions.node){const [a,b]=node.split('.').map(Number);assert.ok((platform==='darwin'&&arch==='arm64'||platform==='win32'&&arch==='x64')&&(a>22||a===22&&b>=13),'release_platform');}
 function configFor(platform){assert.ok(['darwin','win32'].includes(platform));const config=policy.forPlatform(platform);return {...config,build:{...config.build,buildId:'project-hub-${version}-'+(platform==='darwin'?'mac-arm64':'windows-x64')}};}
 module.exports={supported,configFor};\n`;}
-function trust(){return `'use strict';\nconst stable=require('../lib/update-trust');\nmodule.exports=Object.freeze({...stable,runtimeProtocol:1,feedUrl:'https://github.com/kieiken/project-hub/releases/latest/download/project-hub-runtime-update.json',windowsFeedUrl:'https://github.com/kieiken/project-hub/releases/latest/download/project-hub-runtime-update-windows.json'});\n`;}
+function trust(){return require('node:fs').readFileSync(require('node:path').join(__dirname,'update-trust.cjs'),'utf8');}
+function select(s){return once(common(s),'...api.selectLaunch(',"...require('./mac-bootstrap.cjs').selectLaunch(api,");}
 function launch(s){s=common(s);s=once(s,"const window = require('../lib/platform/win32-window');","const window = require('./windows-window.cjs');");return once(s,'const handle = window.create();',"const handle = window.create({base,publisherThumbprint:''});");}
-module.exports={once,common,runtime,license,workspace,update,core,protocol,trust,launch};
+module.exports={once,common,runtime,license,workspace,update,core,protocol,trust,select,launch};

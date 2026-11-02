@@ -8,14 +8,14 @@ test('settled queue callbacks read current private services and deferred result 
  const events=[];let discussion,review,integrate={settled:()=>events.push('settled-old')},results;
  class Runner{constructor(config){this.config=config;}}
  const engine=queue({ROOT:'/fixture',path,chat:{ChatRunner:Runner},discussionRuntime:{isRequest:r=>r==='discussion'},roleReviewRuntime:{isRequest:r=>r==='review'},getDiscussion:()=>discussion,getRoleReview:()=>review,getIntegrateAuto:()=>integrate,getResultsGate:()=>results,
-  stopControl:{held:()=>false,assert:()=>events.push('stop')},getChats:()=>({assertHandoffReady:()=>events.push('saved')}),record:()=>assert.fail('unexpected error')});
+  stopControl:{held:()=>false,assert:()=>events.push('stop')},getChats:()=>({assertHandoffReadyAsync:async()=>events.push('saved')}),record:()=>assert.fail('unexpected error')});
  const hooks=engine.createChatRunner().config;
  discussion={settled:async()=>events.push('discussion-one')};await hooks.onSettled({request:'discussion'},{});
  discussion={settled:async()=>events.push('discussion-two')};await hooks.onSettled({request:'discussion'},{});
  review={settled:async()=>events.push('review')};await hooks.onSettled({request:'review'},{});
  await hooks.onSettled({project:'p',task:'t'},{});
  integrate={tick:()=>events.push('tick-new')};results={trigger:async()=>events.push('results-new')};
- await immediate();assert.deepEqual(events,['discussion-one','discussion-two','review','settled-old','stop','saved','tick-new','results-new']);
+ await immediate();assert.deepEqual(events,['discussion-one','discussion-two','review','settled-old','stop','saved','stop','tick-new','results-new']);
 });
 
 test('post-webchat dispatch leaves held/error/limit queues untouched and saves one failed launch without retry',async()=>{

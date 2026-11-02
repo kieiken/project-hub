@@ -7,6 +7,7 @@ const { lt } = require('./locale');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { WIN } = require('./launch');
 const { expandHome } = require('./store');
 const { resolveWorkspace, WorkspaceSandbox } = require('./workspace-sandbox');
 

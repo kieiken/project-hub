@@ -41,3 +41,5 @@ test('R5旧入口: 完了後の新規rotateは拒否し、確定済み同IDの�
 });
 
 test('旧六欄入口は新規送信を拒否し原文と世代を変更しない',t=>{const f=fixture(t),before=fs.readFileSync(f.file),log=chat.read(f.dir,f.task.id);assert.throws(()=>f.history.rotate('Fixture',f.task.id,f.input()),/新しい/);assert.deepEqual(fs.readFileSync(f.file),before);assert.deepEqual(chat.read(f.dir,f.task.id),log);assert.equal(f.history.state('Fixture',f.task.id).generation,1);});
+
+test('display status forwards a read context, while mutation preparation rechecks live busy state', t=>{const f=fixture(t),calls=[],snapshot={bodyPreview:{key:'observed',pending:[]}};let blocked=false;f.history.busy=(p,task,context)=>{calls.push(context);return blocked?'changed live state':'';};assert.equal(f.history.status('Fixture',f.task.id,snapshot).reason,'');assert.equal(calls.at(-1),snapshot);blocked=true;assert.throws(()=>f.history.prepareSummary('Fixture',f.task.id),/changed live state/);assert.equal(calls.at(-1),undefined);});

@@ -1,11 +1,12 @@
 'use strict';
-// A sent organizer stopped by a human is neither not-sent nor received.
+// An organizer stopped by a human or declaration validation is not received.
 // This explicit terminal preserves its original record and all delivery facts.
 const fs=require('node:fs'),path=require('node:path'),{createHash}=require('node:crypto');
 const {noLinks,exists}=require('./remove'),continuation=require('./task-continuation'),{lt}=require('./locale');
 const hash=x=>createHash('sha256').update(x).digest('hex'),json=x=>JSON.stringify(x),fail=()=>{throw Error(lt('中止の証拠を確認できません。再送せず最新の記録を確認してください'));};
 const recovery=require('./integration-abandon-recovery');
-const marker=x=>String(x?.limitSwitch?.original||x?.text||'').replace(/^【(?:渡した依頼|已交接的要求)：[^\n]*】\n/,'').match(/^\[integration-auto:([a-f0-9]{64}):(organize|order|code|review)\]/);
+const delegationText=require('./delegation-text');
+const marker=x=>delegationText.unwrap(x?.limitSwitch?.original||x?.text).match(/^\[integration-auto:([a-f0-9]{64}):(organize|order|code|review)\]/);
 const matches=(x,k,request)=>x?.integrationAuto?.key===k||marker(x)?.[1]===k||Boolean(request&&(x?.request===request||x?.requestKey===request||x?.limitSwitch?.sourceRequest===request));
 class IntegrationAbandon {
   constructor({integrate,auto,chats,logFile}){Object.assign(this,{integrate,auto,chats,logFile});}
@@ -90,12 +91,25 @@ class IntegrationAbandon {
       const u=unique(users),e=unique(ends);if(u.length!==1||e.length!==1)fail();
       const end=e[0],row=end.row,m=row.integrationAuto;
       if(!m||m.key!==k||row.asks?.length||m.limit)fail();
+      const recovery=require('./integration-organize-recovery');
+      if(a.phase==='superseded'&&a.organizeFailure){
+        if(u[0].row.text!==a.request.text&&u[0].row.text!==lt`【渡した依頼：${a.request.title}】\n${a.request.text}`)fail();
+        recovery.history(r,k,a,row);proof.attempts[k]={kind:'validation-failed-superseded',user:u[0],end,failure:a.organizeFailure};stopped++;continue;
+      }
+      if(a.phase==='organize'&&m.phase==='organize'&&m.closed===true){
+        const failure=recovery.abandonFailure(h,r,k,a,row);
+        if(u[0].row.text!==a.request.text&&u[0].row.text!==lt`【渡した依頼：${a.request.title}】\n${a.request.text}`)fail();
+        if(this.auto.pendingRequest?.(r,k,'organize')||this.chats.busy(a.project,a.task))fail();
+        const sends=audit.filter(x=>x.row.action==='delegate'&&x.row.project===a.project&&x.row.task===a.task&&x.row.request===request);
+        if(sends.length!==1||audit.some(x=>x.row.action==='delegate'&&matches(x.row,k,request)&&x!==sends[0]))fail();
+        proof.attempts[k]={kind:'validation-failed',user:u[0],end,send:sends[0],failure};stopped++;continue;
+      }
       if(a.phase==='verified'||a.phase==='superseded'){
         if(row.error||m.closed!==true||!['organize','order','review'].includes(m.phase)||marker(u[0].row)?.[1]!==k)fail();
         if(m.phase==='review'){if(!row.text?.includes(`[integration-review:${k}:pass]`)||!a.savedResults||!this.auto.isolatedCompletion(a,row))fail();this.auto.verifySavedReview(r,a);}
         else {
           const saved=m.saved,p=all.find(p=>p.id===a.project),t=p?.tasks.find(t=>t.id===a.task),dir=m.phase==='order'?r.target:t?.workdir||h.baseOf(p),canonical=require('./resource-scope').canonical;
-          if(!dir||!saved?.dir||canonical(saved.dir)!==canonical(dir)||!/^[a-f0-9]{40}$/.test(saved.head||'')||saved.head!==require('./integration-writes').inspect(h.gitw,dir)?.head||k!==hash(m.phase==='order'?r.id+'\0order':r.id+'\0'+a.project+'\0'+a.task+'\0organize'))fail();
+          if(!dir||!saved?.dir||canonical(saved.dir)!==canonical(dir)||!/^[a-f0-9]{40}$/.test(saved.head||'')||saved.head!==require('./integration-writes').inspect(h.gitw,dir)?.head||(m.phase==='order'?k!==hash(r.id+'\0order'):!recovery.key(r,k,a)))fail();
           if(m.phase==='order'){
             const prefix=`[integration-order:${k}:`,start=String(row.text||'').indexOf(prefix),end=String(row.text||'').indexOf(']]',start);
             if(start<0||end<0||r.auto.order?.state!=='done')fail();
@@ -112,7 +126,7 @@ class IntegrationAbandon {
         }proof.attempts[k]={...proof.attempts[k],kind:'verified',user:u[0],end};continue;
       }
       if(u[0].row.text!==a.request.text&&u[0].row.text!==lt`【渡した依頼：${a.request.title}】\n${a.request.text}`)fail();
-      if(a.phase!=='organize'||m.phase!=='organize'||m.closed===true||row.error!=='止めました'||marker(u[0].row)?.[1]!==k||k!==hash(r.id+'\0'+a.project+'\0'+a.task+'\0organize'))fail();
+      if(a.phase!=='organize'||m.phase!=='organize'||m.closed===true||row.error!=='止めました'||marker(u[0].row)?.[1]!==k||!recovery.key(r,k,a))fail();
       if(this.auto.pendingRequest?.(r,k,'organize')||this.chats.busy(a.project,a.task))fail();
       const sends=audit.filter(x=>x.row.action==='delegate'&&x.row.project===a.project&&x.row.task===a.task&&x.row.request===request);
       const stops=audit.filter(x=>x.row.action==='chatstop'&&x.row.project===a.project&&x.row.task===a.task&&Date.parse(x.row.at)>=Date.parse(u[0].row.at)&&Date.parse(x.row.at)<=Date.parse(row.at));
@@ -131,7 +145,7 @@ class IntegrationAbandon {
   status(project,task){try{
     const residue=recovery.residue(this.integrate,project,task);
     if(residue){if(residue.action)this.inspect(project,task,true);return {allowed:Boolean(residue.action),id:this.integrate.read(project,task).id,message:residue.message,recovery:recovery.publicInfo(residue)};}
-    const {r,proof}=this.inspect(project,task);return {allowed:true,id:r.id,evidence:proof.sha256,items:r.items.map(i=>({title:i.title,project:i.project,task:i.task})),message:lt('未受領の統合を中止し、子作業・会話・コピー・引渡しを残します。本体の保留記録も保持します')};
+    const {r,proof}=this.inspect(project,task);return {allowed:true,stopKind:Object.values(proof.attempts).some(a=>a.kind.startsWith('validation-failed'))?'validation':'human',id:r.id,evidence:proof.sha256,items:r.items.map(i=>({title:i.title,project:i.project,task:i.task})),message:lt('未受領の統合を中止し、子作業・会話・コピー・引渡しを残します。本体の保留記録も保持します')};
   }catch(e){return {allowed:false,message:e.message,waiting:e.waiting};}}
   preview({project,task,recover}){
     const residue=recovery.residue(this.integrate,project,task);

@@ -101,7 +101,7 @@ test('台帳と役割は要求内で一度だけ読み、外部編集は次の�
 
     fs.writeFileSync(projectFile, fs.readFileSync(projectFile, 'utf8').replace('最初のメモ', '書き換えたメモ'));
     const originalRoles = fs.readFileSync(rolesFile, 'utf8');
-    const changedRoles = originalRoles.replace(/(コーディング:\s*\{\s*main:\s*\[codex,\s*)GPT-6\.1-Sol,\s*高\]/,
+    const changedRoles = originalRoles.replace(/(コーディング:\s*\{\s*main:\s*\[codex,\s*)GPT-6\.1-Sol,\s*"?高"?\]/,
       (_, head) => `${head}6terra, MAX]`);
     assert.notEqual(changedRoles, originalRoles);
     fs.writeFileSync(rolesFile, changedRoles);

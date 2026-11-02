@@ -7,9 +7,11 @@ const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'hub-auto-history-http-'));
 const root=path.join(tmp,'root'),home=path.join(tmp,'home'),bin=path.join(tmp,'bin');
 fs.mkdirSync(bin,{recursive:true});fs.mkdirSync(home);fs.mkdirSync(path.join(root,'_hub'),{recursive:true});
 fs.copyFileSync(path.join(__dirname,'../../docs/project-hub/templates/_hub/roles.yaml'),path.join(root,'_hub/roles.yaml'));
+const selectionGate=path.join(tmp,'release-selection');
 const fake=`#!${process.execPath}
 if(process.argv.includes('--version')){console.log('fake only');process.exit(0)}
-let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>setTimeout(()=>{
+let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>setTimeout(function finish(){
+if(input.includes('[task-auto:')&&!require('node:fs').existsSync(${JSON.stringify(selectionGate)})){setTimeout(finish,10);return;}
 if(input.includes('[task-auto:')){console.log(JSON.stringify({type:'result',result:JSON.stringify({items:[{type:'approval',topic:'方針',text:'方針の承認',rows:[1],quote:'この方針で進めてください'},{type:'next',topic:'方針',text:'ARGS '+process.argv.slice(2).join(' '),rows:[1]}],topics:[{title:'方針',rows:[1,1]}]}),session_id:'auto-claude'}));return;}
 if(process.argv.includes('--verbose'))console.log(JSON.stringify({type:'result',result:JSON.stringify({input:input.replaceAll('[[質問]]','(template)').replaceAll('[[/質問]]','(end)'),args:process.argv.slice(2)}),session_id:'fresh-claude'}));
 else {console.log(JSON.stringify({type:'thread.started',thread_id:'fresh-codex'}));console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({input:input.replaceAll('[[質問]]','(template)').replaceAll('[[/質問]]','(end)'),args:process.argv.slice(2)})}}));console.log(JSON.stringify({type:'turn.completed'}));}
@@ -20,7 +22,7 @@ const store=new Store(root),project=store.createProject({name:'Fixture'}).projec
 const task=store.createTask(project.id,{title:'本作業',steps:['残件']});
 chat.append(project.dir,task.id,{role:'user',text:'この方針で進めてください UNIQUE_OLD_BODY'});
 chat.writeMeta(project.dir,task.id,{sessions:{claude:'old'},models:{},accounts:{}});
-const {server,taskPrompt,chats}=require('../server');let base;
+const {server,taskPrompt,chats,restoreReady}=require('../server');let base;
 const selectionLaunches=[],send=chat.ChatRunner.prototype.send;
 chat.ChatRunner.prototype.send=function(o){if(o.selectionOnly)selectionLaunches.push({...o,at:Date.now()});return send.call(this,o);};
 let settledAt=0;const settled=chats.onSettled;chats.onSettled=async(o,row)=>{if(o.selectionOnly)settledAt=Date.now();return settled(o,row);};
@@ -28,8 +30,8 @@ const body={project:project.id,task:task.id};
 const post=(route,data={},headers={'X-Hub':'1'})=>fetch(base+route,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify({...body,...data})});
 const view=async()=>await(await fetch(base+'/api/task/history/auto?'+new URLSearchParams(body),{headers:{'X-Hub':'1'}})).json();
 const until=async ok=>{for(let n=0;n<1200;n++){const v=await view();if(ok(v))return v;await new Promise(r=>setTimeout(r,20));}throw Error('auto job did not reach the stage: '+JSON.stringify(await view()));};
-test.before(async()=>{await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;});
-test.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));chat.ChatRunner.prototype.send=send;fs.rmSync(tmp,{recursive:true,force:true});});
+test.before(async()=>{await restoreReady;await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;});
+test.after(async()=>{fs.writeFileSync(selectionGate,'release');server.closeAllConnections();await new Promise(r=>server.close(r));chat.ChatRunner.prototype.send=send;fs.rmSync(tmp,{recursive:true,force:true});});
 test('自動整理HTTP：一回の要求で選別・保存・切替し、再送・他タブ・整理中の送信・旧世代で二重にしない',async()=>{
  assert.equal((await fetch(base+'/api/task/history/auto?'+new URLSearchParams(body))).status,403);
  const requestId=randomUUID(),first=await post('/api/task/history/auto',{generation:1,requestId});assert.equal(first.status,200,JSON.stringify(await first.clone().json()));
@@ -39,6 +41,7 @@ test('自動整理HTTP：一回の要求で選別・保存・切替し、再送�
  await until(v=>['selecting','writing','done'].includes(v.auto?.stage));
  const during=await post('/api/chat/send',{generation:1,ai:'codex',model:'GPT-6.1-Sol',effort:'高',text:'整理中の新しい指示'});
  assert.equal(during.status,409);assert.match((await during.json()).error,/整理中|切り替わりました/);
+ fs.writeFileSync(selectionGate,'release');
  const done=await until(v=>v.auto?.stage==='done');assert.equal(done.generation,2);
  assert.equal(selectionLaunches.length,1);const launch=selectionLaunches[0],turn=chat.buildTurn({...launch,meta:{sessions:{claude:'old'}},rows:[{role:'user',text:'UNIQUE_OLD_BODY'}]});
  assert.equal(launch.dir,project.dir);assert.equal(turn.resume,false);

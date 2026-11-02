@@ -108,7 +108,7 @@ test('引き継ぎの会話を6万文字に抑え、直近の依頼と省略の�
   const rows = [{ role: 'user', text: 'x'.repeat(70000) }, { role: 'user', text: '最新の依頼' }];
   const packet = chatLib.contextPacket(rows);
   const body = packet.split('<previous_conversation>\n')[1].split('\n</previous_conversation>')[0];
-  assert.strictEqual(body.length, 60000);
+  assert.strictEqual(body, '【人】\n最新の依頼'); // 最後の完全な発言を残す。上限を埋めるために途中から足さない。
   assert.match(packet, /文字を省いた/);
   assert.ok(body.endsWith('最新の依頼'));
   assert.strictEqual(rows[0].text.length, 70000); // 元の会話記録は変更しない
@@ -369,7 +369,8 @@ test('利用状況APIはdryモードでCLIを呼ばず、更新は画面から�
 
 test('モデルと思考は役割から決まり、作業ファイルの指定が優先される', async () => {
   const st = await (await fetch(BASE2 + '/api/state')).json();
-  assert.ok(Array.isArray(st.roles.roles) && st.roles.roles.length === 8);
+  assert.ok(Array.isArray(st.roles.roles) && st.roles.roles.length === 9);
+  assert.equal(st.roles.roles.find(r => r.name === '見直し').job, '役割分担の相談');
   assert.deepStrictEqual(st.efforts, ['中', '高', '極高', 'MAX', 'Ultra']);
   // サンプルアプリ の作業は role: コーディング → codex GPT-6.1-Sol・高
   let r = await (await post2('/api/term/start', { project: 'サンプルアプリ', task: 'sample-app-01', ai: 'codex' })).json();
@@ -1065,9 +1066,9 @@ test('モデルを最新に整理：今の一覧だけ出し、役割の古い�
   fs.copyFileSync(path.join(TPL, '_hub', 'roles.yaml'), f);
   // 古い設定を持つ利用者の移行を確かめる。配布ひな形の既定値に依存しない。
   fs.writeFileSync(f, fs.readFileSync(f, 'utf8')
-    .replace('main: [codex, GPT-6.1-Sol, 高]', 'main: [codex, 6sol, 高]')
-    .replace('main: [codex, GPT-6.1-Sol, 中]', 'main: [codex, Astra, 中]')
-    .replaceAll('backup: [codex, GPT-6.1-Sol, 高]', 'backup: [codex, 6terra, 高]'));
+    .replace(/main: \[codex, GPT-6\.1-Sol, ["']?高["']?\]/, 'main: [codex, 6sol, 高]')
+    .replace(/main: \[codex, GPT-6\.1-Sol, ["']?中["']?\]/, 'main: [codex, Astra, 中]')
+    .replaceAll(/backup: \[codex, GPT-6\.1-Sol, ["']?高["']?\]/g, 'backup: [codex, 6terra, 高]'));
   try {
     assert.strictEqual(rolesLib.tidy(f).ok, false); // 一覧を取り直す前は断る
     rolesLib.setModelCatalog({

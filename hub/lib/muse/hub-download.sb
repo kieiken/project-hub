@@ -1,0 +1,30 @@
+(version 1)
+(allow default)
+(deny network*)
+; Dedicated human Chromium download helper. Python pins the exact derived URL,
+; refuses redirects/proxies and requires fresh full-digest approval before HEAD/GET.
+(allow network-outbound (remote tcp "*:443") (remote udp "*:53") (remote tcp "*:53"))
+(allow network-outbound (literal "/private/var/run/mDNSResponder"))
+(deny network-outbound (remote ip "localhost:*"))
+(deny file-read-data
+  (require-all (subpath "/Users") (require-not (vnode-type DIRECTORY))
+    (require-not (require-any
+      (subpath (string-append (param "bundle") "/.venv"))
+      (subpath (string-append (param "bundle") "/inputs"))
+      (subpath (param "bridge"))
+      (subpath (param "project"))
+      (literal (string-append (param "private") "/workspace-muse/metamuse.toml"))
+      (literal (string-append (param "private") "/.registration.lock"))
+      (subpath (param "taskroot"))))))
+(deny file-write*
+  (require-not (require-any
+    (literal (param "private"))
+    (literal (string-append (param "private") "/projects"))
+    (literal (string-append (param "private") "/.registration.lock"))
+    (literal (param "taskparent"))
+    (subpath (param "taskroot")) (literal "/dev/null") (literal "/dev/tty"))))
+(deny process-exec
+  (require-not (require-any (subpath (string-append (param "bundle") "/.venv"))
+    (subpath "/opt/homebrew/Cellar/python@3.12")
+    (subpath (string-append (param "taskroot") "/extras-venv/bin"))
+    (subpath (string-append (param "taskroot") "/extras-browser-venv/bin")))))

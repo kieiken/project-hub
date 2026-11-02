@@ -29,7 +29,7 @@ function app() {
   const elements = new Map();
   const element = key => {
     if (!elements.has(key)) elements.set(key, { innerHTML: '', textContent: '', value: '', dataset: {}, hidden: false,
-      addEventListener() {}, setAttribute() {}, querySelector() { return null; }, querySelectorAll() { return []; },
+      addEventListener() {}, setAttribute() {}, contains() { return false; }, querySelector() { return null; }, querySelectorAll() { return []; },
       classList: { contains() { return false; }, toggle() {} } });
     return elements.get(key);
   };
@@ -40,7 +40,9 @@ function app() {
     requestAnimationFrame: fn => fn(), console, ModelOrder: require('../../../hub/public/model-order'), ProjectOrder: require('../../../hub/public/project-order') });
   vm.runInContext(source('locale.js'), context);
   context.window.HubChatHistory = require('../../../hub/public/chat-history');
-  vm.runInContext(source('app.js'), context);
+  // Load the same optional feature as the app; a missing mock hid its UI.
+  if (fs.existsSync(path.join(publicDir, 'paid/webchat.js'))) vm.runInContext(source('paid/webchat.js'), context);
+  require('./ui-locale-fixture').loadApp(context);
   const snapshot = {
     root: '/資料/プロジェクト', projects: [{ id: 'p', name: 'プロジェクトの原名', status: '進行中', parent: '',
       description: 'そのまま残す説明', updated: '', phases: [], folders: [], related: [], issues: [], chats: [],
@@ -115,30 +117,25 @@ test('未統合のGit保存済み成果は反映済みと案内せず日繁で�
  }
 });
 
-test('Dot labels translate while the copied trigger and user request remain unchanged', async () => {
+test('Retired Dot requests are translated read-only history without a resend trigger', async () => {
   const a = app();
   const row = a.run('msgHtml({role:"user",to:"dot",request:"req",text:"ユーザーの原文"})');
-  assert.match(row, /給 Dot 的委託（尚未處理）/);
+  assert.match(row, /給 Dot 的委託（已停用・僅供參考）/);
   assert.match(row, /委託 ID：req/);
-  assert.match(row, /data-copy="Hubの依頼"/);
+  assert.doesNotMatch(row, /data-copy=|hub_dot_inbox/);
   assert.match(row, /ユーザーの原文/);
   a.context.api = async () => ({work:false});
   await a.context.loadChatgpt();
-  assert.match(a.element('#chatgpt-box').innerHTML, /讓 Dot 記住的指示/);
-  assert.match(a.element('#chatgpt-box').innerHTML, /data-copy="私が「Hubの依頼」/);
-  assert.match(a.element('#chatgpt-box').innerHTML, /data-copy="[^"]*doneは付けない（作業を完了にしない）/);
   const setupHtml = a.element('#chatgpt-box').innerHTML;
-  const copiedSetup = /data-copy="([^"]*hub_dot_inbox[^"]*)"/.exec(setupHtml)[1];
-  assert.match(copiedSetup, /Googleアプリでは、読む・予定を入れる・下書きを作るのは可。送信・削除・共有は私の承認を得てから。/);
-  assert.match(copiedSetup, /Work・Codexの開始・再開・委任、ファイル変更、コマンドはしない/);
-  assert.ok(setupHtml.includes('aria-label="讓 Dot 記住的指示">' + copiedSetup + '</textarea>'));
+  assert.match(setupHtml, /id="chatgpt-work"/);
+  assert.doesNotMatch(setupHtml, /hub_dot_inbox|data-copy=|讓 Dot 記住的指示/);
   assert.equal(a.run('ACTION.dot'), '已儲存給 Dot 的委託');
 });
 
 test('GPT子とDotへ渡すコピー形式と引用ボタンは繁体字で本文を変えない', () => {
   const a=app(), rule=a.run('SEND_TEXT_RULE');
   assert.match(rule,/只將本文放入獨立的 ```text 區塊/); assert.doesNotMatch(rule,kana);
-  for (const setup of [a.run('DOT_SETUP')]) assert.ok(setup.includes(rule));
+  assert.equal(a.run('typeof DOT_SETUP'), 'undefined');
   const html=a.run('richText("> ユーザーの原文 **bold**\\n> [リンク](https://example.com)")');
   assert.match(html,/⧉ 複製引用/);assert.match(html,/aria-label="複製引用本文"/);
   assert.match(html,/<code>ユーザーの原文 \*\*bold\*\*\n\[リンク\]\(https:\/\/example.com\)<\/code>/);
@@ -246,11 +243,11 @@ test('Terminal exit notice keeps escape codes and exit status while translating 
     assert.equal(rendered, language ? '\x1b[90m— 已結束（code 7）—\x1b[0m' : '\x1b[90m— 終了しました（code 7）—\x1b[0m');
     if(language) {assert.equal(ui.text('作る'),'建立');assert.equal(ui.text('を作る'),'建立');}
   }
-  const appSource=source('app.js');assert.match(appSource,/xterm\.write\("\\r\\n" \+ UI\.template`/);
+  const appSource=source('app-terminal.js');assert.match(appSource,/xterm\.write\("\\r\\n" \+ UI\.template`/);
 });
 
 test('ChatGPT設定の契約枠撤去後もMCPとChat／Proの日繁表示が一致する',()=>{
- const a=app(),html=a.context.accountSettingsHtml();assert.match(html,/MCP（Dot）/);assert.match(html,/id="chatgpt-box"/);
+ const a=app(),html=a.context.accountSettingsHtml();assert.match(html,/<summary>MCP /);assert.doesNotMatch(html,/MCP（Dot）/);assert.match(html,/id="chatgpt-box"/);
  assert.doesNotMatch(html,/使用 ChatGPT 訂閱|Continue with ChatGPT|網頁版登入|data-plan-action/);
  const ui=a.context.UI;assert.match(ui.text('ChatGPTの契約枠は廃止しました。ChatGPT（Chat／Pro）を選んでください。'),/連線已停用/);
  const chat=a.run('chatHtml(state.projects[0],state.projects[0].tasks[0])');
@@ -267,7 +264,8 @@ test('自動Chatだけを日繁で表示し、未設定と旧経路の選び直�
 
 test('Native pack strings retain interpolation markers and are data-only strings', () => {
   const native = require('../native.json');
-  assert.equal(Object.keys(native).length, 46);
+  // 1c7aad34 added five Mac update notices and two microphone usage strings.
+  assert.equal(Object.keys(native).length, 53);
   for (const [key, value] of Object.entries(native)) {
     assert.equal(typeof value, 'string');
     const markers = text => [...text.matchAll(/\$\{\d+\}/g)].map(match => match[0]).sort();

@@ -61,3 +61,28 @@ test('A short conversation with no older scrollable rows keeps following after a
  a.events.wheel({deltaY:-100});a.events.keydown({key:'Home'});a.events.touchstart({touches:[{clientY:100}]});a.events.touchmove({touches:[{clientY:150}]});assert.equal(a.scroll.capture().follow,true);
  a.box.scrollHeight=2000;a.scroll.restore(a.scroll.capture());assert.equal(a.box.scrollTop,2000);
 });
+
+test('long-history reading reuses its visible anchor, then rescans after movement or removal',()=>{
+ const a=fixture();let rectCalls=0;
+ a.box.getBoundingClientRect=()=>({top:0});
+ const rows=Array.from({length:500},(_,i)=>({parentElement:a.box,getBoundingClientRect(){rectCalls++;return {top:i*100-a.box.scrollTop,bottom:(i+1)*100-a.box.scrollTop,height:100};}}));
+ a.box.children=rows;a.box.contains=n=>rows.includes(n);a.box.scrollHeight=50000;
+ a.scroll.restore({top:40050,follow:false});
+ const before=a.scroll.capture();assert.equal(before.anchor.node,rows[400]);
+ rectCalls=0;
+ for(let i=0;i<20;i++){a.box.scrollHeight+=100;a.scroll.restore(before);}
+ assert.equal(a.scroll.capture().anchor.node,rows[400]);assert.equal(a.box.scrollTop,40050);assert.ok(rectCalls<100,'stable reading should not rescan 400 older rows');
+ a.box.scrollTop=2010;a.events.scroll();assert.equal(a.scroll.capture().anchor.node,rows[20]);
+ rows[20].parentElement=null;rows[20].getBoundingClientRect=()=>({top:0,bottom:0,height:0});
+ a.scroll.restore(a.scroll.capture());assert.equal(a.scroll.capture().anchor.node,rows[21]);
+});
+
+test('explicit request disclosure holds its position, pauses follow and preserves subsequent appends',()=>{
+ const a=fixture();a.scroll.rows(a.scroll.capture());a.box.scrollTop=700;a.events.scroll();
+ a.api.change(a.box,()=>{a.box.scrollHeight=5000;});
+ assert.equal(a.box.scrollTop,700);assert.equal(a.scroll.capture().follow,false);
+ const before=a.scroll.capture();a.box.scrollHeight=6000;a.scroll.restore(before);assert.equal(a.box.scrollTop,700);
+ a.api.change(a.box,()=>{a.box.scrollHeight=2000;});assert.equal(a.box.scrollTop,700);
+ a.events['latest:click']();assert.equal(a.scroll.capture().follow,true);
+ let changed=false;a.api.change({},()=>{changed=true;});assert.equal(changed,true);
+});

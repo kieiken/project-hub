@@ -31,6 +31,21 @@ test('each question has escaped free input and one explicit send button, even fo
  assert.match(f.context.askHtml([definitions[0]]),/ask-send/);
  f.input(1,'</textarea><script>x</script>');const restored=f.context.askHtml(definitions);assert.match(restored,/&lt;\/textarea&gt;&lt;script&gt;x&lt;\/script&gt;/);assert.doesNotMatch(restored,/<script>/);
 });
+test('restored question card keeps all choices and recommendation reasons visible, preserves its DOM on progress, and disappears when answered',()=>{
+ const f=fixture(),asks=[{question:'<保存しますか？>',options:['保存する（おすすめ：下書きを保持し公開しません）','待つ'],multi:false}],question={source:'a'.repeat(64),asks};
+ let current=null,html='',removed=0;
+ const box={querySelector:()=>current,insertAdjacentHTML:(where,value)=>{assert.equal(where,'beforeend');html=String(value);current={dataset:{questionSource:question.source},remove(){removed++;current=null;}};}};
+ f.context.drawPendingQuestion(box,question);
+ assert.match(html,/未回答の質問/);assert.match(html,/&lt;保存しますか？&gt;/);assert.match(html,/おすすめ：下書きを保持し公開しません/);assert.match(html,/待つ/);assert.doesNotMatch(html,/<details/);
+ assert.match(html,/data-question-source="a{64}"/);
+ const retained=current;f.context.drawPendingQuestion(box,question);assert.equal(current,retained);assert.equal(removed,0);
+ f.context.drawPendingQuestion(box,null);assert.equal(current,null);assert.equal(removed,1);
+});
+test('restored card sends its saved question identity with a free response',async()=>{
+ const sent=[],f=fixture([definitions[0]],async(text,source)=>{sent.push({text,source});return true;});
+ f.ask.dataset.questionSource='saved-source';f.input(0,'条件を相談したい');await f.click(f.submit);
+ assert.deepEqual(sent,[{text:'記事の価格は？：条件を相談したい',source:'saved-source'}]);
+});
 test('mixed selected and free answers are sent together once, no immediate send on option click',async()=>{
  const sent=[],f=fixture(definitions,async text=>{sent.push(text);return true;});
  await f.click(f.qs[0].opts[0]);assert.equal(sent.length,0);assert.equal(f.qs[0].opts[0].attributes['aria-pressed'],'true');

@@ -45,8 +45,14 @@ function create(options = {}) {
     return new Promise((resolve, reject) => native.asyncCall(action === 'url' ? 'open' : action, request, (error) => error ? reject(error) : resolve({ ok: true })));
   }
   function pickFolder(prompt, callback) {
-    const select = done => native.asyncCall('pick', { prompt: String(prompt || 'フォルダを選んでください') }, (error, value) => done(error ? '' : String(value)));
-    return callback ? select(callback) : new Promise(select);
+    const select = done => {
+      try { return native.asyncCall('pick', { prompt: String(prompt || 'フォルダを選んでください') }, done); }
+      catch (error) { done(error); }
+    };
+    // Keep the legacy callback contract; Promise callers must distinguish a
+    // native failure from the user cancelling the dialog.
+    return callback ? select((error, value) => callback(error ? '' : String(value))) : new Promise((resolve, reject) =>
+      select((error, value) => error ? reject(Object.assign(Error('folder_picker_unavailable'), { code: 'folder_picker_unavailable' })) : resolve(String(value))));
   }
   function killTree(child, signal = 'SIGKILL') {
     if (![0, 'SIGTERM', 'SIGKILL', 'SIGINT'].includes(signal)) throw Error('Windowsの停止信号に対応していません');
@@ -111,6 +117,7 @@ function create(options = {}) {
     // Read-only path/NTFS identity validation, NOT a directory durability API.
     // LicenseStore obtains durability from SQLite WAL + synchronous FULL.
     licenseDirectory: (dir, expected) => native.call('license-directory', { path: dir, expected }),
+    privateDirectory: (dir, create) => native.call('private-directory', { path: dir, create: Boolean(create) }),
     readPdfText: async () => unavailable(), imageInfo: unavailable, convertImage: unavailable, convertDocument: async () => unavailable(), readArchive: async () => unavailable(),
     tailscaleCandidates: () => ['tailscale.exe', path.join(env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe')],
   };

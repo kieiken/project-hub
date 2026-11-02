@@ -24,27 +24,51 @@
     if (locale !== 'ja' && /^参考\d+$/.test(source)) return source.replace(/^参考/, text('参考'));
     return labels.has(source) ? text(source) : source;
   }
-  function pieces(value) {
+  const escapeHTML = value => String(value).replace(/&(?!(?:#[0-9]+|#x[0-9a-f]+|amp|lt|gt|quot|apos|nbsp);)|[<>"']/gi, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function pieces(value, encode = value => value) {
+    // Translate only the markers present in this text/attribute. Never let a
+    // translation borrow a raw interpolation from a different HTML context.
+    const slots = value.match(marker) || [];
+    const translated = key => {
+      let result = text(key);
+      const found = (result.match(/\$\{\d+\}/g) || []).map(slot => '\uE000' + slot.slice(2, -1) + '\uE001');
+      if (found.some(slot => !slots.includes(slot)) || /[\uE000\uE001]/.test(result) || /<\s*\/?\s*\$\{/.test(result)) result = key;
+      return encode(result).replace(/\$\{(\d+)\}/g, (_, i) => '\uE000' + i + '\uE001');
+    };
     const key = value.replace(marker, (_, i) => '${' + i + '}');
-    if (has(key)) return messages[key].replace(/\$\{(\d+)\}/g, (_, i) => '\uE000' + i + '\uE001');
+    if (has(key)) return translated(key);
     const trimmed = key.trim();
-    if (has(trimmed)) return value.match(/^\s*/)[0] + messages[trimmed].replace(/\$\{(\d+)\}/g, (_, i) => '\uE000' + i + '\uE001') + value.match(/\s*$/)[0];
-    return value.split(/(\uE000\d+\uE001)/).map(part => /^\uE000\d+\uE001$/.test(part) ? part : text(part)).join(''); }
+    if (has(trimmed)) return value.match(/^\s*/)[0] + translated(trimmed) + value.match(/\s*$/)[0];
+    return value.split(/(\uE000\d+\uE001)/).map(part => /^\uE000\d+\uE001$/.test(part) ? part : has(part) || has(part.trim()) ? translated(part) : part).join(''); }
   function html(value) {
     const source = String(value ?? '');
     if (locale === 'ja') return source;
     // Translate text nodes and presentation attributes; never values, data-*,
     // classes, URLs, paths, IDs or handlers. Interpolations remain opaque.
-    return source.split(/(<[^>]*>)/g).map(part => part.startsWith('<')
+    return source.split(/(<(?:"[^"]*"|'[^']*'|[^'">])*>)/g).map(part => part.startsWith('<')
       ? part.replace(/\b(title|aria-label|aria-valuetext|placeholder)\s*=\s*(["'])([\s\S]*?)\2/g,
-        (_, name, quote, value) => name + '=' + quote + pieces(value).replace(quote === '"' ? /"/g : /'/g, quote === '"' ? '&quot;' : '&#39;') + quote)
-      : pieces(part)).join('');
+        (_, name, quote, value) => name + '=' + quote + pieces(value, escapeHTML) + quote)
+      : pieces(part, escapeHTML)).join('');
   }
   function template(strings, ...values) {
     if (locale === 'ja') return strings.reduce((out, part, i) => out + part + (i < values.length ? values[i] : ''), '');
     const source = strings.reduce((out, part, i) => out + part + (i < values.length ? '\uE000' + i + '\uE001' : ''), '');
-    const translated = /<\/?[a-z][a-z0-9-]*[\s>]/i.test(source) ? html(source) : pieces(source);
-    return translated.replace(marker, (_, index) => String(values[Number(index)]));
+    const markup = /<\/?[a-z][a-z0-9-]*[\s>]/i.test(source);
+    // Attribute-only templates (option values, disabled/title fragments) are
+    // application syntax too; never translate them as a whole plain sentence.
+    const attributes = !markup && source.includes('=') && /^\s*(?:[a-zA-Z][\w-]*(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s]+))?\s*)+$/.test(source);
+    const translated = markup ? html(source) : attributes ? html('<span ' + source + '></span>') : pieces(source);
+    // Attribute values may include UI.text(), which deliberately returns text.
+    // Keep existing entities intact (most callers already use esc()).
+    const output = translated.split(/(<(?:"[^"]*"|'[^']*'|[^'">])*>)/g).map(part => part.replace(marker, (_, index, offset) => {
+      let quote = '';
+      if ((markup || attributes) && part.startsWith('<')) for (const c of part.slice(0, offset)) {
+        if (quote ? c === quote : c === '"' || c === "'") quote = quote ? '' : c;
+      }
+      const value = String(values[Number(index)]);
+      return quote ? value.replace(/[<>"']/g, c => ({ '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) : value;
+    })).join('');
+    return attributes ? output.slice(6, -8) : output;
   }
   function valueAttribute(value) {
     if (locale === 'ja') return '';

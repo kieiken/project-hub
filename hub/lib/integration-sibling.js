@@ -29,7 +29,7 @@ function save(h,r){
  fs.writeFileSync(lock,r.id,{flag:'wx',mode:0o600});
  if((read(h,r.project,r.task,true)?.siblingVersion||null)!==r.siblingVersion)fail('別の子の受領記録が更新されました');
  if(!onlyStop)assert(h,r);
- fs.writeFileSync(tmp,bytes,{flag:'wx',mode:0o600});fs.renameSync(tmp,f);fs.unlinkSync(lock);version(r,hash(bytes));
+ fs.writeFileSync(tmp,bytes,{flag:'wx',mode:0o600});fs.renameSync(tmp,f);h.pendingCache?.invalidate(f);fs.unlinkSync(lock);version(r,hash(bytes));
 }
 function digest(f){noLinks(f);if(!exists(f))return null;const s=fs.statSync(f);if(!s.isFile()||s.nlink!==1)fail('停止記録を確認できません');return hash(fs.readFileSync(f));}
 function pin(h,r){return {id:r.id,sha256:digest(h.file(r.project,r.task)),offers:r.items.map(i=>({project:i.project,task:i.task,sha256:digest(h.transfer.file(i.project,i.task))}))};}

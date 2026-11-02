@@ -173,7 +173,7 @@ async function act(el) {
       el.disabled = true;
       await runOneclickMain(p,t);
     }
-    else if (a === 'answered') { if (chatSending.has(chatAttachmentKey(p,t))) return; if (!confirm(UI.text('この質問を AI に送らずに消しますか？ AI は続きを始めません。答えを伝えたい時は［この作業で AI に送る］か［選んで送る］を使ってください。'))) return; await api('/api/task', { project: p, task: t, question: '', state: '実行中', memo: UI.text('人が質問を AI に送らずに消した') }); toast(UI.text('質問を消しました（AI には送っていません）')); await load(); }
+    else if (a === 'answered') { if (chatSending.has(chatAttachmentKey(p,t))) return; if (!confirm(UI.text('この質問を AI に送らずに消しますか？ AI は続きを始めません。答えを伝えたい時は［この作業で AI に送る］か［選んで送る］を使ってください。'))) return; await api('/api/task', { project: p, task: t, question: '', state: '実行中', dismissQuestion: true, memo: UI.text('人が質問を AI に送らずに消した') }); toast(UI.text('質問を消しました（AI には送っていません）')); await load(); }
   } catch (e) { toast(e.message); } finally {if(a.startsWith('freetalk'))persistFreetalkPromotionDrafts();}
 }
 

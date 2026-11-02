@@ -39,9 +39,16 @@ const finish=TaskHistory.prototype.autoFinish;TaskHistory.prototype.autoFinish=f
 const fault=${JSON.stringify(fault)},point=${JSON.stringify(faultPoint)},reached=${JSON.stringify(reached)},active=()=>fs.existsSync(fault),crash=()=>{fs.writeFileSync(reached,point);process.exit(0);};
 const setQueue=Runner.prototype.setQueue;Runner.prototype.setQueue=function(p,t,q,...args){const hit=active()&&q.length===1&&q[0].limitWaiting===false;if(hit&&point==='before-queue-save')crash();const r=setQueue.call(this,p,t,q,...args);if(hit&&point==='after-queue-save')crash();return r;};
 const sendQueued=Runner.prototype.sendQueued;Runner.prototype.sendQueued=function(...args){if(active()&&point==='before-send')crash();if(active()&&point==='launch-error'){fs.appendFileSync(reached,'failure\\n');throw Error('fixture ordinary launch failure');}return sendQueued.apply(this,args);};
+const send=Runner.prototype.send;Runner.prototype.send=async function(o,...args){
+ if(!active()||!o.selectionOnly||!['delivery-limit','delivery-maintenance'].includes(point))return send.call(this,o,...args);
+ const saved={limitPreflight:this.limitPreflight,limitBackup:this.limitBackup,limitTarget:this.limitTarget,canStart:this.canStart};
+ if(point==='delivery-limit'){this.limitPreflight=()=>({validUntil:'2099-01-01T00:00:00Z'});this.limitBackup=()=>({ai:'codex',model:'gpt-6.1-sol'});this.limitTarget=()=>true;}
+ else this.canStart=()=>Object.assign(Error('fixture maintenance'),{code:'HUB_AI_MAINTENANCE'});
+ try{return await send.call(this,o,...args);}finally{Object.assign(this,saved);}
+};
 const run=Runner.prototype.run;Runner.prototype.run=function(...args){if(active()&&point==='after-user')crash();if(active()&&point==='missing-cli')args[1]={...args[1],command:${JSON.stringify(path.join(root,'missing-fixture-cli'))}};return run.apply(this,args);};
 const unqueue=Runner.prototype.unqueue;Runner.prototype.unqueue=function(p,t,id,...args){if(active()&&point==='retain-error')return;if(active()&&['before-remove','after-remove'].includes(point)){if(!chat.read(this.dirOf(p),t).some(r=>r.role==='assistant'&&r.request===id&&!r.error))return;if(point==='before-remove')crash();const r=unqueue.call(this,p,t,id,...args);crash();return r;}return unqueue.call(this,p,t,id,...args);};
-const runtime=require('./server'),{server,PORT}=runtime;process.on('SIGUSR2',()=>{runtime.stopControl.cleanExit();server.close();process.exit(0);});server.listen(PORT,'127.0.0.1',()=>console.log('READY:'+server.address().port));`;
+const runtime=require('./server'),{server,PORT}=runtime;process.on('SIGUSR2',()=>{runtime.stopControl.cleanExit();server.close();process.exit(0);});server.listen(PORT,'127.0.0.1',()=>runtime.restoreReady.then(()=>console.log('READY:'+server.address().port)));`;
   child=spawn(process.execPath,['-e',code],{cwd:hub,env:{...process.env,HUB_ROOT:root,HUB_PORT:String(port),HOME:home,HUB_AI_HOME:home,HUB_FREETALK_HOME:home,HUB_DRY_RUN:'1',HUB_LANG:lang,PATH:bin+path.delimiter+process.env.PATH},stdio:['ignore','pipe','pipe']});
   output='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
   await wait(()=>{assert.equal(child.exitCode,null,output);const m=output.match(/READY:(\d+)/);if(m){base='http://127.0.0.1:'+m[1];return true;}});
@@ -182,4 +189,14 @@ test('large display input survives nested limit handoff and server restart with 
  assert.equal(done.auto.inputFile,job.inputFile);assert.equal(done.auto.attempt,0);assert.equal(f.calls().length,3);
  for(const call of f.calls()){assert.ok(call.input.includes(job.inputFile));assert.doesNotMatch(call.input,/LONG_BODY_HEAD|EXCLUDED_LARGE_TOOL/);}
  const rows=f.archived();assert.ok(rows.some(r=>r.text?.includes('EXCLUDED_LARGE_TOOL')));assert.ok(rows.some(r=>r.text?.includes('LONG_BODY_TAIL')));
+});
+
+for(const lang of ['en','zh-TW'])for(const kind of ['delivery-limit','delivery-maintenance'])test('selection keeps reservation after a delivery race independent of translated error: '+lang+'/'+kind,async t=>{
+ const f=await fixture(t,lang,kind);fs.writeFileSync(f.fault,'hold at delivery');await f.begin();
+ await wait(async()=>{const v=await f.view();return v.auto?.stage==='reserved'&&v.auto.reason;});
+ const before=(await f.view()).auto;assert.equal(before.delegated,false);assert.equal(f.calls().length,0);
+ if(kind==='delivery-limit')assert.doesNotMatch(before.reason,/上限中|待機/,'exercise the former Japanese-only failure path');
+ await f.stop();await f.start();assert.equal((await f.view()).auto.stage,'reserved');
+ fs.unlinkSync(f.fault);await f.begin();const done=await f.done();assert.equal(done.generation,2);assert.equal(done.auto.attempt,0);
+ assert.deepEqual(f.calls().map(r=>r.ai),['claude']);
 });

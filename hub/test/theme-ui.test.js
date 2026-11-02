@@ -14,7 +14,7 @@ function fixture(value, blocked = false) {
 }
 test('First visit and invalid preferences are dark regardless of OS; saved light restores before styles load', () => {
   for (const value of [null, 'system', 'invalid', 'dark']) assert.equal(fixture(value).root.dataset.theme, 'dark');
-  const f = fixture('light'); assert.equal(f.root.dataset.theme, 'light'); assert.equal(f.meta.content, '#f3ede4'); assert.equal(f.buttons.light['aria-pressed'], 'true');
+  const f = fixture('light'); assert.equal(f.root.dataset.theme, 'light'); assert.equal(f.meta.content, '#eef2f7'); assert.equal(f.buttons.light['aria-pressed'], 'true');
   const html = fs.readFileSync(path.join(__dirname, '../public/index.html'), 'utf8');
   assert.ok(html.indexOf('src="theme.js"') < html.indexOf('href="app.css"'));
 });
@@ -24,14 +24,14 @@ test('Switch saves and restores both modes while updating controls, chrome and l
     assert.equal(f.theme.set(value), true); assert.equal(f.root.dataset.theme, value);
     assert.equal(f.buttons[value]['aria-pressed'], 'true'); assert.equal(f.buttons[value === 'light' ? 'dark' : 'light']['aria-pressed'], 'false'); assert.equal(f.storage.get('hub-theme'), value);
     assert.equal(fixture(f.storage.get('hub-theme')).theme.current(), value);
-    assert.equal(f.theme.terminalTheme().background, value === 'light' ? '#fbf8f3' : '#10131a');
+    assert.equal(f.theme.terminalTheme().background, value === 'light' ? '#f9fbfd' : '#10131a');
     assert.equal(f.events.at(-1), 'hub-theme-change');
   }
 });
 test('Blocked storage still permits switching and truthfully reports it was not saved', () => {
   const f = fixture('light', true); assert.equal(f.theme.current(), 'dark');
   assert.equal(f.theme.set('light'), false); assert.equal(f.root.dataset.theme, 'light');
-  assert.equal(f.theme.terminalTheme().foreground, '#2a2420');
+  assert.equal(f.theme.terminalTheme().foreground, '#1e2533');
   assert.equal(fixture(null, true).theme.current(), 'dark');
 });
 test('Other tabs update the current selection; removing/clearing storage returns to dark without writing back', () => {

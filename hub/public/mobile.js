@@ -35,6 +35,19 @@
     document.documentElement.style.setProperty('--hub-visible-height', media.matches && vv && vv.scale === 1 ? vv.height + 'px' : '100dvh');
     // iOSのフォーカス時にページがずれたままだと、縮めた画面の下の空白が見える。
     if (media.matches && vv && vv.scale === 1 && (window.scrollY || vv.offsetTop)) window.scrollTo(0, 0);
+    // 親の会話欄だけを動かす。ページや本文の読書位置には触れない。
+    // キーボードで縮んだ後も、添付の下にある編集中の入力欄を見える範囲へ。
+    const input = $('#chat-in'), composer = $('#composer'), chat = $('.chat');
+    if (media.matches && vv && vv.scale === 1 && vv.height >= window.innerHeight - 100 && chat) chat.scrollTop = 0;
+    if (media.matches && vv && vv.scale === 1 && composerOpen && input && composer && chat && document.activeElement === input) {
+      const parent = chat.getBoundingClientRect(), form = composer.getBoundingClientRect();
+      if (form.bottom > parent.bottom) chat.scrollTop += form.bottom - parent.bottom;
+      else if (form.top < parent.top) chat.scrollTop -= parent.top - form.top;
+      const b = composer.getBoundingClientRect(), r = input.getBoundingClientRect();
+      const bottom = Math.min(b.bottom, vv.height);
+      if (r.bottom > bottom) composer.scrollTop += r.bottom - bottom + 4;
+      else if (r.top < b.top) composer.scrollTop -= b.top - r.top + 4;
+    }
   }
   function labels() {
     for (const option of ($('#chat-ai')?.options || [])) {
@@ -49,7 +62,12 @@
       if (work && chat) {
         const info = document.createElement('div'); info.id = 'mobile-work-info'; info.className = 'mobile-work-info';
         work.insertBefore(info, work.firstChild);
-        while (info.nextElementSibling && info.nextElementSibling !== chat) info.appendChild(info.nextElementSibling);
+        // Keep the progress strip outside the optional information fold.
+        for(let node=info.nextElementSibling;node&&node!==chat;){
+          const next=node.nextElementSibling;
+          if(node.dataset.workProgress===undefined)info.appendChild(node);
+          node=next;
+        }
       }
       const composer = $('#composer');
       if (composer) {

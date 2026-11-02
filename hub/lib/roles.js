@@ -28,6 +28,15 @@ function currentName(ai, name) {
   const hit = list.find(x => x.id === idOf(ai, name));
   return hit ? hit.label : name;
 }
+// Legacy files keep their bytes/default snapshots until settings are changed.
+function withReviewRole(rows) {
+  if (rows.some(r => r.name === '見直し')) return rows;
+  const slot = (ai, model) => {
+    const saved = rows.flatMap(r => [r.main, r.backup]).find(s => s && s.ai === ai && idOf(ai, s.model) === model);
+    return { ai, model: currentName(ai, saved?.model || (ai === 'claude-code' ? 'Opus 5.5' : 'GPT-6.1-Sol')), effort: saved?.effort || '高' };
+  };
+  return [...rows, { name: '見直し', job: '役割分担の相談', main: slot('claude-code', 'claude-opus-5-5'), backup: slot('codex', 'gpt-6.1-sol') }];
+}
 // 画面で使いやすい形にする
 function normalize(raw) {
   const source = raw.models || {};
@@ -58,7 +67,7 @@ function normalize(raw) {
   for (const r of roles) for (const s of [r.main, r.backup]) s.model = currentName(s.ai, s.model);
   // Saved slots keep their value, but never add removed models to candidates.
   const checkCredits = { claude: raw.checkCreditsClaude === true, codex: raw.checkCreditsCodex === true };
-  return { models, roles, agents, permissions: raw.permissions || {}, switch: raw.switch || {}, checkCredits, preferCredits: raw.preferCredits === true };
+  return { models, roles: withReviewRole(roles), agents, permissions: raw.permissions || {}, switch: raw.switch || {}, checkCredits, preferCredits: raw.preferCredits === true };
 }
 
 function fmtSlot(s) {
@@ -128,7 +137,7 @@ function write(file, roles, checkCredits, forceRoles = false, preferCredits, opt
   const start = lines.findIndex(l => /^roles:\s*(#.*)?$/.test(l));
   const body = render(roles);
   let out;
-  if (!forceRoles && JSON.stringify(roles) === JSON.stringify(data.roles)) {
+  if (!forceRoles && JSON.stringify(withReviewRole(roles)) === JSON.stringify(data.roles)) {
     out = sourceText; // 確認オプションだけの保存では役割の行・コメントもそのまま残す。
   } else if (start < 0) {
     out = sourceText.replace(/\s*$/, '') + `\n\nroles:\n${body}\n`;
@@ -159,7 +168,7 @@ function write(file, roles, checkCredits, forceRoles = false, preferCredits, opt
 // Save the values displayed in the role editor without applying its draft.
 function saveDefault(file, desired, expectedRevision) {
   const { data } = read(file);
-  if (!Array.isArray(desired) || desired.length !== data.roles.length || desired.some((r, i) => !r || r.name !== data.roles[i].name || r.job !== data.roles[i].job)) {
+  if (!Array.isArray(desired) || !desired.length || desired.some(r => !r) || withReviewRole(desired).length !== data.roles.length || withReviewRole(desired).some((r, i) => r.name !== data.roles[i].name || r.job !== data.roles[i].job)) {
     return { ok: false, status: 400, errors: [lt('表示中の全役割を指定してください')] };
   }
   const errors = validate(data.models, desired, { previous: data.roles });
@@ -208,4 +217,4 @@ function tidy(file, options = {}) {
   return { ok: true, changes };
 }
 
-module.exports = { read, write, saveDefault, validate, normalize, tidy, EFFORTS, AIS, setModelCatalog, delegateSlot };
+module.exports = { read, write, saveDefault, validate, normalize, tidy, EFFORTS, AIS, setModelCatalog, delegateSlot, withReviewRole };

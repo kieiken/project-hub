@@ -15,8 +15,10 @@ log() { echo "[$(date '+%H:%M:%S')] $*"; }
 log "起動: HUB_DIR=$HUB_DIR WINDOW=${HUB_APP_WINDOW:-なし}"
 cd "$HUB_DIR" || { log "HUB_DIR に移動できません"; exit 1; }
 
-# 何か答えが返れば動いているとみなす（一覧は重いことがあるので、軽い /api/ping に聞く）
-alive() { [ "$(curl --noproxy '*' -s -m 4 -o /dev/null -w '%{http_code}' "$URL/api/ping")" != "000" ]; }
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.volta/bin:$HOME/.local/bin:$HOME/.grok/bin:$PATH"
+NODE="$(command -v node || true)"
+[ -z "$NODE" ] && NODE="$(zsh -lic 'command -v node' 2>/dev/null | tail -n 1)"
+alive() { [ -n "$NODE" ] && "$NODE" app/open-browser.cjs --probe; }
 
 if ! alive; then
   export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.volta/bin:$HOME/.local/bin:$HOME/.grok/bin:$PATH"
@@ -43,4 +45,4 @@ if [ -n "${HUB_APP_WINDOW:-}" ] && [ -x "$HUB_APP_WINDOW" ]; then
   exec "$HUB_APP_WINDOW" "$URL"
 fi
 log "専用の窓が無いので、ブラウザで開きます"
-open "$URL"
+"$NODE" app/open-browser.cjs &

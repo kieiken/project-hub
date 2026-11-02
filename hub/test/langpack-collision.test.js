@@ -37,9 +37,9 @@ test('Reserved Japanese/Chinese names and section suffixes cannot redirect real 
   const result = f.run(`const fs=require('node:fs'),path=require('node:path'),p=require('./lib/langpack'),l=require('./lib/locale'),root=process.env.HUB_ROOT;
     const rejected=${JSON.stringify(sources)}.map(dir=>{try{p.importPack(root,dir);return false}catch{return true}});
     p.setRoot(root);${storeProbe}
-    console.log(JSON.stringify({rejected,before,after,notice:l.sectionNames('注意'),legacy:readSteps('## 步驟\\n- [x] Legacy\\n'),available:p.packSettings(root,'4.109.1').available}));`);
+    console.log(JSON.stringify({rejected,before,after,notice:l.sectionNames('注意'),legacy:readSteps('## 步驟\\n- [x] Legacy\\n'),packs:p.packSettings(root,'4.109.1').packs}));`);
   assert.equal(result.status, 0, result.stderr); const data = JSON.parse(result.stdout);
-  assert.ok(data.rejected.every(Boolean)); assert.ok(!data.available.includes('en'));
+  assert.ok(data.rejected.every(Boolean)); assert.equal(data.packs.find(p=>p.id==='en'&&p.source==='installed').usable,false); // Bundled English remains a valid fallback.
   assert.deepEqual(data.before, [{ text: 'Real step', done: false }]);
   assert.match(data.after, /## 注意\n- \[ \] Keep note/); assert.match(data.after, /## Notes\n- \[ \] Keep ambiguous note/);
   assert.match(data.after, /## 手順\n- \[x\] Real step/); assert.deepEqual(data.notice, ['注意', '注意事項']);

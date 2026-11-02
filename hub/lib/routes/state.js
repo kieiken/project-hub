@@ -1,7 +1,8 @@
 'use strict';
 
 module.exports = function stateRoutes(ctx) {
-  const { gitw, __dirname, pruneUnread, getDiscussion, rolesData, modelView, stepSummary, chats, restartBlockers, extensions, stopControl, ROOT, HUB_INSTANCE, VERSION, readVersion, BOOT_HEAD, license, appUpdate, appShell, freetalkStatus, onboarding, aiUpdates, aiTools, updateBusy, getRestartControl, bodyNoticeState, github, accounts, store, projectOrder, taskTransfer, stateOffers, taskIntegrate, launch, handoff, baseOf, githubProject, start, workRoot, copyMissing, chat, path, expandHome, fs, resultsGate, freetalkHistory, inWork, getWebchat, sessions, modelError, roles, unread, procwatch, acceleration, remote, gpt, crypto, fromRemote, getUpdateRestoreReady, record, sendEncoded, lt } = ctx;
+  const platform = ctx.platform || process.platform;
+  const { gitw, __dirname, pruneUnread, getDiscussion, rolesData, modelView, stepSummary, chats, restartBlockers, extensions, stopControl, ROOT, HUB_INSTANCE, VERSION, readVersion, BOOT_HEAD, license, appUpdate, appShell, freetalkStatus, onboarding, aiUpdates, aiTools, updateBusy, getRestartControl, bodyNoticeState, github, accounts, store, projectOrder, taskTransfer, stateOffers, taskIntegrate, launch, handoff, baseOf, githubProject, start, workRoot, copyMissing, chat, path, expandHome, fs, resultsGate, freetalkHistory, inWork, getWebchat, getMuseDirect, sessions, modelError, roles, unread, procwatch, acceleration, remote, gpt, crypto, fromRemote, getUpdateRestoreReady, record, sendEncoded, lt } = ctx;
   return {
     read: {
       matches: (req, url) => req.method === 'GET' && url.pathname === '/api/state',
@@ -11,16 +12,17 @@ module.exports = function stateRoutes(ctx) {
           res.on('finish', () => { const ms = Date.now() - t0; if (ms > 2000) console.log(lt`[遅い] 一覧を作るのに ${ms}ms かかりました（台帳のファイルの読み込みが遅い可能性）`); });
           const savedHead = gitw.savedHeadAsync(__dirname);
           pruneUnread(); // Keep notification writes outside the display read scope.
+          const handoffErrors = chats.handoffErrorsAsync ? await chats.handoffErrorsAsync() : chats.handoffErrors({display:true});
           const state = require('../state-read').run(() => {
           const discussionSessions = getDiscussion()?.read().sessions || {};
           const roleData = rolesData(), modelSettings = modelView.read(), initialPick = modelView.initial(modelSettings);
           // 画面で使う物だけ送る：作業の「やったこと」「注意」「メモ」の本文は送らず、「次にやること」は1行目だけ（1MB → 数百KB）
           const slim = t => { const { done, note, memo, next, steps, ...rest } = t; return { ...rest, stepSummary: stepSummary(steps), next: String(next || '').split('\n')[0] }; };
-          // Share only within this synchronous read. Action paths omit these arguments
-          // and still validate current receipts before sending, starting or restarting.
-          const handoffErrors = chats.handoffErrors({display:true}), restartWaiting = restartBlockers(handoffErrors);
+          // Share this display snapshot only. Action paths omit these arguments
+          // and validate current receipts before sending, starting or restarting.
+          const restartWaiting = restartBlockers(handoffErrors);
           return {
-            extensions:extensions.state(), stopControl:stopControl.view(), root: ROOT, hubInstance: HUB_INSTANCE, roles: roleData, version: VERSION, latest: readVersion(), runtime:{version:VERSION,bootHead:BOOT_HEAD}, saved:{version:readVersion(),mainHead:null}, license: license.status(), appUpdate: appUpdate.status(), appShell: appShell.status(req.headers['user-agent']), freetalk: freetalkStatus(),
+            museSupported: platform === 'darwin', extensions:extensions.state(), stopControl:stopControl.view(), root: ROOT, hubInstance: HUB_INSTANCE, roles: roleData, version: VERSION, latest: readVersion(), runtime:{version:VERSION,bootHead:BOOT_HEAD}, saved:{version:readVersion(),mainHead:null}, license: license.status(), appUpdate: appUpdate.status(), appShell: appShell.status(req.headers['user-agent']), freetalk: freetalkStatus(),
             ...(process.platform === 'win32' ? { windowsStorage: 'Windowsではファイル単位の書き込み確定と名前変更の完了待ちを使います。保存直後の停電では、ファイル名の変更や削除が残らない可能性があります。管理者として起動する必要はありません。' } : {}),
             onboarding: onboarding.state(),
             aiCliUpdate: { available: Object.values(aiUpdates.status().tools).some(t => t.eligible && t.installed && t.updateCheck?.ok && t.updateCheck.available === true && t.updateCheck.applicable === true), busyCount: aiTools.busy() },
@@ -46,7 +48,7 @@ module.exports = function stateRoutes(ctx) {
               }) };
             }); })(store.listProjects()),
             sessions: sessions.list(), terminal: sessions.available(),
-            chatting: [...chats.running.entries()].map(([k, r]) => { const [project, task] = k.split('\u0000'); return { project, task, ai: r.ai, model: r.model }; }),
+            chatting: [...(getMuseDirect?.()?.busy()||[]).map(({project,task,ai,model})=>({project,task,ai,model})), ...[...chats.running.entries()].map(([k, r]) => { const [project, task] = k.split('\u0000'); return { project, task, ai: r.ai, model: r.model }; })],
             specialMode: modelView.special(modelSettings),
             initialPick, initialPickError: modelError(initialPick.ai, initialPick.model),
             efforts: roles.EFFORTS, hiddenModels: modelView.hidden(modelSettings), modelOrder: modelView.saved(modelSettings), phoneLabels: modelView.phone(modelSettings),

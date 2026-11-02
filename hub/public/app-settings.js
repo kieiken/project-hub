@@ -92,6 +92,7 @@ function rolesSaveStatus() {
 }
 
 function creditSettingsHtml() {
+  const dirty = rolesDirty();
   return UI.template`<section class="ai-use-section ai-credit-settings"><div class="ai-option-line"><h3>クレジット</h3><span class="small">確認する：</span>
     <label class="chk"><input type="checkbox" data-check-credits="claude" ${checkCreditsDraft.claude ? 'checked' : ''}> Claude</label>
     <label class="chk"><input type="checkbox" data-check-credits="codex" ${checkCreditsDraft.codex ? 'checked' : ''}> Codex</label>${creditsDirty() ? UI.html('<span class="dirty" role="status">未保存</span>') : ''}</div>
@@ -101,7 +102,9 @@ function creditSettingsHtml() {
       <p class="small">確認だけでは有料の継続利用を許可しません。Claudeの月間追加利用枠は、実際の残高とは異なります。</p>
       <p class="small">継続の許可は初期設定OFFです。ONにすると、確認ONのAIだけ、利用枠の上限後も利用可能と確認できた既存クレジットで元の担当を継続します。OFFにするまで許可が続きます。</p>
       <p class="small">自動チャージがない、またはOFFであることを確認してから保存してください。購入・自動チャージ・APIキー課金は行いません。残高が不明・古い・取得失敗なら設定された交代先へ切り替えます。正式な実行拒否は維持します。Claudeの実残高を取得できない場合も交代します。</p>
-    </div></details></div></section>`;
+    </div></details></div>
+    <div class="acts ai-save-actions"><button class="btn" type="button" data-roles-save ${dirty ? '' : 'disabled'}>役割分担・クレジットを保存</button>
+      <span class="${dirty ? 'dirty' : 'saved'}" role="status">${rolesSaveStatus()}</span></div></section>`;
 }
 
 function renderSettings() {
@@ -128,6 +131,8 @@ function renderSettings() {
       </div></section>
       ${state.windowsStorage ? UI.template`<section class="pref-section" data-tab="basic"><h2 class="pref-caption">Windowsの保存</h2><p class="small">${esc(state.windowsStorage)}</p></section>` : ''}
       <section class="pref-section" data-tab="basic"><h2 class="pref-caption">表示</h2><div class="pref-list">
+        <label class="pref-row"><span class="pref-text"><span class="pref-name">作業のフェーズと進捗を表示する</span><span class="pref-desc">オフにすると、すべての作業画面で隠します。このブラウザに保存されます。オンにすると再び表示します。</span></span>
+          <input type="checkbox" class="pref-switch" id="set-work-progress" ${showWorkProgress() ? 'checked' : ''}></label>
         <div class="pref-row"><div class="pref-text"><h3>配色</h3><p>初期設定はダークです。選んだ配色はこのブラウザに保存されます。</p></div>
           <div class="pref-control"><div class="theme-choices pref-seg" role="group" aria-label="配色">
             <button type="button" class="theme-choice" data-theme-choice="dark" aria-pressed="${(window.HubTheme?.current() || 'dark') === 'dark'}">ダーク</button>
@@ -225,6 +230,9 @@ function renderSettings() {
         <div class="pref-row pref-stack"><div class="pref-text"><h3>スマホの表示</h3><p>スマホの会話で出すAIの名前です。</p></div>
         <div id="phone-labels">${phoneLabelsHtml()}</div></div>
       </div></section>
+      <section class="pref-section" data-tab="connect"><h2 class="pref-caption">Muse連携</h2><div class="pref-list">
+        <div class="pref-row pref-stack"><div id="muse-settings-box" aria-live="polite">状態を確認中…</div></div>
+      </div></section>
       <section class="pref-section" data-tab="connect"><h2 class="pref-caption">GitHub</h2><div class="pref-list">
         <div class="pref-row pref-stack"><div id="github-box" aria-live="polite">確認中…</div></div>
       </div></section>
@@ -259,8 +267,134 @@ function renderSettings() {
     loadCliModels(); loadRemote(); if (typeof loadGithub === 'function') loadGithub();
     loadLanguageSettings();
     loadMoveSettings();
+    void loadMuseSettings();
   });
 }
+
+function museUsageHtml(result = {}) {
+  const errors = { auth: 'ログイン期限切れ', site_changed: 'Museのサイトが変わりました', network: '通信できませんでした', format: '応答の形式が違います', unconfigured: 'ログイン情報が未設定です', busy: '確認中です' };
+  const u = result.usage;
+  const date = value => value ? new Date(value).toLocaleString('ja-JP') : '未取得';
+  if (!u) return UI.template`<p>利用枠：未取得${result.error ? '（' + (errors[result.error] || '確認できませんでした') + '）' : ''}</p>`;
+  return UI.template`<p><strong>${esc(u.plan || 'プラン未取得')}</strong> · 今週の使用率 ${esc(u.usedPercent)}%</p>
+    <p class="small">リセット：${esc(date(u.resetsAt))}${u.tokensLeftLabel ? ' · 残り ' + esc(u.tokensLeftLabel) : ''}</p>
+    ${u.topup ? UI.template`<p class="small">追加分（週の枠とは別）：${esc(u.topup.label)} · ${esc(u.topup.value)}</p>` : ''}
+    <p class="small">確認：${esc(date(u.checkedAt))}${u.renewsAt ? ' · 契約更新：' + esc(date(u.renewsAt)) : ''}</p>`;
+}
+
+function museSettingsHtml(s) {
+  if (!s.supported) return UI.text('Museのログイン情報の登録は、Macで開いたHubから利用できます。');
+  const registration = !s.toolReady ? '状態を確認できません' : s.configured ? '接続済み（ログインの有効性は未確認）' : '未設定';
+  const contexts = typeof state !== 'undefined' && Array.isArray(state.projects) ? state.projects.flatMap(p =>
+    (p.tasks || []).map(t => ({ project: p.id, task: t.id, label: (p.name || p.id) + ' / ' + (t.title || t.id) }))) : [];
+  return UI.template`<div class="muse-summary"><h3>${esc(registration)}</h3>
+    <div id="muse-usage-box" role="status">${museUsageHtml(s)}</div>
+    <button class="btn" type="button" data-muse-unavailable="${!s.configured || s.busy ? '1' : '0'}" data-muse-action="usage" ${!s.configured || s.busy || museUsageBusy ? 'disabled' : ''}>${museUsageBusy ? '利用枠を確認中…' : '利用枠を確認'}</button>
+    <p class="small">登録済みのMuseに利用状況だけを問い合わせます。質問は送りません。</p>
+    <p>会話の送り先一覧で［Muse］を選び、質問を書いて送ります。</p>
+    <p>10分以降の回答の自動確認：${s.replySettings?.extendedAutoRead?'オン':'オフ'}。オンにすると送信から15分・30分・60分ごろにも最大3回、同じ回答だけを確認します。</p>
+    <button class="btn plain" type="button" data-muse-action="reply-auto" data-enabled="${s.replySettings?.extendedAutoRead?'1':'0'}">${s.replySettings?.extendedAutoRead?'10分以降の自動確認をオフにする':'10分以降の自動確認をオンにする'}</button>
+    ${s.toolReady && !s.configured ? UI.template`<button class="btn" type="button" data-muse-action="register" ${s.busy ? 'disabled' : ''}>ログイン情報を登録</button>` : ''}
+    ${!s.toolReady ? UI.html('<div class="buttons"><button class="btn plain" type="button" data-muse-action="refresh">状態を確認</button><button class="btn plain" type="button" data-muse-action="tool">接続ツールを選ぶ</button></div>') : ''}
+    ${s.busy ? UI.html('<p role="status">前回の操作が進行中、または終了を確認できません。登録情報は変更せず停止しています。</p>') : ''}</div>
+    <details class="muse-details"><summary>詳細設定</summary>
+    <p class="small">非公式CLIを使います。Cookieは会話や設定画面に貼らず、本人用ターミナルの非表示欄だけに入力してください。登録情報はこのMacの私用領域に平文で保存します。</p>
+    <div class="buttons"><a class="btn plain" href="https://muse.ai" target="_blank" rel="noopener noreferrer">Muse公式サイトを開く</a>
+      ${s.existingAvailable ? UI.html('<button class="btn" type="button" data-muse-action="existing">導入済みツールを使う</button>') : ''}
+      <button class="btn plain" type="button" data-muse-action="tool">接続ツールを選ぶ</button>
+      <button class="btn plain" type="button" data-muse-action="refresh">状態を確認</button>
+      ${s.toolReady && s.configured ? UI.template`<button class="btn plain" type="button" data-muse-action="update" ${s.busy ? 'disabled' : ''}>ログイン情報を更新</button><button class="btn plain" type="button" data-muse-action="disconnect" ${s.busy ? 'disabled' : ''}>このMacの登録を解除</button>` : ''}</div>
+    ${s.toolReady && contexts.length ? UI.template`<h3>作業ごとの許可・導入・復旧</h3>
+      <label>対象の作業 <select id="muse-workspace-context">${contexts.map(c => UI.template`<option value="${esc(JSON.stringify({ project: c.project, task: c.task }))}"${c.project === 'Project Hub' && c.task === '20260926-hub-v2' ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}</select></label>
+      <div class="buttons"><button class="btn plain" type="button" data-muse-action="permits">この作業の許可一覧</button><button class="btn plain" type="button" data-muse-action="manage">承認・許可・追加認証を管理</button></div>
+      <p>AIが相談を準備した時は、同じ作業の会話に出る確認カードで承認します。本人用ターミナルは許可の取消・追加認証・導入や復旧に使います。Facebook収集・投稿は準備中です。</p><div id="muse-workspace-permits" role="status"></div>` : ''}
+    <p class="small">会話の［返答を確認］と［送信前の状態を照合］は必要な時に表示されます。結果不明の質問は送り直しません。利用枠はサイトの内部機能で取得するため、サイト更新で取得できなくなることがあります。自動取得・課金・プラン変更は行いません。</p></details>
+    <p id="muse-settings-notice" role="status"></p>`;
+}
+
+async function loadMuseSettings() {
+  const box = $('#muse-settings-box'); if (!box) return;
+  const epoch = ++museSettingsEpoch;
+  try {
+    const s = await api('/api/muse', null, { 'X-Hub': '1' });
+    if (epoch === museSettingsEpoch && $('#muse-settings-box') === box) box.innerHTML = museSettingsHtml(s);
+  } catch {
+    if (epoch === museSettingsEpoch && $('#muse-settings-box') === box) box.innerHTML = UI.html('<p>状態を安全に確認できませんでした。再登録せず、接続ツールを確認してください。</p><button class="btn plain" type="button" data-muse-action="tool">接続ツールを選ぶ</button><button class="btn plain" type="button" data-muse-action="refresh">状態を確認</button><p id="muse-settings-notice" role="status"></p>');
+  }
+}
+
+async function handleMuseSettingsClick(event) {
+  const button = event.target.closest('[data-muse-action]'); if (!button || button.disabled) return;
+  const action = button.dataset.museAction;
+  if(action==='reply-auto') {
+    const enabled=button.dataset.enabled!=='1';
+    if(!confirm(UI.text(enabled?'送信済みの質問について、15分・30分・60分ごろに最大3回、回答だけを自動で確認します。追加の読み取り許可を発行します。オンにしますか？':'10分以降の回答の自動確認をオフにしますか？')))return;
+    button.disabled=true;
+    try{await api('/api/muse/reply-settings',{extendedAutoRead:enabled,confirm:true});await loadMuseSettings();}
+    catch{toast(UI.text('回答の自動確認設定を保存できませんでした。'));button.disabled=false;}
+    return;
+  }
+  if (action === 'usage') {
+    if (museUsageBusy) return;
+    museUsageBusy = true;
+    const owner = $('#muse-settings-box'), box = $('#muse-usage-box');
+    const epoch = museSettingsEpoch;
+    button.disabled = true; button.textContent = UI.text('利用枠を確認中…');
+    if (box) box.textContent = UI.text('利用枠を確認中…');
+    let result;
+    try { result = await api('/api/muse/usage', { confirm: true }); }
+    catch (e) { result = { error: ['auth','site_changed','network','format','unconfigured','busy'].includes(e.message) ? e.message : 'network' }; }
+    finally { museUsageBusy = false; }
+    if ($('#muse-settings-box') === owner && museSettingsEpoch === epoch && $('#muse-usage-box') === box) {
+      if (box) box.innerHTML = museUsageHtml(result);
+    }
+    const current = $('#muse-settings-box')?.querySelector?.('[data-muse-action="usage"]');
+    button.disabled = false; button.textContent = UI.text('利用枠を確認');
+    if (current) { current.disabled = current.dataset.museUnavailable === '1'; current.textContent = UI.text('利用枠を確認'); }
+    return;
+  }
+  if (action === 'refresh') { await loadMuseSettings(); return; }
+  const messages = {
+    register: '本人用ターミナルを開き、ログイン情報を通信なしで保存します。非公式CLIの規約リスクと平文保存を了承して進めますか？',
+    update: '本人用ターミナルで新しいログイン情報に置き換えます。相談の送信は行いません。ターミナルを開きますか？',
+    disconnect: 'このMacに保存したMuseのログイン情報を削除します。過去の送信記録は残し、Muse側ではログアウトしません。本人確認用ターミナルを開きますか？',
+  };
+  button.disabled = true;
+  try {
+    if (action === 'permits' || action === 'manage') {
+      const selected = $('#muse-workspace-context'); if (!selected) return;
+      const contextValue = selected.value;
+      const owner = $('#muse-settings-box');
+      const context = JSON.parse(contextValue);
+      if (action === 'manage' && !confirm(UI.text('選んだ作業の本人用ターミナルを開きます。ここでは承認・送信・認証の変更は行いません。進めますか？'))) return;
+      const result = await api('/api/muse/workspace', { project: context.project, task: context.task, action, confirm: true });
+      if ($('#muse-settings-box') !== owner || $('#muse-workspace-context') !== selected || selected.value !== contextValue) return;
+      if (action === 'permits') {
+        const box = $('#muse-workspace-permits');
+        if (box && $('#muse-workspace-context')?.value === selected.value) box.textContent = result.permits.length ? result.permits.map(p =>
+          `${p.target}${p.account ? ' / ' + p.account : ''}・${p.kind}・期限 ${p.expiresAt}・残り ${p.remaining} 回${p.revoked ? '・取消済み' : ''}`).join('\n') : UI.text('この作業の許可はありません。');
+      } else {
+        const notice = $('#muse-settings-notice'); if (notice) notice.textContent = UI.text(result.notice);
+      }
+    } else if (action === 'existing') {
+      if (!confirm(UI.text('導入済みの固定版ツールを使い、保存済みの登録状態を確認します。再登録や通信は行いません。進めますか？'))) return;
+      await api('/api/muse/tool', { useExisting: true, confirm: true });
+      await loadMuseSettings();
+    } else if (action === 'tool') {
+      const picked = await api('/api/pick-folder', { prompt: UI.text('導入済みの metamuse-local-20261024 フォルダを選んでください') });
+      if (!picked.path || !confirm(UI.text('選んだフォルダの固定版を確認し、Museの接続ツールとして使います。ログイン情報は移動せず、通信しません。進めますか？'))) return;
+      await api('/api/muse/tool', { folder: picked.path, confirm: true });
+      await loadMuseSettings();
+    } else if (messages[action] && confirm(UI.text(messages[action]))) {
+      const result = await api('/api/muse/terminal', { action, confirm: true });
+      const notice = $('#muse-settings-notice'); if (notice) notice.textContent = UI.text(result.notice);
+    }
+  } catch {
+    const notice = $('#muse-settings-notice'); if (notice) notice.textContent = UI.text('操作を開始できませんでした。自動でやり直さず、状態と接続ツールを確認してください。');
+  } finally { button.disabled = false; }
+}
+
+function appSettingsMuseCallback() { return handleMuseSettingsClick; }
 
 function moveSettingsHtml(s) {
   const messages = { none: '', exporting: '引っ越し用データを作成中…', exported: '引っ越し用データを作りました', importing: '引っ越しデータを読み込み中…', failed: '引っ越しを止めました', imported: '引っ越しデータを読み込みました', conflict: '読み込み先に既にデータがあります。アプリを開き直して読み込み方法を選んでください' };
@@ -404,6 +538,7 @@ async function loadRemote() {
         <button class="btn plain" id="remote-pass-save" type="button">合言葉を保存</button></div>
       <p class="small">${r.hasPasscode ? UI.text('合言葉は保存済みです。変えると、入っている端末はすべて出ます。') : UI.text('まだ合言葉がありません。')}</p>
       <p>iPhone で開くアドレス：${r.url ? UI.template`<b>${esc(r.url)}</b><button type="button" class="cp" data-copy="${esc(r.url)}" title="コピー" aria-label="コピー">⧉ コピー</button>` : UI.html('<span class="small">見つかりません（Tailscale が動いていないか、Mac に入っていません。下の「使い始める手順」を見てください）</span>')}</p>
+      <div class="acts"><button class="btn plain" id="remote-enrollment" type="button">新しい端末用コードを発行</button><button class="btn plain" id="remote-forget-devices" type="button">信頼済み端末の印を取り消す</button></div><p id="remote-enrollment-code" class="small" role="status"></p>
       <div class="acts"><span>ログイン中の端末：${r.sessions.length} 台</span>
         <button class="btn plain" id="remote-logout-all" type="button" ${r.sessions.length ? '' : 'disabled'}>すべての端末から出る</button></div>
 `;
@@ -505,6 +640,7 @@ async function openUpdate() {
   if ($('#upd').disabled) return;
   if(state.restart?.reserved){view={...view,kind:'settings'};settingsTab='ai';render();return;}
   if (state.aiCliUpdate?.available) {
+    if (aiToolsNeedDataLocation()) { openDataLocation(); toast(aiToolsDataLocationMessage()); return; }
     const both = state.latest && state.version && state.latest !== state.version;
     view = { ...view, kind: 'settings' }; settingsTab = 'ai'; render();
     toast(UI.text(both ? 'CLIは［一括更新］、Hubだけなら［Hub を v版 に切り替える］を押してください。' : 'AI CLIは設定の［一括更新］から更新できます。'));
@@ -680,9 +816,15 @@ function appSettingsCallback3655() {
 function appSettingsCallback3679() {
   return (async e => {
   const id = e.target.id;
-  if (id !== 'remote-pass-save' && id !== 'remote-logout-all') return;
+  if (!['remote-pass-save','remote-logout-all','remote-enrollment','remote-forget-devices'].includes(id)) return;
   try {
-    if (id === 'remote-pass-save') {
+    if (id === 'remote-enrollment') {
+      const r = await api('/api/remote/enrollment', {});
+      $('#remote-enrollment-code').textContent = '10分以内に、新しい端末で合言葉と一緒に入力してください：' + r.code;
+      return;
+    } else if (id === 'remote-forget-devices') {
+      await api('/api/remote/forget-devices', {}); toast('信頼済み端末の印を取り消しました');
+    } else if (id === 'remote-pass-save') {
       const v = $('#remote-pass').value;
       if ([...v].length < 8) return toast(UI.text('合言葉は8文字以上にしてください'));
       await api('/api/remote', { passcode: v }); toast(UI.text('合言葉を保存しました'));

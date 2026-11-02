@@ -11,16 +11,32 @@ const git = require('./git');
 const graph = require('../public/project-order');
 const {lt} = require('./locale');
 const stamp = f => { try { const s=fs.statSync(f); return [s.dev,s.ino,s.size,s.mtimeMs,s.ctimeMs].join(':'); } catch { return ''; } };
+const gitTexts = new Map(), GIT_TEXT_LIMIT = 256, GIT_TEXT_MAX_BYTES = 64 * 1024;
+const textStamp = s => [s.dev,s.ino,s.size,s.mtimeMs,s.ctimeMs,s.mode,s.nlink].join(':');
+function gitText(file, s, previous) {
+  const key=textStamp(s);
+  if(previous?.file===file && previous.stamp===key)return previous;
+  const text=fs.readFileSync(file,'utf8');
+  return {file,stamp:key,text,bytes:Buffer.byteLength(text)};
+}
 function gitStamp(dir) {
   if (!dir) return '';
   let own=path.join(dir,'.git');
   try {
-    if(fs.statSync(own).isFile()) own=path.resolve(dir,fs.readFileSync(own,'utf8').replace(/^gitdir:\s*/,'').trim());
+    const previous=gitTexts.get(dir),g=fs.statSync(own);
+    const pointer=g.isFile()?gitText(own,g,previous?.pointer):null;
+    if(pointer) own=path.resolve(dir,pointer.text.replace(/^gitdir:\s*/,'').trim());
     let common=own; const c=path.join(own,'commondir');
-    if(fs.existsSync(c))common=path.resolve(own,fs.readFileSync(c,'utf8').trim());
-    const head=fs.readFileSync(path.join(own,'HEAD'),'utf8').trim();
+    let cs;try{cs=fs.statSync(c);}catch{} // Same missing/inaccessible handling as existsSync.
+    const commonText=cs?gitText(c,cs,previous?.commonText):null;
+    if(commonText)common=path.resolve(own,commonText.text.trim());
+    const h=path.join(own,'HEAD'),hs=fs.statSync(h),headText=gitText(h,hs,previous?.headText),head=headText.text.trim();
+    if((pointer?.bytes||0)+(commonText?.bytes||0)+headText.bytes<=GIT_TEXT_MAX_BYTES){
+      gitTexts.set(dir,{pointer,commonText,headText});
+      if(gitTexts.size>GIT_TEXT_LIMIT)gitTexts.delete(gitTexts.keys().next().value);
+    }else gitTexts.delete(dir);
     return [head,stamp(path.join(own,'index')),stamp(path.join(own,'MERGE_HEAD')),head.startsWith('ref: ')?stamp(path.join(common,head.slice(5))):'',stamp(path.join(common,'packed-refs'))].join('|');
-  } catch { return ''; }
+  } catch { gitTexts.delete(dir); return ''; }
 }
 class StateOffers {
   constructor({transfer,removal,baseOf,ttl=60000}) { Object.assign(this,{transfer,removal,baseOf,ttl}); this.cache=null;this.pending=null;this.worker=null;this.sequence=0;this.issueCache=null;this.failed=null; }
@@ -33,7 +49,7 @@ class StateOffers {
     const sources=new Set(rows.filter(r=>r.received).map(r=>r.project+'\0'+r.task));
     const activity=all.filter(p=>p.tasks.some(t=>sources.has(p.id+'\0'+t.id))).map(p=>({project:p.id,locked:this.removal.locked(p.id),review:this.removal.reviewBusy(p.id),tasks:p.tasks.filter(t=>sources.has(p.id+'\0'+t.id)&&this.removal.busy(p.id,t.id)).map(t=>t.id)}));
     const bases=Object.fromEntries(all.map(p=>[p.id,this.baseOf(p)]));
-    // Shared task bases need one Git stamp per display build, never across views.
+    // Share the full stamp only within this build; later views recheck all stamps.
     const repositories=new Map(),repositoryStamp=dir=>{if(!repositories.has(dir))repositories.set(dir,gitStamp(dir));return repositories.get(dir);};
     const taskStamp=new Map(all.flatMap(p=>p.tasks.map(t=>[p.id+'\0'+t.id,[t.completionHash,t.parent,t.derivedFrom,repositoryStamp(expandHome(t.workdir)||bases[p.id]),p.folders]])));
     const rowKey=r=>[r.project,r.task,r.targetProject,r.targetTask].join('\0');

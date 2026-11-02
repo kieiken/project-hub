@@ -109,7 +109,7 @@ for (const mode of ['public', 'missing', 'bundled']) test('startup recovers unav
   f.env.TEST_EXPECTED = JSON.stringify({ history: f.current.journal.history, defaults: f.current.journal.defaults, roles: f.current.roles, restartMessage, project, task, normal: f.normal, discussion: f.discussion, delegates:f.delegates, otherFile: f.otherFile, other: f.other });
   const first = execFileSync(process.execPath, [probe], { env: f.env, encoding: 'utf8', timeout: 30000 });
   const saved = require('../lib/role-history').load(f.rolesFile);
-  f.env.TEST_EXPECTED = JSON.stringify({ ...JSON.parse(f.env.TEST_EXPECTED), history: saved.journal.history, defaults: saved.journal.defaults });
+  f.env.TEST_EXPECTED = JSON.stringify({ ...JSON.parse(f.env.TEST_EXPECTED), history: saved.journal.history, defaults: saved.journal.defaults, roles: saved.roles });
   const second = execFileSync(process.execPath, [probe], { env: f.env, encoding: 'utf8', timeout: 30000 });
   assert.match(first, /recovery-ok:/); assert.match(second, /recovery-ok:/);
   assert.equal(first.match(/recovery-ok:(.*)/)[1], second.match(/recovery-ok:(.*)/)[1]);

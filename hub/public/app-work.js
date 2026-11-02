@@ -10,6 +10,7 @@ function workQuestionHtml(p, t) {
 }
 
 function syncWorkQuestion() {
+  syncWorkProgress();
   const slot = $('#work-question'), p = proj(view.project), t = taskOf(p, view.task);
   if (view.kind !== 'work' || !slot || !t) return;
   const box = $('#msgs'), top = box?.scrollTop;
@@ -24,11 +25,47 @@ function syncWorkQuestion() {
   updateWorkAnswerControls();
 }
 
+// Use the existing phase assignment rule and compact step summary. No task-list
+// scan, step-detail request, or completion inference is needed for this strip.
+function showWorkProgress() {
+  try { return localStorage.getItem('hub-work-progress') === '1'; } catch { return false; }
+}
+
+function workProgressHtml(p,t) {
+  if (!workFoldAttr(p,t,'progress',true)) return UI.html('<button class="btn plain sm" type="button" data-progress-toggle="open">フェーズと進捗を表示</button>');
+  const phases=p.phases||[], current=phases.findIndex(ph=>ph.state!=='完了');
+  const assigned=t.phase?phases.findIndex(ph=>ph.name===t.phase):current;
+  const phaseDone=phases.filter(ph=>ph.state==='完了').length;
+  const finished=t.state==='完了', total=stepCount(t), done=total?progressOf(t).done:0;
+  const phaseLabel=assigned>=0?UI.template`この作業：フェーズ ${assigned+1} / ${phases.length}「${esc(phases[assigned].name)}」`:t.phase?UI.template`この作業のフェーズ「${esc(t.phase)}」は一覧にありません`:UI.text(phases.length?'この作業のフェーズ：未指定（全フェーズ完了）':'フェーズ未設定');
+  return UI.template`<button class="btn plain sm work-progress-close" type="button" data-progress-toggle="close" aria-label="フェーズと進捗を閉じる" title="この作業の表示を閉じる">×</button><div class="work-progress-summary"><strong>${phaseLabel}</strong><span class="work-progress-state ${finished?'finished':''}">${finished?UI.text('作業全体：完了'):UI.template`作業全体：未完了（${esc(UI.label(t.state))}）`}</span></div>
+    <div class="work-progress-counts">${phases.length?UI.template`<span>フェーズ 完了 ${phaseDone} / ${phases.length}・残り ${phases.length-phaseDone}</span>`:''}<span>${total?UI.template`手順 済 ${done} / ${total}・残り ${total-done}`:UI.text('手順未設定')}${!finished&&total&&done===total?UI.text('（作業の完了は未確定）'):''}</span></div>
+    ${phases.length?UI.template`<ol class="work-phase-list" aria-label="フェーズ一覧">${phases.map((ph,i)=>UI.template`<li class="${ph.state==='完了'?'done':''} ${i===assigned?'current':''}" ${i===assigned?'aria-current="step"':''}><span>${i+1}. ${esc(ph.name)}</span><small>${esc(ph.state==='完了'?UI.text('完了'):ph.completionPending?UI.text('完了確認待ち'):UI.label(ph.state||'未着手'))}${i===assigned?UI.text('・この作業'):''}</small></li>`).join('')}</ol>`:''}`;
+}
+
+function syncWorkProgress() {
+  if(view.kind!=='work')return;
+  const p=proj(view.project),t=taskOf(p,view.task),host=$('[data-work-progress]');
+  if(!t||p.kind==='freetalk'||!host||host.dataset.p!==p.id||host.dataset.t!==t.id)return;
+  host.hidden=!showWorkProgress();
+  const html=workProgressHtml(p,t);
+  if(host.progressHtml!==html){host.innerHTML=html;host.progressHtml=html;}
+}
+
 function updateWorkAnswerControls() {
   if (view.kind !== 'work') return;
   const pending = chatSending.has(chatAttachmentKey(view.project, view.task));
+  const status = $('#chat-send-status');
+  if (status) {
+    status.hidden = !pending;
+    status.textContent = pending ? UI.text('送信を確認しています…') : '';
+  }
   const send = $('#chat-send');
-  if (send) { send.disabled = pending; send.textContent = UI.text(pending ? '送っています…' : '送る'); }
+  if (send) {
+    const muse=$('#chat-ai')?.value==='muse|direct';
+    send.disabled=pending;send.textContent=UI.text(pending?'送っています…':muse?'Museへ送る（外部）':'送る');send.classList?.toggle('muse-send',muse);
+    const scope=$('#muse-send-scope');if(scope)scope.hidden=!muse;
+  }
   $('#ask-form')?.querySelectorAll('button, input').forEach(el => { el.disabled = pending; });
   if ($('#msgs')) refreshAsks($('#msgs'));
   document.querySelectorAll('.ask').forEach(updateAskControls);
@@ -155,8 +192,10 @@ function syncTaskSteps() {
   if(view.kind!=='work')return;
   const p=proj(view.project),t=taskOf(p,view.task);if(!t||p.kind==='freetalk')return;
   const box=$('[data-step-list]');if(!box||box.dataset.p!==p.id||box.dataset.t!==t.id)return;
+  const fold=box.closest?.('details.steps');
+  if(fold&&(!fold.open||fold.parentElement?.closest('details:not([open])')))return;
   const steps=fullSteps(p,t);
-  if(steps){if(box.dataset.version!==t.stepSummary?.version){box.innerHTML=stepLabels(p,t,steps);box.dataset.version=t.stepSummary?.version;}return;}
+  if(steps){if(box.stepRows!==steps||box.dataset.version!==t.stepSummary?.version){box.innerHTML=stepLabels(p,t,steps);box.stepRows=steps;box.dataset.version=t.stepSummary?.version;}return;}
   box.textContent=UI.text('読み込み中…');
   const key=JSON.stringify([p.id,t.id,t.stepSummary?.version]);if(stepLoads.has(key))return;
   const active=()=>view.kind==='work'&&view.project===p.id&&view.task===t.id&&taskOf(proj(p.id),t.id)?.stepSummary?.version===t.stepSummary?.version;
@@ -188,7 +227,7 @@ function renderWork() {
       <button class="${mode === 'chat' ? 'on' : ''}" data-act="mode" data-m="chat" type="button" title="1本の会話で、答える AI を選んで話す">会話</button>
       <button class="${mode === 'term' ? 'on' : ''}" data-act="mode" data-m="term" type="button" title="AI の画面をそのまま動かす">ターミナル${running.length ? `（${running.length}）` : ''}</button></div>`;
   const startBtns = mode === 'chat' ? '' : AIS.filter(a => !running.includes(a)).map(a =>
-    UI.template`<button class="btn ${a}${a === main || running.length ? '' : ' sub'}" data-act="start" data-ai="${a}" ${k} type="button" ${aiUnavailable(a) ? UI.text('disabled title="設定画面で AI の導入状態とモデル一覧を確認してください"') : ''}>${running.length ? '＋ ' : ''}${AI_LABEL[a]}${running.length ? UI.text('も並べる') : UI.text('で始める')}</button>`).join('');
+    UI.template`<button class="btn ${a}${a === main || running.length ? '' : ' sub'}" data-act="start" data-ai="${a}" ${k} type="button" ${aiUnavailable(a) ? `disabled title="${esc(UI.text('設定画面で AI の導入状態とモデル一覧を確認してください'))}"` : ''}>${running.length ? '＋ ' : ''}${AI_LABEL[a]}${running.length ? UI.text('も並べる') : UI.text('で始める')}</button>`).join('');
   $('#main').innerHTML = UI.template`<div class="work work-compact" data-p="${esc(p.id)}" data-t="${esc(t.id)}">
     ${taskFutureHeld(p,t)?UI.template`<p class="note">将来検討として保留中です。作業・会話・比較結果・作業用コピーは残っています。${t.futureHold?UI.template`<button class="btn plain sm" data-act="futurehold" ${futureHoldAttrs(t)} ${k} type="button">保留を解除</button>`:UI.text('親の作業で保留を解除できます')}。解除してもAIや統合は再開しません。</p>`:''}
     <div data-handoff-status data-p="${esc(p.id)}" data-t="${esc(t.id)}">${chatHandoffHtml(p.id,t.id)}</div>
@@ -226,6 +265,8 @@ function renderWork() {
         <details class="work-alerts" data-work-fold="alerts" ${workFoldAttr(p,t,'alerts')} hidden><summary>ほか0件</summary><div class="work-alerts-panel"></div></details>
       </div>
     </div>
+    <div id="muse-approvals" aria-live="polite"></div>
+    <section class="work-progress" data-work-progress data-p="${esc(p.id)}" data-t="${esc(t.id)}" ${showWorkProgress()?'':'hidden'} aria-label="作業のフェーズと進捗">${workProgressHtml(p,t)}</section>
     ${mode === 'chat' ? chatHtml(p, t) : UI.template`<div class="panes ${shown.length >= 2 ? 'two' : ''}" id="panes">
       ${shown.length ? shown.map(a => UI.template`<section class="pane" data-ai="${a}">
           <div class="phead"><span class="who w-${AI_KEY[a]}">${AI_LABEL[a]}</span><span class="pstat" data-ai="${a}">${statusText(sessOf(p.id, t.id, a))}</span>${specSelect(p, t, a, true)}<span class="sp"></span>
@@ -245,7 +286,7 @@ function renderWork() {
       <select data-act="state" ${k} aria-label="状態">${!STATES.includes(t.state) ? UI.template`<option selected disabled>${esc(UI.label(t.state))}</option>` : ''}${STATES.map(s => UI.template`<option ${s === t.state ? 'selected' : ''}${UI.valueAttribute(s)}>${UI.label(s)}</option>`).join('')}</select>
       ${mode === 'term' && CLI(t.owner) && !shown.length ? specSelect(p, t, main) : ''}
       ${p.phases.length ? UI.template`<select data-act="phase" ${k} aria-label="フェーズ" title="この作業のフェーズ"><option value="">フェーズ：今のフェーズ</option>${p.phases.map(ph => UI.template`<option ${t.phase === ph.name ? 'selected' : ''}>${esc(ph.name)}</option>`).join('')}</select>` : ''}
-      <details class="more steps" data-work-fold="steps" ${workFoldAttr(p,t,'steps')}><summary>手順 ${stepCount(t) ? `${progressOf(t).done} / ${stepCount(t)}` : UI.text('（なし）')}</summary><div class="step-tools"><button class="btn plain sm" data-steps-close type="button">手順を閉じる</button></div><div class="stepbox"><div data-step-list data-p="${esc(p.id)}" data-t="${esc(t.id)}">${fullSteps(p,t) ? stepLabels(p,t,fullSteps(p,t)) : UI.text('読み込み中…')}</div>
+      <details class="more steps" data-work-fold="steps" ${workFoldAttr(p,t,'steps')}><summary>手順 ${stepCount(t) ? `${progressOf(t).done} / ${stepCount(t)}` : UI.text('（なし）')}</summary><div class="step-tools"><button class="btn plain sm" data-steps-close type="button">手順を閉じる</button></div><div class="stepbox"><div data-step-list data-p="${esc(p.id)}" data-t="${esc(t.id)}">${workFoldAttr(p,t,'management')&&workFoldAttr(p,t,'steps')&&fullSteps(p,t) ? stepLabels(p,t,fullSteps(p,t)) : UI.text('開くと手順を読み込みます')}</div>
         <form class="addstep" data-p="${esc(p.id)}" data-t="${esc(t.id)}"><input name="step" maxlength="120" placeholder="手順を足す（例：下書き）" aria-label="手順を足す"><button class="btn plain sm" type="submit">足す</button></form></div></details>
       <label class="small">種類<select data-act="kind" ${k}><option value="main" ${t.kind!=='derived'?'selected':''}>本作業</option><option value="derived" ${t.kind==='derived'?'selected':''}>派生</option></select></label>
       <label class="small">派生元<select data-act="derivedFrom" ${k}><option value="">（なし）</option>${sourceOptions(p,t)}</select></label>
@@ -259,7 +300,8 @@ function renderWork() {
   if (mode === 'chat') openChat(p, t, savedScroll); else shown.forEach(a => attach(p.id, t.id, a));
   restoreWorkUi(savedUi,p,t);
   syncTaskSteps();
-  if (t.copy && !t.mergeExcluded) loadPreview(p.id, t.id);
+  if (state.museSupported !== false) loadMuseApprovals(p.id,t.id);
+  if (mode !== 'chat' && t.copy && !t.mergeExcluded) loadPreview(p.id, t.id);
 }
 
 // Create the original callback at its original registration point in app.js.
@@ -285,7 +327,7 @@ function appWorkCallback693() {
   if (list.some(({p,t}) => chatSending.has(chatAttachmentKey(p.id,t.id)))) { toast(UI.text('回答を送っています。受付結果が出てから操作してください')); return; }
   if (!list.length || !confirm(UI.template`${list.length} 件すべての質問を AI に送らずに消しますか？ AI は続きを始めません。`)) return;
   let ok = 0;
-  for (const { p, t } of list) { try { await api('/api/task', { project: p.id, task: t.id, question: '', state: '実行中', memo: UI.text('人が質問を AI に送らずに消した') }); ok++; } catch (err) { toast(err.message); } }
+  for (const { p, t } of list) { try { await api('/api/task', { project: p.id, task: t.id, question: '', state: '実行中', dismissQuestion: true, memo: UI.text('人が質問を AI に送らずに消した') }); ok++; } catch (err) { toast(err.message); } }
   toast(UI.template`${ok} 件の質問を消しました（AI には送っていません）`); await load();
 });
 }
@@ -335,4 +377,61 @@ function appWorkCallback1169() {
   try{await api('/api/chat/handoff/recover',{project,task,run,token});await load();render();toast('終了保存を確認しました。待ち指示は保持しています。');}
   catch(e){toast(e.message);}finally{b.disabled=false;}
 });
+}
+
+
+// Daily-use approval is a human action. Never call decide from an AI tool.
+const museApprovalDecisions = new Map();
+function museApprovalHtml(row) {
+  const status = { accepted:'承認済み・AIへの続きの依頼を受け付けました。', declined:'取りやめました。送信しません。',
+    approved:'許可は保存済みです。続きの受付を確認してください。', unknown:'結果の照合が必要です。この会話で確認を依頼してください。',
+    unavailable:'Museの依頼内容または期限を確認できません。この会話で確認を依頼してください。' };
+  if (row.state !== 'pending') return UI.template`<div class="wq" role="status">${esc(UI.text(status[row.state] || status.unknown))}</div>`;
+  const p = row.preview;
+  return UI.template`<section class="wq" data-muse-approval="${esc(row.id)}"><b> Museへ送る内容の確認</b>
+    <p>送り先：${esc(p.destination)}<br>題名：${esc(p.topic)}<br>期限：${esc(p.expires_at)}<br>質問・操作の上限：${p.rounds} 回／読戻し：${p.max_reads} 回</p>
+    <details><summary>資料全文・送る内容を確認</summary><pre>${esc(p.packet_full_text)}</pre><pre>${esc(JSON.stringify(p.request,null,2))}</pre></details>
+    <button class="btn sm" type="button" data-muse-decision="approve">承認して続ける</button>
+    <button class="btn plain sm" type="button" data-muse-decision="decline">やめる</button>
+    <p class="small">承認した資料・題名の範囲でAIが質問と追問を作り、この会話へ結果を返します。</p></section>`;
+}
+async function loadMuseApprovals(project,task) {
+  if (typeof state !== 'undefined' && state.museSupported === false) return;
+  const host = $('#muse-approvals');
+  if (!host || view.kind !== 'work' || view.project !== project || view.task !== task) return;
+  const current = () => $('#muse-approvals') === host && view.kind === 'work' && view.project === project && view.task === task;
+  const epoch = host.museEpoch = (host.museEpoch || 0) + 1;
+  try {
+    const value = await api('/api/muse/approvals?'+new URLSearchParams({project,task}),null,{'X-Hub':'1'});
+    if (!current() || epoch !== host.museEpoch) return;
+    host.innerHTML = value.approvals.map(row => museApprovalHtml(museApprovalDecisions.has(JSON.stringify([project,task,row.id])) && row.state === 'pending'
+      ? { ...row,state:'unknown' } : row)).join('');
+    host.hidden = !host.innerHTML;
+    host.onclick = async event => {
+      const button = event.target.closest('[data-muse-decision]'), card = button?.closest('[data-muse-approval]');
+      if (!button || !card || button.disabled || !current()) return;
+      const row = value.approvals.find(r=>r.id === card.dataset.museApproval);
+      const key = JSON.stringify([project,task,row?.id]);
+      if (!row || museApprovalDecisions.has(key)) return;
+      if (!confirm(UI.text(button.dataset.museDecision === 'approve' ? '表示された全文・送り先・期限・回数の範囲を承認し、AIが続きを行ってよいですか？' : 'この依頼を取りやめますか？送信もAIの継続も行いません。'))) return;
+      museApprovalDecisions.set(key,'pending');
+      card.querySelectorAll('button').forEach(b=>{b.disabled=true;});
+      // Invalidate a concurrent list response before sending the human decision.
+      host.museEpoch++;
+      try {
+        const result = await api('/api/muse/approvals/decide',{project,task,id:row.id,ticket:row.ticket,decision:button.dataset.museDecision,confirm:true});
+        museApprovalDecisions.set(key,result.state);
+        if (current()) card.innerHTML = museApprovalHtml({state:result.state});
+      } catch {
+        museApprovalDecisions.set(key,'unknown');
+        if (current()) card.innerHTML = museApprovalHtml({state:'unknown'});
+      }
+    };
+  } catch {
+    if (current() && epoch === host.museEpoch) {
+      host.innerHTML = '';
+      host.onclick = null;
+      host.hidden = true;
+    }
+  }
 }

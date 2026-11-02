@@ -150,6 +150,8 @@ const values = {
  NSDesktopFolderUsageDescription:tr('デスクトップにある資料を開くために使います。'),
  NSAppleEventsUsageDescription:tr('Finder に、フォルダやファイルの場所を開いてもらうために使います。'),
  NSDownloadsFolderUsageDescription:tr('ダウンロードフォルダにある資料を開くために使います。'),
+ NSMicrophoneUsageDescription:tr('音声入力ボタンを押した時に、話した内容を入力欄へ入れるためにマイクを使います。'),
+ NSSpeechRecognitionUsageDescription:tr('話した内容を日本語の文字にします。音声はAppleなどの音声認識サービスで処理される場合があります。'),
  HubShellHash:require('crypto').createHash('sha256').update(fs.readFileSync(shell)).digest('hex'),
  HubDir:hub, HubPort:port, HubRoot:root, HubStorageGuard:guard, HubLanguage:language, HubLangpackDir:packDir
 };

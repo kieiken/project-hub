@@ -219,8 +219,10 @@ class Accounts {
       return result;
     }
     if (ai === 'claude') {
-      if (r.error) return { status: 'unknown', message: lt('ログイン状態を確認できませんでした') };
-      try { const d = JSON.parse(r.stdout); return { status: d.loggedIn === true ? (d.authMethod === 'api_key' ? 'api' : 'logged-in') : 'logged-out', email: typeof d.email === 'string' ? d.email.slice(0, 200) : '' }; } catch { return { status: 'unknown', message: lt('ログイン状態を確認できませんでした') }; }
+      // 未ログインの auth status --json は JSON を出して exit 1 になる。起動失敗・時間切れ・シグナルは従来どおり不明。
+      const exited = r.error && Number.isInteger(r.error.code) && !r.error.killed && !r.error.signal;
+      if (r.error && !exited) return { status: 'unknown', message: lt('ログイン状態を確認できませんでした') };
+      try { const d = JSON.parse(r.stdout); if (exited && d?.loggedIn !== false) throw 0; return { status: d.loggedIn === true ? (d.authMethod === 'api_key' ? 'api' : 'logged-in') : 'logged-out', email: typeof d.email === 'string' ? d.email.slice(0, 200) : '' }; } catch { return { status: 'unknown', message: lt('ログイン状態を確認できませんでした') }; }
     }
     const s = r.stdout + '\n' + r.stderr;
     if (!r.error && /Logged in using ChatGPT/i.test(s)) return { status: 'logged-in' };

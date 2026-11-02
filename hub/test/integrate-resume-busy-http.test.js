@@ -31,7 +31,7 @@ IntegrateAuto.prototype.tick=function(...args){const pending=originalTick.apply(
 const appShellModule=require('../lib/app-shell'),OriginalShell=appShellModule.AppShell;let shell;appShellModule.AppShell=class extends OriginalShell{constructor(...a){super(...a);shell=this;}};
 const {AppUpdate}=require('../lib/app-update');let holdUpdate=false;const actualApplying=AppUpdate.prototype.applying;AppUpdate.prototype.applying=function(){return holdUpdate||actualApplying.call(this);};
 let runtime=require('../server'),server=runtime.server,base;
-async function start(){await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;}
+async function start(){await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));await require('../server').restoreReady;base='http://127.0.0.1:'+server.address().port;}
 async function close(){server.closeAllConnections();await new Promise(r=>server.close(r));await new Promise(r=>setImmediate(r));await Promise.all([...ticks]);await Promise.all([...runner.running.values()].map(r=>r.finishedP));await new Promise(r=>setImmediate(r));await Promise.all([...ticks]);}
 // A restart closes all server sockets. Do not let a pooled client reuse them.
 const get=route=>fetch(base+route,{headers:{'X-Hub':'1',Connection:'close'}}),post=(route,b={})=>fetch(base+route,{method:'POST',headers:{'X-Hub':'1',Connection:'close','Content-Type':'application/json'},body:JSON.stringify({project:p.id,task:parent.id,...b})});

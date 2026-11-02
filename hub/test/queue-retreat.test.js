@@ -65,10 +65,10 @@ test('attachments: missing/foreign/mismatched/symlink/hardlink/unsupported do no
  fs.unlinkSync(a.file);fs.symlinkSync(outside,a.file);const q=f.q(a.block);f.seed([q]);assert.throws(()=>f.transfer.transfer(f.body(q)),/リンク/);fs.unlinkSync(a.file);fs.linkSync(outside,a.file);assert.throws(()=>f.transfer.transfer(f.body(q)));fs.unlinkSync(a.file);fs.writeFileSync(a.file,'not image');assert.throws(()=>f.transfer.transfer(f.body(q)));
  const prose=f.q('このパスは文字だけ '+outside);f.seed([prose]);assert.equal(f.ideas.read('P').images,undefined);f.transfer.transfer(f.body(prose));assert.equal(f.ideas.read('P').images,undefined);
 });
-for(const boundary of ['prepared','before-save','saved','removed'])test('durable boundary '+boundary+': failure preserves source, blocks edit/cancel/manual/auto, cold boot completes once',t=>{
+for(const boundary of ['prepared','before-save','saved','removed'])test('durable boundary '+boundary+': failure preserves source, blocks edit/cancel/manual/auto, cold boot completes once',async t=>{
  const f=fixture(t),q=f.q(),other=f.q('別の指示');f.seed([q,other]);const b=f.body(q);f.transfer.fault=stage=>{if(stage===boundary)throw Error('fixture '+stage);};assert.throws(()=>f.transfer.transfer(b),/fixture/);
  const before=f.chats.queue('P','main');if(boundary!=='removed')assert.ok(before.some(x=>x.id===q.id));
- assert.throws(()=>f.chats.assertQueueStart({project:'P',task:'main',request:q.id}),e=>e.code==='queue-retreat');assert.throws(()=>f.chats.send({project:'P',task:'main',request:q.id}),e=>e.code==='queue-retreat');
+ assert.throws(()=>f.chats.assertQueueStart({project:'P',task:'main',request:q.id}),e=>e.code==='queue-retreat');await assert.rejects(f.chats.send({project:'P',task:'main',request:q.id}),e=>e.code==='queue-retreat');
  if(boundary!=='removed'){assert.throws(()=>f.chats.unqueue('P','main',q.id),e=>e.code==='queue-retreat');assert.throws(()=>f.seed([{...q,text:'edit'},other]),e=>e.code==='queue-retreat');}
  assert.doesNotThrow(()=>f.chats.assertQueueStart({project:'P',task:'other',request:'unrelated'}));f.reopen();assert.deepEqual(f.transfer.restore(),[]);const r=f.transfer.transfer(b);assert.equal(r.complete,true);assert.equal(Object.keys(f.ideas.read('P').items).length,1);assert.deepEqual(f.chats.queue('P','main'),[other]);assert.throws(()=>f.chats.assertQueueStart({project:'P',task:'main',request:q.id}),e=>e.code==='queue-retreat');
 });

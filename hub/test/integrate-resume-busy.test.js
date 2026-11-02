@@ -5,14 +5,15 @@ function fixture(){
  let waits=[],saves=0,applies=0,previewOptions;
  const tokens=new Map([['old',{value:{project:'p',task:'t'}}],['other',{value:{project:'q',task:'t'}}]]);
  const integrate={read:()=>({auto:{stopped:{reason:'stop'},attempts:{}}}),tokens,apply:b=>{applies++;return{ok:true,token:b.token};},preview:(p,t,o,options)=>{previewOptions=options;return{project:p,task:t,auto:{stopped:{reason:'stop'}},...(options.issueToken?{token:'new'}:{})};},resumeRecord:()=>{throw Error('must not mutate while waiting');}};
+ integrate.readLane=integrate.read;
  const auto=new IntegrateAuto({integrate,waitStatus:()=>waits,notify:()=>saves++});
  return {auto,integrate,setWait:x=>{waits=x;},get options(){return previewOptions;},get saves(){return saves;},get applies(){return applies;}};
 }
 for(const kind of ['chat','terminal','background','queue','maintenance','github','cli','rebuild','update'])test('待機 '+kind+'：表示と拒否は同じ理由、停止記録と他作業tokenは保持',()=>{
  const f=fixture(),wait={kind,project:'q',task:'other',message:'別プロジェクト／別作業：待機原因'};f.setWait([wait]);
- const d=f.auto.preview({project:'p',task:'t'});assert.deepEqual(d.waiting,[wait]);assert.equal(d.token,undefined);assert.deepEqual(f.options,{allowBusy:true,issueToken:false,assignments:undefined});assert.equal(f.integrate.tokens.has('old'),false);assert.equal(f.integrate.tokens.has('other'),true);
+ const d=f.auto.preview({project:'p',task:'t'});assert.deepEqual(d.waiting,[wait]);assert.equal(d.token,undefined);assert.deepEqual(f.options,{allowBusy:true,issueToken:false,assignments:undefined,sibling:false});assert.equal(f.integrate.tokens.has('old'),false);assert.equal(f.integrate.tokens.has('other'),true);
  f.integrate.tokens.set('old',{value:{project:'p',task:'t'}});assert.throws(()=>f.auto.resume({project:'p',task:'t',token:'old'}),e=>e.stage==='waiting'&&e.code==='INTEGRATION_BUSY'&&JSON.stringify(e.waiting)===JSON.stringify(d.waiting));assert.equal(f.saves,0);assert.equal(f.integrate.tokens.has('old'),false);
- f.setWait([]);assert.deepEqual(f.auto.preview({project:'p',task:'t'}).waiting,[]);assert.deepEqual(f.options,{allowBusy:false,issueToken:true,assignments:undefined});
+ f.setWait([]);assert.deepEqual(f.auto.preview({project:'p',task:'t'}).waiting,[]);assert.deepEqual(f.options,{allowBusy:false,issueToken:true,assignments:undefined,sibling:false});
 });
 for(const kind of ['chat','terminal','background','queue','maintenance','github','cli','rebuild','update'])test('初回開始直前の '+kind+' は変更せず待機へ戻し、古いtokenを失効する',()=>{
  const f=fixture(),wait={kind,message:'別作業の処理中'};f.setWait([wait]);

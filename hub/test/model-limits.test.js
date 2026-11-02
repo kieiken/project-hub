@@ -14,7 +14,7 @@ const win = (id, usedPercent = 100, resetsAt = new Date(NOW + 3600000).toISOStri
 test('Credit priority preserves evidence, applies only to checked accounts and expires without deleting holds', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-credit-priority-'));
   let now = NOW, policy = { preferCredits: true, checkCredits: { codex: true, claude: false } };
-  let proof = { availability: 'available', prepaid: true, attemptedAt: new Date(NOW).toISOString(), checkedAt: new Date(NOW).toISOString() };
+  let proof = { ai: 'codex', account: 'work', availability: 'available', prepaid: true, attemptedAt: new Date(NOW).toISOString(), checkedAt: new Date(NOW).toISOString() };
   const state = new ModelLimits(path.join(dir, 'limits.json'), { now: () => now, creditPolicy: () => policy, creditState: (ai, account) => account === 'work' && ai === 'codex' ? proof : null });
   const request = { ai: 'codex', account: 'work', model: 'GPT-6.1-Sol' };
   state.observe(full('codex', [win('codex:primary')], 'work'));
@@ -26,7 +26,7 @@ test('Credit priority preserves evidence, applies only to checked accounts and e
   for (const change of [{ preferCredits: false }, { checkCredits: { codex: false } }]) {
     const previous = policy; policy = { ...policy, ...change }; assert.ok(state.forRequest(request)); policy = previous;
   }
-  for (const invalid of [{ availability: 'empty' }, { availability: 'unknown' }, { prepaid: false }, { checkedAt: new Date(NOW - 1).toISOString() },
+  for (const invalid of [{ ai: 'claude' }, { account: 'other' }, { availability: 'empty' }, { availability: 'unknown' }, { prepaid: false }, { checkedAt: new Date(NOW - 1).toISOString() },
     { attemptedAt: new Date(NOW + 1).toISOString() }, { checkedAt: new Date(NOW + 1).toISOString() }]) {
     const previous = proof; proof = { ...proof, ...invalid }; assert.ok(state.forRequest(request)); proof = previous;
   }

@@ -2,6 +2,37 @@
 
 Project Hub に関係する第三者のソフトと、由来の表記です。各ソフトの著作権はそれぞれの著作権者にあります。
 
+## Hermes Web Community（音声入力のブラウザ経路を改変利用）
+
+- 元ソース：https://github.com/arumwu/Hermes-Web-Community/blob/6079b133b244212fb972b69c8099c68939d2cae2/web/app.js#L1567-L1591
+- 固定版：`6079b133b244212fb972b69c8099c68939d2cae2`。LICENSEとTHIRD_PARTY_NOTICES.mdを照合。
+- 場所：`hub/public/speech-input.js`。日本語、カーソル挿入、停止・遅延結果の保護を追加。
+- HermesNative、サーバー文字起こし、Hermes Agent/Android/Desktopのソース・ブランドは含めません。
+
+```
+MIT License
+
+Copyright (c) 2026 Hermes Web contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## xterm.js（同梱）
 
 - 場所：`hub/public/vendor/`（`xterm.js`・`xterm.css`・`addon-fit.js`）
@@ -84,3 +115,31 @@ SOFTWARE.
 - 公式 NuGet 由来。取得URLとSHA256は `hub/app/windows/vendor/webview2/1.0.4258.31/manifest.json`
 - 許諾・著作権・免責の原文：`hub/app/windows/vendor/webview2/1.0.4258.31/LICENSE.txt`（Microsoft Corporation）。バイナリと一緒に配布します。
 - WebView2 Evergreen Runtime は同梱・自動導入しません。
+
+## CodexBar（Museの利用枠取得の探索・解析手順をPythonへ移植）
+
+- 元ソース：https://github.com/steipete/CodexBar/blob/d34fbb47afe73f81dd591bae28a60f72c39a9fe4/Sources/CodexBarCore/Resources/Plugins/museai.js
+- 場所：`hub/lib/muse/usage.py`。ブラウザ・他アカウントの探索を除き、既存の登録1件・宛先・容量・時間を制限。
+
+```
+MIT License
+Copyright (c) 2026 Peter Steinberger
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

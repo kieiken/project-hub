@@ -148,13 +148,15 @@
     ]
   },
   "cli-spool-archive.js": {
-    "reason": "明示承認した固定計画だけで _hub/cli-runs の終了実行原物を同階層 cli-runs-archive/<batch> へ rename 保全。batch内planと指定result/一時resultのみ排他作成・置換。原文/queue/通常Product台帳は読取のみ。今回の登録では退避処理を実行しない。",
+    "reason": "明示保守のみ。固定計画を再照合してcli-runsと同一ディスクのcli-runs-archive/<batch>間で原物をrename。排他plan/catalog/restore-intentと指定外部result/一時resultのみ保存・fsync。Product/会話/削除記録は読取専用。catalogは移動前に配送識別を保全、復元は新原物を上書きしない。起動・定期実行への配線なし。",
     "sites": [
       "468bf59e2f150e51a9d50f28c52b738062398657074ff0ea7d175b1085192060",
       "d8b3f5f592616e952e88946fe0e80b72a88579fba76e6a8517e975cbda350019",
-      "eee4ad37563f18c5d1f5414edd580c4894d1ac375ca4230452e5c9b5108c2094",
-      "b2c9d5376753be7ad150785973151b4d9e13ffc4a6e71e3e622fdb5edc0cb8c9",
+      "e8ad95d3ccf674f15e1d0746cc0b58aa01d2e60f70ba98331a7106bec8d765b6",
       "98635774001714e0cc025581594849253575b6b3bb184dc3ea4f1ef579c21ac6",
+      "ce856ee4b01a3fff3665b461b3fa91435e951d15450628e8b9c1955633b0b182",
+      "e8ad95d3ccf674f15e1d0746cc0b58aa01d2e60f70ba98331a7106bec8d765b6",
+      "ea46ac55e5b17c61c0c0c6a9f4e3e291375052fda54e7bb0a9ae0312d300e5f8",
       "4df08771cd4cff3c48bbed72a050922b19c88da03acf517a8a6d6146b6f15de9"
     ]
   },
@@ -671,10 +673,10 @@
     ]
   },
   "task-integrate.js": {
-    "reason": "既存の_hub制御状態または読取り用fs importのみ。通常Product台帳への書込みなし。",
+    "reason": "_hub/task-integrationsのprimary JSONと同階層tmpのみ。consultation-close禁止判定とsibling.primarySave排他・noLinksを経由し、cache無効化する既存制御記録。",
     "sites": [
       "5bb1540e2505a549070151e406b1ca340f9f09334cd2b1db20f500c6f5e681d0",
-      "4a93408cd65234d6b9f01a3d1793a9dbf69c82a14c543cad8d39606b4ee1602d"
+      "853adfca5e4908073b2a10f845014159979c9f165789c6d77a461a607a47ceba"
     ]
   },
   "task-results.js": {
@@ -684,10 +686,13 @@
     ]
   },
   "task-transfer.js": {
-    "reason": "_hub/task-handoffs管理。成果公開renameはwrite、片付けはtree経由。",
+    "reason": "_hub/task-transfersのJSON/保存lockと受領planに固定した成果・移管対象。lockと記録は制御領域、台帳/成果の公開renameはintegration-writes.writeを経由。noLinks・元hash・権限/ディレクトリ照合とremoval.saveを確認。",
     "sites": [
       "f4e5d0bf342e863c2ed7c9ed82734edf61140160c73e0f1bab059375316fc60f",
-      "f3a3f0497242c0218ebc68c73274521620ea2e88bc9a03ef224388348af98758",
+      "4ba5fa72815300966172b0ebba910ef3faeb918477f107afd807c11858c10323",
+      "cd104ff7952d57c598dd26f3ae597a7037eca48ddf0050b33ec7d60889dfb77d",
+      "d029b4f98cd91c0db709f01ae3f2ae748e289eb01bfe00ed246896c5c0f5cc62",
+      "4f8fc879666a8e617fa32c41c0585ef093519dcfbccdb266f2b5f691eab1d6a4",
       "4e50f194c77bc0ef869eeee2db087b3db26e6fe7452f02eaf8d2d3d06a414132",
       "09272471f6974b0fb6c93805394eef11264bf055dba4e9b8438403f71ea7df92",
       "e3ae5249720cd841d5763b0600d79a66ecb9efbb5520c36bcc7f876c41d2a503",
@@ -854,7 +859,7 @@
     ]
   },
   "app-update-packaged.js": {
-    "reason": "_hub/updates/packaged の取得・検証・journal、App bundle とその同階層の旧版/一時版だけ。securePath/siblingValid で範囲を検証し通常Product台帳へ書き込まない。今回実行せず静的に宛先を確認。",
+    "reason": "_hub/updates/packaged の取得・検証・journal、App bundle とその同階層の旧版/一時版だけ。securePath/siblingValid で範囲を検証し通常Product台帳へ書き込まない。今回実行せず静的に宛先を確認。receive内のopen/rmもthis.secure(file)で同一制御領域へ限定する既存処理を再照合。",
     "sites": [
       "463c79fc059571ae476837898c9105813789178e544d8dbb6a5584d6286261b7",
       "73e61d509eb773dc49245b357af0da3f9a5cdc8bc4963b8d19dfd89432c58e86",
@@ -863,9 +868,9 @@
       "51b8682e4ad64e998ee7471a26f79bc07d7dfd4e6637584d8b620d810ad3f4bc",
       "b108d79f9f32a21d196ec33904b9ded34c2a0043ccf60779fe7713ad26b58ae9",
       "5a88d279c0a00d3f38a15165a67fdb62fed250454d1308fb7b7104caf02e95c9",
-      "4b75f5e5a95ff66795be423c1739393a988dad89e65ea71240b7d52e52d766fd",
+      "130c983fe3db7888966d0fac04e97b436576fcf662da84c328969598a54478aa",
       "de59e3533df014983995d964a2bf246e1dc4ca1f2fd9e8370fb112b5beee2eed",
-      "2a5f5526e822845cd42315b7b89744918871ff4e20f2983e372d6eb442d256f5",
+      "c9dd67cde4249090ee8e1ab12328b311ce551e93be34be5a4a2fd18b47dd95ad",
       "154aa274343f2cd81dab75bf471a5d773600004cb21ebf0d00f89e9c39215b0c",
       "4b8519809e4de4247c3262645afc235b18d522b1e078f9d856a3a952abeb2678",
       "af9826aca34c0272b6d45312140fb399259ac90efcd04fe93916721ed2612fc7",
@@ -1121,6 +1126,223 @@
     "reason": "補完資料の原物・履歴・Git差分を上限付きで読取り、同一性を確認するだけ。fs importはpath/child_processと同じ宣言行、台帳や制御記録への書込みなし。",
     "sites": [
       "e22635fef0c53e54cc12a62932230a8522a470bb137dd82419f3fd707a491424"
+    ]
+  },
+  "app-update-windows.js": {
+    "reason": "_hub/updates/windows/downloads・versionsと検証済みpartの削除のみ。secure()のprefix/noLinks/store.guardを確認。外部への実取得や更新は今回未実行。",
+    "sites": [
+      "09e53b75941d1331981cbe6fecaf3663ee7c3a28b7ff9588c03ca9411ced77d3",
+      "30f484f619d380b71225b37ac781b1e4741838fcd5aab23d16e9f644254ff8d7",
+      "6d4942bc0d54aacb0a27632b3c2fd6218c1a63ec70487cab60001bb9e3b9ff15",
+      "e043a1bf5884f1cbd543cfe1f312201acbff48d1fdc534880ea87b953530bfc7"
+    ]
+  },
+  "integration-consultation-close.js": {
+    "reason": "本人確認付きconsultation-closeの_hub/task-integrations/consultation-closures・siblingsロック・元の統合/offer/holdのretired保管と、plan.target/.ai/work/consultation-preserved/UUIDへの保全複製。checkSources/checkReview/noLinks/sha256・mode照合とwrites.atomicを確認。一般台帳本文の直接更新なし。",
+    "sites": [
+      "82bc415971e16f3c378b2bc58eedb4b60935d95d9292fd9e9fa17f32d7832d60",
+      "1dc7c73e46862d551b0b0b03ef53c3bc785352c8699f033d1a2fd2c9b1896886",
+      "bca27bcb9b220c70d5309059934d304bf6b01230c0d5ef27b2d455a34b0aabdf",
+      "98c7be8dae414077e6e8c8e10b938f76cc20e48333ee061bec53d681013e8dd3",
+      "28c02398d3813263f5847e4d1d458e6f239517e07e08aeb9d82614fd9f543992",
+      "c2fc6af7ddef531211dabdfe7f9ef063aeecbe9be1f73312077c8394664efd03",
+      "aa439c07e06f5a06766f763ab506fb4639e903703d49848b0274ab2a1ae5e3fa",
+      "85ba62ff1ccf88d0639e0356826fa49758ed517e0fbd2588b92a1da720da6160",
+      "8802f7d90f292bfa0794e50ac7a5436b0677d03d2a6c4ba01608c1a5b1f50f1c",
+      "82368c7889dc330fda39c6dd6b254f0597c8c77468d8e85ccb6551ed6d9449c4",
+      "f922d2ec27c3ace45b1b0129a512aef5af6d480bebecc533b818378f9b415783",
+      "11dbeb525c9627737dd3e6abd1d967d50521f86a26638f2d5c55b0e085a8798f",
+      "8fbe4ac23122cc6119ea1366cb9dcc7381096e836fdf1e519fe92437336bceba"
+    ]
+  },
+  "integration-report-projection.js": {
+    "reason": "受領対象Gitのabsolute-git-dir内 hub-report-UUID.index の終了後unlinkのみ。成果のGit保存は限定indexと確定plan経由。通常Product本文への直接fs書込みなし。",
+    "sites": [
+      "56ecb98170fcc2ab2a7a7a9f6dea97169ee6e10cd44ad37f6345c52756a24f24",
+      "083789e383ad599a8f9b2d97c0d9de9fb95cb3fb746d2dfc0f29dc7b7d814ede"
+    ]
+  },
+  "integration-sibling.js": {
+    "reason": "h.dir（_hub/task-integrations）/siblings の別レーンJSON・排他lock・UUID一時ファイルのみ。noLinks/現原物hash/version/consultation-close書込停止とprimary排他を確認。",
+    "sites": [
+      "dd34e92ac3d2a042d2548cfd95f6f8a0de80c46e876f6ef2a1b7811dfc49eeaa",
+      "4a44cca4f91e8a07c7042bd1aef1d9522b788e22ff771bc248b357a1ffc55530",
+      "8802f7d90f292bfa0794e50ac7a5436b0677d03d2a6c4ba01608c1a5b1f50f1c",
+      "30a8845ce1a67c1b9b1822645b6b16b50d8d007eb216653e446e5d3b04453340",
+      "97805f2fd188ce2955568093a397c529804f60e7c100ffa5c2ba1b3528098a09",
+      "157660e5faf0501449e032d94ac617a73f96fee5c9c373d9471a211b6d676832"
+    ]
+  },
+  "legacy-import.js": {
+    "reason": "本人のpreview/apply tokenで確定した未存在の移行先（Product等を含む）への追加取込。_hub/legacy-importの保存plan・partialと各宛先同階層tmpからhash/mode/同inode照合してCOPYFILE_EXCL/linkで非上書き公開。既存ファイルは同hash確認のみ、noLinks/missing制約を確認。旧AI成果の無証拠な追記とは別の既存import経路。今回実取込なし。",
+    "sites": [
+      "186eb0d2af09027c4fa0c2d13e5412f411ac059f477ddc18ad8a0ea0241744a5",
+      "6b438e998e9afc6e2d5a3c25efa3f0d4b1f610f8ae51437c90a37e54c005a900",
+      "c5f597bc844e08204e152db50ac9c1e2907b167492752dcf8033594098d2c1a8",
+      "abbf3074e7b278cac2530ae47fe94b01ccd281a7ec4f7f1b27dbe62e9f3cdfa5",
+      "ffab94a995017050d500c1b28580dc0f3585fffcacd9108ce54237485182f6ce",
+      "ef50059d3d7539fd2e81e6eceef9a34883839447b30df5854a5467506f3c8dc8",
+      "6d5a7ef555a7c6284be160ba6eb061c1f3ff2d47f2782f75224d6afdce84bf58",
+      "f229b424539ad197434c70b830a6ac7b122fd1e866f558e66bd819361f1fe2aa",
+      "61ef69f0368fcdce734bf787e4b07cfc4ccaee2a31557d4d53b9b0174edc3e02",
+      "c649dcdb0224aef4eabe9618a27056801116f50f6664a3ee3b35277be8281f88"
+    ]
+  },
+  "nested-git.js": {
+    "reason": "node:fs importのみ。入れ子Git検出の読取りで、当該moduleにfs変更呼出しなし。",
+    "sites": [
+      "00ce14f2fa272c074af92ae7a50ed73187d36854dc231fbcd09d959fd65e79bc"
+    ]
+  },
+  "platform/win32-update-store.js": {
+    "reason": "_hub/updates/windows専用private directoryの初期mkdirのみ。他の変更はWindows専用private native store経由。",
+    "sites": [
+      "3d326ca6ba92b0221a7ed0ec7a6977b0ed6359f7d27e14458c09ee3cb2bcfc49",
+      "4502c9f38d6c3b350534e7f6d7cc7a21ab8732061681e7cc107aa2761d425039"
+    ]
+  },
+  "record-read-cache.js": {
+    "reason": "platform/file-io importのみ。記録の要求内読取りcacheで、fs変更呼出しなし。",
+    "sites": [
+      "82bc415971e16f3c378b2bc58eedb4b60935d95d9292fd9e9fa17f32d7832d60"
+    ]
+  },
+  "task-future-hold.js": {
+    "reason": "_hub/task-future-holdsのhash名JSONの親mkdirのみ。保存はintegration-writes.atomicによる制御記録。",
+    "sites": [
+      "dd34e92ac3d2a042d2548cfd95f6f8a0de80c46e876f6ef2a1b7811dfc49eeaa",
+      "5e54530ef0b19cd8fa698890228f43fa2bc51d8e0e0795144db66b0700e2fa34"
+    ]
+  },
+  "update-zip.js": {
+    "reason": "呼出側のprivate update destinationを新規mkdirし、ZIP名/親/種別/重複/サイズを全検証してwxで展開。上書き・link不可。呼出側_hub/updates/windowsのsecure境界とtreeHashを確認。",
+    "sites": [
+      "cede2b533fb0f0b46d52ef0d63a578f95d0363fde0f5810086603d16810b60be",
+      "72a5c3bb8f4597f2ee95762af1ebc5417f0d89f9b12dbca42a3c889f1203d7b5",
+      "5bcb78c99cec2ea4eff8fde3b944f550a6886012d2d630f1c2fe8e612eab4252",
+      "497c59782291aa5fb64103bc843d9d74abda9a2378c2b981ab13d26f8059994c",
+      "ce4cdb2af3e21e7b60c0e8f9f118b6c4de114feef63dc190e94e1f68701eb03c"
+    ]
+  },
+  "workspace-use.js": {
+    "reason": "選択済みworkspace直下.project-hub-useのPID-UUID.json leaseだけ。noLinks・wx・fsync、解放時も本人保存byte一致のみunlink。他processの証拠は削除しない。",
+    "sites": [
+      "f768a3c0bc9c2696d17b96d972ebe1ed3dbca091aa7c16f87c4e06e6363eba71",
+      "92e7a4fd6a7920d01fb8f2cccd00e34da5a43e1cd72139e0f3a7f68c9aa7ed85",
+      "e5a6259a196366e362899e3ffd05fd899debc1af1795f7b6240497a51b04ee24",
+      "d00e3ccdf4dccfe0c53898f583f6503d0dda9bcecaeaa7fd3a0e06d04087b0f1",
+      "0db9e2321724e73abbca5b226593b656f9ea1d1cc3e76e18612da227fe68ea94",
+      "cdd88dda1ddbceed7965c4707366539f385ddf275d05feea265ea69a929d2048"
+    ]
+  },
+  "integration-organize-recovery.js": {
+    "reason": "整理検査停止の証拠を照合する読取専用fs import。fs操作は作業ファイルのreadFileSyncによるハッシュ確認のみで、台帳・認証・実ファイルへの書込みは行わない。",
+    "sites": [
+      "f745a083c06485fae2b9e5e4074c5b2697742d9bca094405d0d2f535c8a6940c"
+    ]
+  },
+  "muse-settings.js": {
+    "reason": "独立合格済みの接続ツール選択を_hub/muse-tool.jsonへ保存する既存操作。書込み先はツールフォルダのパスだけを含む600の一時ファイル・同設定へのrename・一時ファイル除去に限定。Product台帳や認証本文には書き込まない。読取り用openはO_RDONLY|O_NOFOLLOW。",
+    "sites": [
+      "6434bcc1a8b94a9f8acca2dc199fbb37a35584544ec32e15cf93d0e41e74d08c",
+      "e65a2555119e1b29d325a98319f17973292668ccab67adc6ae2736980592eef1",
+      "c7e7ce933533a1acb0bb409444722b0eb0865f64f2912e6ea5c8c092b46022c3",
+      "b5418c44ec6c8efb00013e47c74bb9a74bbc1e75e11cc2e13d88509d55ab5b38",
+      "72c18367ae12b72e118869f5b6dfea226bf3e4561e5462be7b869e66c250ae68",
+      "e8d52bebb9bba9efb678e14eae82e23b8b43b51d1a3562fda2e83c71c9c105ee",
+      "f24ab08edae4c8b00fac35e11100821c6f2a0509c01d7aa7739654d26f1bb8dd"
+    ]
+  },
+  "conversation-search-worker.js": {
+    "reason": "登録済みProductの会話本文と検証済み正式保管ログだけを上限付きで読む。fs importとO_RDONLY|O_NOFOLLOWのopenSyncのみ。台帳・索引・複製・既読への書込みなし、CLI私用領域は対象外。",
+    "sites": [
+      "529a330fd159c80e707d2b10c5a58cd044c74aa372875880b3102d2febd2603e",
+      "4d0e40d9038ea1bd833a15311bb463c8fb0c41a3647bf18cede1d66236098072"
+    ]
+  },
+  "muse-approvals.js": {
+    "reason": "本人の画面承認を扱う専用制御記録のみ。Product/<project>/.ai/muse-approvals/.decisions/<task>/<id>.jsonへ限定。checkDirectoryで所有者・グループ/他者の書込み不可・symlinkなしを確認。初回はO_EXCL/O_NOFOLLOWの0600予約をfsync、更新は検査済み0600単一リンク記録に対し同じ専用フォルダのwx/0600一時ファイルをfsync後renameしディレクトリもfsync。通常の会話・作業本文への書込みはない。行指紋で保存先・保存方法の変更を再監査する。",
+    "sites": [
+      "f768a3c0bc9c2696d17b96d972ebe1ed3dbca091aa7c16f87c4e06e6363eba71",
+      "e65a2555119e1b29d325a98319f17973292668ccab67adc6ae2736980592eef1",
+      "324a1979a8ad46da22f6c1c7b457c2f445d90b7a5edabedcdccfa52f676ed6a5",
+      "c14c56e74e3ac5ba2ab2acc981bd150d290c5212a288d3d1ed302877880af6b1",
+      "fedd4eb561995fe09f1a0b447e760b866479f0f9584badd77968014cb136a76e",
+      "a774f9879c1fa5444ffd1dc115cc50db0ea6e9fa543adeb5cc6fcc6cc3f3cacd",
+      "fedd4eb561995fe09f1a0b447e760b866479f0f9584badd77968014cb136a76e",
+      "288973fe0d54346f7bdd01e8b2416645bbb6e66285da65f68b9bf7d71134b7c8",
+      "6c0e4344a88e8756293f8e5bffaaf3aa7b0feb646a4535e927c862cace22ea9f"
+    ]
+  },
+  "muse-direct.js": {
+    "reason": "人が作成した直接相談/読戻し要求の専用記録Product/<project>/.ai/muse-approvals/<id>.jsonのみ。workspace/locationとcheckDirectoryで対象・所有者・書込み権限・symlinkなしを検査し、wx/0600で排他作成してfsync。決定記録はMuseApprovals.save、会話の保存はchat.appendOnceの証拠付き保存を利用する。保存行の指紋を限定登録。",
+    "sites": [
+      "f768a3c0bc9c2696d17b96d972ebe1ed3dbca091aa7c16f87c4e06e6363eba71",
+      "bd6e23ae68dd11c60299133e26f9d3338e2f2463dc5b5ead2ab0b1eaad53c3ce",
+      "2776abd0ab74e30584bf689cc69f59930aacc6ab30acd51cd510dad0013776ca",
+      "f81ca5e51d64c624a0e6a97271dbf8b1de2535ad5335c4e10bae8d15e93f6271",
+      "eb16db5fa4a4ab673c1bddf1a3128d4a148062667090660668d1d34cca088379"
+    ]
+  },
+  "muse-reply-scheduler.js": {
+    "reason": "_hub/muse-direct-settings.jsonの自動読戻し設定だけを保存。通常Product台帳への直接書込みなし。checkDirectoryで所有者・書込み権限・symlinkなしを検査し、既存記録はreadで0600/単一リンク等を検査。同フォルダのwx/0600一時ファイルをfsync後renameし、一時ファイルだけを後片付けする。予約記録はMuseDirect/MuseApprovalsの専用経路を利用。保存行の指紋を限定登録。",
+    "sites": [
+      "e3bb611954b6ca6e87686b5edd29327736eab67d137a0ba25d192d51b2df8bf1",
+      "63fac46e9feaceb631d8f2368175267e854b4a816e34bf66035ee59dbed024df",
+      "83990d745e3d15ba8cfc6fbfbea3bf43dae271b269dfbf152f50e8ae9516c36f",
+      "254f1465775a5bb05cb65c36dd667b1ae3f03a28dd3f0476856f499f29889260"
+    ]
+  },
+  "git-read.js": {
+    "reason": "Read-only Git async helper. Filesystem use is limited to HEAD, private index and paused-operation metadata discovery/stat; no file writes. Git children disable optional locks and index refresh.",
+    "sites": [
+      "e8aaa86eb3f48128bd6772ad716b23c6fab21bdd50c298837a4ff2d3365287a8"
+    ]
+  },
+  "integration-read-worker.js": {
+    "reason": "Display-only worker; mutation methods are guarded and arbitrary children denied. Existing record-save readiness may create/copy/delete only its owned os.tmpdir()/hub-record-index-* directory and run intent-to-add/commit --only --dry-run against its private GIT_INDEX_FILE with hooks/signing disabled. Real index/ref/worktree writes, save/apply/dispatch/restart are not exposed. Git reads run through parent async RPC.",
+    "sites": [
+      "36a731a95c2bb4dde9fcbc891727822f2cf5cfabaa2f584857bf3d14c15bce55",
+      "b35173f726343c1f53f9b951a130501e77f3e378054404848c9814a12bc1df7c",
+      "774f30f43e390b9da561a43b38bece032a87c865f5bc1c4d66baff60a70cd1b4",
+      "3523c54b61359f3224591fe07497b6b2332f7d9007d69fe0ee23e3e7d5c0ef0e",
+      "d1f234f53af67ce1ab51280c9af8fd2f57729651445ab8df03e42381e95dc0e1",
+      "ab5c4eed4fa1d18a1639d44835eb628984cada64bc6656d11885411735facf66",
+      "4b93052cc3c5c008e9c16af7c576b8260aec133039db2c919a734ba041a8ce73",
+      "69a497f75f9b116a4ad925d49521574445092704767dcdfcaf63124d1ad2a5a7",
+      "ed180b04a648aa31a934dd039f4b9656d363de4d698cb48270bda688c26cd8f5",
+      "f4f00d1653e7c75e87642cd9622602d86ae7728db89b0a46e10056d25ff76dbb"
+    ]
+  },
+  "idea-spool-index.js": {
+    "reason": "Read-only worker index of request identities and compact maintenance archive receipts; absence is fenced for missing/corrupt catalog. Legacy v1 batches without a receipt use their fixed plan, complete run inventory and content-bound request identities; only changed stamps cause worker rereads. No filesystem mutation or ledger write.",
+    "sites": [
+      "912844c43c90d9afe7daebcd2c4ea3149381794d046e179b14d5b11094b89202"
+    ]
+  },
+  "handoff-scan.js": {
+    "reason": "Read-only finished-receipt scanner for display and periodic preflight only. Filesystem references here install deny guards for writes/open-for-write and process launches; the fixed scan message calls existing pending/failure readers only. No completion, adoption, recovery or action is exposed. Action paths retain current synchronous validation.",
+    "sites": [
+      "03379dc2312d2008e46744b705c6184bfea34ea1f7281d68846d61587d23f1ed",
+      "774f30f43e390b9da561a43b38bece032a87c865f5bc1c4d66baff60a70cd1b4",
+      "ed180b04a648aa31a934dd039f4b9656d363de4d698cb48270bda688c26cd8f5",
+      "ec9198d1a9553f9631b4e1879f37eef875a5abf2f5bdf9896f2e790aa4c0ff5c"
+    ]
+  },
+  "spool-archive-proof.js": {
+    "reason": "明示退避保守の原文証拠を読むだけ。現役会話・committed履歴の所属/digest/権限・正式削除記録と移動先fingerprintを照合。会話/削除記録/Trashへの書込みなし。",
+    "sites": [
+      "cd65e59152c7a710c08496b0eee5a1c890dcbbf9857bd947f36311d96e7e42fd",
+      "f63e15bbe12deafbb165c31fd0701f2d0d68be3bd7e2a916faf3f4cf920852bf"
+    ]
+  },
+  "handoff-admission.js": {
+    "reason": "Strict action preflight Worker: filesystem references install fail-closed write/open restrictions only; fixed scan operation reads temporary/active spool metadata and receipts, cannot write ledger, spool or launch children. Action/permission remains owned by parent after await.",
+    "sites": [
+      "6479883a282b22359f6b364a61c4b29307d256beb550284cf292bc8ba7c4249c",
+      "774f30f43e390b9da561a43b38bece032a87c865f5bc1c4d66baff60a70cd1b4",
+      "ed180b04a648aa31a934dd039f4b9656d363de4d698cb48270bda688c26cd8f5",
+      "ec9198d1a9553f9631b4e1879f37eef875a5abf2f5bdf9896f2e790aa4c0ff5c"
     ]
   }
 }

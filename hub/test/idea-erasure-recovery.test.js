@@ -153,3 +153,49 @@ test('R1 complete legacy journal temp still promotes by exact bytes',t=>{
   const marker=fs.readdirSync(f.s.controlDir).find(n=>n.endsWith('.preparing'));fs.rmdirSync(path.join(f.s.controlDir,marker));
   f.restart();assertComplete(f);
 });
+
+for(const target of ['canonical','raw','wrapped'])for(const boundary of ['partial','after-rename'])test(`reviewed markdown ${target} ${boundary} resumes exact line erasure without raw payload in intent`,t=>{
+ const f=fixture(t),original=Buffer.from('# unknown original\r\nRECOVERY-PRIVATE-CANARY\r\nkeep independent\r\n末尾を保持');fs.writeFileSync(f.s.md,original);
+ f.ideas.backup('P',{opId:U.uuid()});const review=f.ideas.eraseAvailability('P',f.victim.id).markdownReview;
+ f.op.markdownReview={token:review.token,confirmed:true,documents:review.documents.map(d=>({hash:d.hash,removeLines:d.targetLines}))};
+ const match=target==='canonical'?file=>file===f.s.file:target==='raw'?file=>file===f.s.md:file=>file.includes(path.sep+'backups'+path.sep)&&path.basename(file)==='markdown';
+ const cut=interrupt(f,match,boundary);assert.throws(()=>f.ideas.erase('P',f.op));assert.equal(cut.fired,true);
+ const journal=fs.readFileSync(path.join(f.s.controlDir,'erase-intent.json'),'utf8');assert.equal(journal.includes('RECOVERY-PRIVATE-CANARY'),false);assert.equal(journal.includes('unknown original'),false);
+ f.restart();assertComplete(f);assert.deepEqual(fs.readFileSync(f.s.md),Buffer.from('# unknown original\r\nkeep independent\r\n末尾を保持'));assert.equal(f.ideas.erase('P',f.op).deleted,true);
+});
+
+test('review decisions stay bound to their own files when one result equals another original, including restart',t=>{
+ const f=fixture(t),first='Shared unknown heading\nRECOVERY-PRIVATE-CANARY\nOld target wording\n',second='Shared unknown heading\nOld target wording\n';fs.writeFileSync(f.s.md,first);f.ideas.backup('P',{opId:U.uuid()});fs.writeFileSync(f.s.md,second);
+ const review=f.ideas.eraseAvailability('P',f.victim.id).markdownReview;assert.equal(review.documents.length,2);
+ f.op.markdownReview={token:review.token,confirmed:true,documents:review.documents.map(d=>({hash:d.hash,removeLines:[2]}))};
+ const cut=interrupt(f,file=>file===f.s.md,'after-rename');assert.throws(()=>f.ideas.erase('P',f.op));assert.equal(cut.fired,true);f.restart();assertComplete(f);
+ assert.equal(fs.readFileSync(f.s.md,'utf8'),'Shared unknown heading\n');const wrappers=files(path.join(f.ideas.control,'backups')).filter(file=>path.basename(file)==='markdown');for(const file of wrappers)assert.equal(Buffer.from(JSON.parse(fs.readFileSync(file)).base64,'base64').toString(),second);
+});
+
+for(const target of ['canonical','import','wrapped-import'])for(const boundary of ['partial','after-rename'])test(`import line review ${target} ${boundary} resumes then deletes a later legacy row after live edit`,t=>{
+ const f=fixture(t),eol='\r\n';fs.writeFileSync(f.s.md,['# 未着手','RECOVERY-PRIVATE-CANARY','- LATER-IMPORT-CANARY','KEEP-IMPORT-TAIL'].join(eol));
+ f.ideas.initialize('P',U.uuid(),{importLegacy:true});const legacy=Object.values(f.ideas.read('P').items).find(i=>i.text==='LATER-IMPORT-CANARY'),importFile=path.join(f.s.controlDir,'imports',legacy.source.hash+'.md');f.ideas.backup('P',{opId:U.uuid()});
+ const confirm=id=>{const r=f.ideas.eraseAvailability('P',id).markdownReview;assert.ok(r);return {token:r.token,confirmed:true,documents:r.documents.map(d=>({hash:d.hash,removeLines:d.targetLines}))};};
+ f.op.markdownReview=confirm(f.victim.id);
+ const match=target==='canonical'?file=>file===f.s.file:target==='import'?file=>file===importFile:file=>file.includes('/backups/')&&file.endsWith('/control/imports/'+legacy.source.hash+'.md');
+ const cut=interrupt(f,match,boundary);assert.throws(()=>f.ideas.erase('P',f.op));assert.equal(cut.fired,true);f.restart();assertComplete(f);
+ assert.equal(fs.readFileSync(importFile,'utf8'),['# 未着手','','- LATER-IMPORT-CANARY','KEEP-IMPORT-TAIL'].join(eol));assert.deepEqual(f.ideas.read('P').items[legacy.id].source,legacy.source);
+ fs.appendFileSync(f.s.md,eol+'LIVE-EDIT-ONLY');const item=f.ideas.read('P').items[legacy.id],op={opId:U.uuid(),id:item.id,baseContentRev:item.contentRev,baseControlRev:item.controlRev,confirm:true,markdownReview:confirm(item.id)};assert.equal(f.ideas.erase('P',op).deleted,true);
+ assert.equal(fs.readFileSync(importFile,'utf8'),['# 未着手','','','KEEP-IMPORT-TAIL'].join(eol));assert.deepEqual(f.ideas.read('P').imports[legacy.source.hash].unknown,[{line:4,text:'KEEP-IMPORT-TAIL'}]);
+ for(const file of files(f.root)){
+   let bytes=fs.readFileSync(file);assert.equal(bytes.includes(Buffer.from('LATER-IMPORT-CANARY')),false,file);try{const v=JSON.parse(bytes);if(v.base64){bytes=Buffer.from(v.base64,'base64');assert.equal(bytes.includes(Buffer.from('LATER-IMPORT-CANARY')),false,file);}}catch(e){if(e.code==='ERR_ASSERTION')throw e;}
+ }
+ assert.equal(f.restart().erase('P',op).deleted,true);
+});
+
+test('import line review retains recovery compatibility with a previously prepared compact-import journal',t=>{
+ const f=fixture(t);fs.writeFileSync(f.s.md,'# 未着手\nRECOVERY-PRIVATE-CANARY\n- legacy retained\nunknown retained\n');f.ideas.initialize('P',U.uuid(),{importLegacy:true});
+ const r=f.ideas.eraseAvailability('P',f.victim.id).markdownReview;f.op.markdownReview={token:r.token,confirmed:true,documents:r.documents.map(d=>({hash:d.hash,removeLines:d.targetLines}))};
+ f.ideas.fault=stage=>{if(stage==='erase-intent')throw Error('committed old journal');};assert.throws(()=>f.ideas.erase('P',f.op));
+ const file=path.join(f.s.controlDir,'erase-intent.json'),intent=JSON.parse(fs.readFileSync(file));delete intent.context.importResolutions;
+ // Model the already sealed output of bcc8aab5; recovery must not substitute
+ // the new blank-line output halfway through an older committed operation.
+ for(const e of intent.files)if(e.reviewedImport){const r=e.reviewedImport,bytes=fs.readFileSync(e.file);e.reviewedMarkdown=r.before;e.after=U.hash(Buffer.from(bytes.toString().split('\n').filter((_,n)=>!r.removeLines.includes(n+1)).join('\n')));delete e.reviewedImport;}
+ fs.writeFileSync(file,U.bytes(intent));f.restart();assertComplete(f);
+ const imported=Object.values(f.ideas.read('P').imports)[0];assert.deepEqual(imported.unknown,[{line:4,text:'unknown retained'}]);assert.equal(fs.readFileSync(imported.backup,'utf8'),'# 未着手\n- legacy retained\nunknown retained\n');
+});

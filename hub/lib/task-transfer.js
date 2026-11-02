@@ -14,6 +14,9 @@ class TaskTransfer {
   constructor({ store, removal, baseOf = p => p.dir, integration = () => null, notify = () => {}, beforeCleanup = () => {} }) {
     Object.assign(this, { store, removal, baseOf, integration, notify, beforeCleanup }); this.tokens = new Map();
     this.dir = path.join(store.root, '_hub/task-handoffs');
+    this.pendingCache = new (require('./record-read-cache').RecordReadCache)(bytes => {
+      const r=JSON.parse(bytes);return r.complete || r.partial || r.handedUp && !r.receiving || r.integrating ? [] : [{project:r.project,task:r.task,title:r.title,targetProject:r.targetProject,targetTask:r.targetTask}];
+    });
   }
   file(project, task) { return path.join(this.dir, hash(project + '\0' + task) + '.json'); }
   read(project, task) { const f = this.file(project, task); noLinks(f); return exists(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null; }
@@ -23,7 +26,7 @@ class TaskTransfer {
     // Shared by ordinary publication and consultation closure, across processes.
     // Never steal an interrupted publisher's reservation.
     fs.writeFileSync(lock, randomUUID(), { flag: 'wx', mode: 0o600 });
-    try { return operation(); } finally { fs.unlinkSync(lock); }
+    try { return operation(); } finally { this.pendingCache.invalidate(this.file(project,task)); fs.unlinkSync(lock); }
   }
   save(r) {
     return this.withSaveLock(r.project, r.task, () => {
@@ -33,11 +36,11 @@ class TaskTransfer {
     });
   }
   pending() {
-    if (!exists(this.dir)) return []; noLinks(this.dir);
-    return fs.readdirSync(this.dir).filter(n => /^[a-f0-9]{64}\.json$/.test(n)).flatMap(n => {
-      try { const f=path.join(this.dir,n); noLink(f); const r=JSON.parse(fs.readFileSync(f,'utf8'));
-        return r.complete || r.partial || r.handedUp && !r.receiving || r.integrating ? [] : [{project:r.project,task:r.task,title:r.title,targetProject:r.targetProject,targetTask:r.targetTask}];
-      } catch { return []; } // 壊れた記録は消さず、他の正常な引渡しの再開を妨げない。
+    if (!exists(this.dir)) { this.pendingCache.clear(); return []; } noLinks(this.dir);
+    const names=fs.readdirSync(this.dir).filter(n=>/^[a-f0-9]{64}\.json$/.test(n));this.pendingCache.prune(this.dir,names);
+    return names.flatMap(n => {
+      try { return structuredClone(this.pendingCache.read(path.join(this.dir,n))||[]); }
+      catch { return []; } // Keep corrupt records without blocking other handoffs.
     });
   }
   expectTitle(project, task, expected, receipt) {

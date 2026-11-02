@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "platform": "macOS arm64 / CPython 3.12",
+  "source": "fixed upstream uv.lock at 55b65587028eebfa15eb3b411a6ba2bbcaafb504; not freshly fetched",
+  "wheels": [
+    {
+      "name": "playwright",
+      "version": "1.63.0",
+      "url": "https://files.pythonhosted.org/packages/f5/9a/948b930b1a8c4ee869e5a139a2b7747caa06aab56a3f09a2f0abdcbda221/playwright-1.63.0-py3-none-macosx_11_0_arm64.whl",
+      "filename": "playwright-1.63.0-py3-none-macosx_11_0_arm64.whl",
+      "sha256": "fd1aa00631d44d55e56e0975bf3f3f285fac4a9fd2813183f0c12a488f1a1b24",
+      "bytes": 42944679
+    },
+    {
+      "name": "greenlet",
+      "version": "3.5.6",
+      "url": "https://files.pythonhosted.org/packages/72/18/3fc6d951466ae9a2a688edcddde3b2e388da0a8244e0caf7117bbeb0eb95/greenlet-3.5.6-cp312-cp312-macosx_11_0_universal2.whl",
+      "filename": "greenlet-3.5.6-cp312-cp312-macosx_11_0_universal2.whl",
+      "sha256": "a5876d0a60355af98d535c47f6cd6eb0f8a432396dab26845d380b92f8412422",
+      "bytes": 295668
+    },
+    {
+      "name": "pyee",
+      "version": "13.0.1",
+      "url": "https://files.pythonhosted.org/packages/a0/c4/b4d4827c93ef43c01f599ef31453ccc1c132b353284fc6c87d535c233129/pyee-13.0.1-py3-none-any.whl",
+      "filename": "pyee-13.0.1-py3-none-any.whl",
+      "sha256": "af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228",
+      "bytes": 15659
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "bytes": 45571
+    },
+    {
+      "name": "yt-dlp",
+      "version": "2026.8.19",
+      "url": "https://files.pythonhosted.org/packages/69/b2/8cd1613f56eed7ceb64fbd4df3f1c01246bfb098e6f398228bafda22b80b/yt_dlp-2026.8.19-py3-none-any.whl",
+      "filename": "yt_dlp-2026.8.19-py3-none-any.whl",
+      "sha256": "1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf",
+      "bytes": 3185533
+    }
+  ],
+  "wheel_bytes_total": 46487110,
+  "chromium": {
+    "version": null,
+    "revision": null,
+    "url": null,
+    "sha256": null,
+    "bytes": null,
+    "status": "blocked: browser manifest is inside the not-yet-downloaded pinned Playwright wheel; no archive hash/size available in fixed source. Never infer or use latest."
+  },
+  "downloaded": false,
+  "installed": false,
+  "facebook_blockers": [
+    "Pinned upstream browser discovery lists Linux executable paths only; macOS browser compatibility unverified.",
+    "Browser egress proxy needs loopback networking; current 443/53 sandbox does not allow that. No exception enabled."
+  ]
+}

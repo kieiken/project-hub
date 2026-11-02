@@ -57,6 +57,47 @@ function base64url(text, max) {
   if (typeof text !== 'string' || !/^[\w-]+$/.test(text) || text.length > max) fail('encoding');
   const buf = Buffer.from(text, 'base64url'); if (buf.toString('base64url') !== text) fail('encoding'); return buf;
 }
+// Preserve previously signed whitespace/formatting, but never let native and JS
+// JSON parsers choose different values for the same (possibly escaped) key.
+function parseSigningPayload(bytes) {
+  const text = bytes.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bytes)) fail('format');
+  const parsed = JSON.parse(text); // Validate grammar before the token walk.
+  let i = 0;
+  const space = () => { while (/\s/.test(text[i] || '') && i < text.length) i++; };
+  function string() {
+    const start = i++;
+    while (i < text.length) {
+      const ch = text[i++];
+      if (ch === '\\') i++;
+      else if (ch === '"') return text.slice(start, i);
+    }
+    fail('format');
+  }
+  function value() {
+    space();
+    if (text[i] === '{') {
+      i++; space(); const keys = new Set();
+      if (text[i] === '}') { i++; return; }
+      while (true) {
+        space(); const key = JSON.parse(string());
+        if (keys.has(key)) fail('format');
+        keys.add(key); space(); i++; // colon, grammar already checked
+        value(); space();
+        if (text[i++] === '}') return;
+      }
+    }
+    if (text[i] === '[') {
+      i++; space();
+      if (text[i] === ']') { i++; return; }
+      while (true) { value(); space(); if (text[i++] === ']') return; }
+    }
+    if (text[i] === '"') { string(); return; }
+    while (i < text.length && !/[\s,}\]]/.test(text[i])) i++;
+  }
+  value();
+  return parsed;
+}
 function verifyManifest(envelope, trust, { now = Date.now(), version, maxSeq = 0, allowAccepted = false, installed = false } = {}) {
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope) || !Object.keys(envelope).every(k => ['kid', 'payload', 'sig'].includes(k))) fail('envelope');
   const key = Object.hasOwn(trust.keys || {}, envelope.kid) ? trust.keys[envelope.kid] : null;
@@ -64,8 +105,17 @@ function verifyManifest(envelope, trust, { now = Date.now(), version, maxSeq = 0
   const bytes = base64url(envelope.payload, 86000), sig = base64url(envelope.sig, 100);
   let pub;
   try { pub = crypto.createPublicKey({ key: Buffer.from(key.spkiB64, 'base64'), format: 'der', type: 'spki' }); } catch { fail('key'); }
-  if (pub.asymmetricKeyType !== 'ed25519' || sig.length !== 64 || !crypto.verify(null, bytes, pub, sig)) fail('signature');
-  let m; try { m = JSON.parse(bytes.toString('utf8')); } catch { fail('format'); }
+  // Missing alg means legacy Ed25519 only, for existing release constants.
+  // The untrusted manifest never chooses the verification algorithm.
+  const alg = key.alg === undefined ? 'ed25519' : key.alg;
+  if (sig.length !== 64) fail('signature');
+  if (alg === 'ed25519') {
+    if (pub.asymmetricKeyType !== 'ed25519' || !crypto.verify(null, bytes, pub, sig)) fail('signature');
+  } else if (alg === 'p256-sha256') {
+    if (pub.asymmetricKeyType !== 'ec' || pub.asymmetricKeyDetails?.namedCurve !== 'prime256v1' ||
+        !crypto.verify('sha256', bytes, { key: pub, dsaEncoding: 'ieee-p1363' }, sig)) fail('signature');
+  } else fail('key');
+  let m; try { m = parseSigningPayload(bytes); } catch { fail('format'); }
   // A trial feed cannot authorize a stable application, or the reverse. These
   // expectations come from committed release constants, never the envelope.
   const trial = trust.channel === 'purchase-test', runtime = trust.runtimeProtocol === 1;
@@ -352,7 +402,7 @@ class PackagedUpdate {
     if (this.platform === 'win32') return this.status();
     const job = this.data.prepared, m = this.data.manifest;
     if (!job || this.data.pendingConfirm) return this.status();
-    if (this.busy()) { this.phase('deferred', { reason: this.idleMessage() }); return this.status(); }
+    if ((this.strictBusy ? await this.strictBusy() : this.busy())) { this.phase('deferred', { reason: this.idleMessage() }); return this.status(); }
     this.siblingValid(job.sibling);
     const fresh = path.join(job.sibling, 'new.app'), old = path.join(job.sibling, 'old.app');
     verifyManifest(this.data.envelope, this.trust, { now: this.now(), version: this.currentVersion, maxSeq: this.data.maxSeq, allowAccepted: true });
@@ -362,7 +412,7 @@ class PackagedUpdate {
     if (!this.supported()) fail('unsupported');
     const install = { target: this.appPath, old, fresh, sibling: job.sibling, from: this.currentVersion, to: m.version, at: this.now() };
     this.phase('installing', { install });
-    if (this.busy()) { delete this.data.install; this.phase('deferred', { reason: this.idleMessage() }); return this.status(); }
+    if ((this.strictBusy ? await this.strictBusy() : this.busy())) { delete this.data.install; this.phase('deferred', { reason: this.idleMessage() }); return this.status(); }
     let moved = false;
     try {
       this.rename(this.appPath, old); moved = true;
@@ -447,4 +497,4 @@ class PackagedUpdate {
     });
   }
 }
-module.exports = { PackagedUpdate, verifyManifest, treeHash, compatible, eligibility, noLinks, securePath, writeJSON, newer, REASONS, run };
+module.exports = { PackagedUpdate, verifyManifest, parseSigningPayload, treeHash, compatible, eligibility, noLinks, securePath, writeJSON, newer, REASONS, run };

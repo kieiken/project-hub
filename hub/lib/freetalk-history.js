@@ -6,6 +6,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { noLinks, readNoLinks, exists } = require('./remove');
 const { scalar } = require('./frontmatter');
 const chat = require('./chat');
+const delegationText=require('./delegation-text');
 // 保存済み文字からの目安。日本語等は1文字、英数等ASCIIは4文字で約1トークン。
 function estimate(text) {
   let ascii = 0, other = 0;
@@ -62,7 +63,7 @@ class FreetalkHistory {
       if(r.request===summary.id)return true;
       if(summary.requestText)return r.text===summary.requestText || r.text===summary.requestShown;
       const lines=(r.text || '').split('\n');
-      return lines[0]===summary.marker || (/^【(?:渡した依頼|已交接的要求)：.+】$/.test(lines[0]) && lines[1]===summary.marker);
+      return lines[0]===summary.marker || (delegationText.isEnvelopeLine(lines[0]) && lines[1]===summary.marker);
     }):-1;
     const after=index<0?[]:rows.slice(index+1).filter(r=>r.role!=='event'), result=after[0];
     const text=result?.role==='assistant' && (!result.request || result.request===(rows[index]?.request || summary?.id)) && !result.error && !result.asks?.length?result.text || '':'';

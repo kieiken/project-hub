@@ -62,6 +62,20 @@ test('Composer focus rechecks the layout on the next animation frame and preserv
  a.vv.height=340;a.vv.offsetTop=360;a.frames.shift()();
  assert.deepEqual(a.scrollCalls,[{x:0,y:0,height:'340px'}]);assert.equal(a.el('#chat-in'),input);assert.equal(input.value,'書きかけ');assert.equal(a.doc.activeElement,input);
 });
+test('Focused composer scrolls its own containers after keyboard resize, without changing messages or draft',()=>{
+ const a=fixture();a.api.mount('p/t');a.doc.querySelector('#mobile-compose').handlers.click();
+ const input=a.el('#chat-in'),chat=a.el('.chat'),composer=a.composer,msgs=a.el('.msgs');
+ input.value='カーソルのある下書き';a.doc.activeElement=input;
+ chat.scrollTop=0;composer.scrollTop=0;msgs.scrollTop=123;
+ chat.getBoundingClientRect=()=>({top:100,bottom:340});
+ composer.getBoundingClientRect=()=>({top:200-chat.scrollTop,bottom:440-chat.scrollTop});
+ input.getBoundingClientRect=()=>({top:460-chat.scrollTop-composer.scrollTop,bottom:520-chat.scrollTop-composer.scrollTop});
+ a.vv.height=340;a.vv.resize();
+ assert.equal(chat.scrollTop,100);assert.equal(composer.scrollTop,84);assert.equal(msgs.scrollTop,123);
+ assert.equal(input.value,'カーソルのある下書き');assert.equal(a.doc.activeElement,input);assert.equal(a.scrollCalls.length,0);
+ a.vv.scale=2;const before=[chat.scrollTop,composer.scrollTop];a.vv.resize();assert.deepEqual([chat.scrollTop,composer.scrollTop],before);
+ a.vv.scale=1;a.vv.height=700;a.doc.activeElement=null;a.vv.resize();assert.equal(chat.scrollTop,0);assert.equal(msgs.scrollTop,123);
+});
 test('Information preference and current name remain discoverable; keyboard size restores and desktop keeps footer position',()=>{
  const a=fixture();a.api.mount('p/t');a.el('#mobile-info').handlers.click();assert.equal(a.values.get('hub-mobile-info'),'open');assert.equal(a.el('#mobile-info').textContent,'▲');assert.equal(a.el('#mobile-info').attrs['aria-label'],'情報と操作を閉じる');
  a.el('.whead h2').textContent='固定機能';a.el('#turn-n').textContent='返事待ち 2';a.el('#turn-done-n').textContent='完了確認 5';a.api.badges();assert.equal(a.el('#mobile-badges').textContent,'固定機能');
@@ -77,6 +91,20 @@ test('Information name follows the current work or project and clears when leavi
  assert.equal(a.el('#mobile-badges').textContent,'別の作業 <>&');assert.equal(a.el('#mobile-badges').title,'別の作業 <>&');
  a.el('.whead h2').textContent='';a.el('.ph h2').textContent='Project Hub';a.api.badges();assert.equal(a.el('#mobile-badges').textContent,'Project Hub');
  a.el('.ph h2').textContent='';a.api.badges();assert.equal(a.el('#mobile-badges').textContent,'');assert.equal(a.el('#mobile-badges').title,'');
+});
+
+test('Phase progress stays outside the mobile information fold in both modes and across width changes',()=>{
+ for(const mode of ['chat','term']){
+  const a=fixture(),strip=a.doc.createElement('section');strip.dataset.workProgress='';
+  a.work.insertBefore(strip,a.el('.chat'));
+  if(mode==='term')a.el('.chat').className='panes';
+  a.api.mount('p/t');const info=a.doc.querySelector('#mobile-work-info');
+  assert.equal(strip.parent,a.work);assert.equal(info.contains(a.el('.whead')),true);
+  assert.equal(info.contains(strip),false);assert.equal(a.doc.body.attrs['mobile-info-open'],false);
+  a.el('#mobile-info').handlers.click();a.el('#mobile-info').handlers.click();
+  a.media.matches=false;a.media.change();a.media.matches=true;a.media.change();
+  assert.equal(strip.parent,a.work);assert.equal(info.contains(strip),false);
+ }
 });
 
 test('Width change replaces only model option text, retaining select/input/attachments/effort', () => {

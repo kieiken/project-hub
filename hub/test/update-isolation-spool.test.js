@@ -9,8 +9,8 @@ function launch(f,r,selectionOnly=false){const o={project:'fixture',task:'task',
 test('handoff reconstructs consumed text, exactly once tool/final rows; double adopt refused',async()=>{
  const f=fixture(),a=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir}),run=launch(f,a);await run.startedP;await until(()=>chat.read(f.pdir,'task').filter(r=>r.tool).length>=2);
  const runDir=run.child.dir;assert.ok(a.handoffSafe('fixture','task'));assert.throws(()=>spool.adopt(runDir,'other'),/別のHub/);
- a.detachForRestart();const before=chat.read(f.pdir,'task').length;await pause(150);assert.equal(chat.read(f.pdir,'task').length,before);
- let settled=0;const b=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir,onSettled:()=>settled++});b.adopt();assert.equal(b.adoptErrors.length,0);b.adopt();assert.equal(b.adoptErrors.length,1);await until(()=>spool.read(runDir,'finished.json'));
+ await a.detachForRestart();const before=chat.read(f.pdir,'task').length;await pause(150);assert.equal(chat.read(f.pdir,'task').length,before);
+ let settled=0;const b=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir,onSettled:()=>settled++});await b.adopt();assert.equal(b.adoptErrors.length,0);await b.adopt();assert.equal(b.adoptErrors.length,1);await until(()=>spool.read(runDir,'finished.json'));
  const rows=chat.read(f.pdir,'task');assert.equal(rows.filter(r=>r.tool).length,6);assert.equal(rows.filter(r=>r.role==='assistant').length,1);assert.equal(rows.at(-1).text,['text1','text3','text5','text7','text9','text11'].join('\n\n'));assert.equal(settled,1);assert.equal(chat.readMeta(f.pdir,'task').sessions.codex,'fixture-session');assert.equal(fs.readFileSync(path.join(f.dir,'launches'),'utf8'),'1');assert.equal(new Set(rows.map(r=>r.spoolId)).size,rows.length);
  assert.equal(fs.statSync(path.join(runDir,'request.json')).mode&0o777,0o600);assert.equal(fs.statSync(runDir).mode&0o777,0o700);assert.equal(spool.read(runDir,'request.json').options.env,undefined);assert.equal(spool.pending(f.root).length,0);fs.rmSync(f.dir,{recursive:true,force:true});
 });
@@ -19,13 +19,13 @@ test('cancel reaches the CLI process group and persists a single stopped result'
 });
 test('summary session classification survives Hub restart without replacing the original session',async()=>{
  const f=fixture(),original={sessions:{codex:'original-long-session'},models:{codex:'fixture'},rulesSent:{codex:{hash:'original'}}};chat.writeMeta(f.pdir,'task',original);
- const a=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir}),run=launch(f,a,true);await run.startedP;await until(()=>chat.read(f.pdir,'task').some(r=>r.tool));a.detachForRestart();
- let settled=false;const b=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir,onSettled:o=>{assert.equal(o.selectionOnly,true);settled=true;}});b.adopt();assert.equal(b.adoptErrors.length,0);await until(()=>spool.read(run.child.dir,'finished.json'));
+ const a=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir}),run=launch(f,a,true);await run.startedP;await until(()=>chat.read(f.pdir,'task').some(r=>r.tool));await a.detachForRestart();
+ let settled=false;const b=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir,onSettled:o=>{assert.equal(o.selectionOnly,true);settled=true;}});await b.adopt();assert.equal(b.adoptErrors.length,0);await until(()=>spool.read(run.child.dir,'finished.json'));
  assert.equal(settled,true);assert.deepEqual(chat.readMeta(f.pdir,'task'),original);assert.equal(fs.readFileSync(path.join(f.dir,'launches'),'utf8'),'1');fs.rmSync(f.dir,{recursive:true,force:true});
 });
 test('saved cursor retry does not duplicate already appended tool/final rows',async()=>{
  const f=fixture(),r=new chat.ChatRunner({spoolRoot:f.root});const run=launch(f,r);await until(()=>spool.read(run.child.dir,'finished.json'));const before=chat.read(f.pdir,'task');fs.unlinkSync(path.join(run.child.dir,'finished.json'));run.child.release();
- let hooks=0;const next=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir,onAdoptEnd:()=>hooks++,onSettled:()=>hooks++});next.adopt();assert.equal(next.adoptErrors.length,1);assert.equal(spool.read(run.child.dir,'finished.json'),null);await assert.rejects(next.sendQueued({project:'fixture',task:'task'}));
+ let hooks=0;const next=new chat.ChatRunner({spoolRoot:f.root,dirOf:()=>f.pdir,onAdoptEnd:()=>hooks++,onSettled:()=>hooks++});await next.adopt();assert.equal(next.adoptErrors.length,1);assert.equal(spool.read(run.child.dir,'finished.json'),null);await assert.rejects(next.sendQueued({project:'fixture',task:'task'}));
  const issue=next.handoffErrors()[0];next.recoverHandoff({project:'fixture',task:'task',run:path.basename(run.child.dir),token:issue.token});assert.ok(spool.read(run.child.dir,'finished.json'));assert.equal(next.handoffErrors().length,0);assert.equal(hooks,0);assert.deepEqual(chat.read(f.pdir,'task'),before);assert.equal(fs.readFileSync(path.join(f.dir,'launches'),'utf8'),'1');fs.rmSync(f.dir,{recursive:true,force:true});
 });
 test('a later CLI keeps boot worker bytes after replacement, and drains large UTF-8 output before exit',async()=>{

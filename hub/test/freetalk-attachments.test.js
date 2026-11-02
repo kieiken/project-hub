@@ -46,6 +46,13 @@ test('PPTXは数値順のスライド文字とノートを抽出、画像だけ�
  const broken=await x.upload(a.id,'broken.pptx',Buffer.from('invalid'),1);assert.equal(broken.status,'unsupported');
  assert.equal(xmlText('<a:t>A &lt; B &quot;Q&quot; &#65;</a:t>'),'A < B "Q" A');
 });
+test('PPTXの文字抽出は閉じのない開始タグが大量でも入力長に比例する時間で終わる',()=>{
+ assert.equal(xmlText('<a:tab/><a:t xml:space="preserve">A<![CDATA[<b>]]></a:t><a:t>B</a:t><a:t>open'),'A<b>\nB');
+ const n=200000,started=Date.now();
+ assert.equal(xmlText('<a:t>'.repeat(n)),'');assert.equal(xmlText('<a:t '.repeat(n)),'');
+ assert.equal(xmlText('<a:t>'+'<![CDATA['.repeat(n)+'</a:t>'),'<![CDATA['.repeat(n));
+ assert.ok(Date.now()-started<5000);
+});
 test('Keynoteのzip/パッケージはプレビューのみ、本文非対応を表示、リンク・特殊・容量超過拒否',async t=>{
  const {tmp,ft,a,attachments:x}=fixture(t);
  const archive=await x.upload(a.id,'deck.key',zip(tmp,'deck.key',{'preview.png':png,'Index/Document.iwa':'opaque'}),1);assert.equal(archive.status,'unsupported');assert.match(archive.message,/PDFかPPTX/);assert.deepEqual(x.preview(a.id,archive.id).data,png);

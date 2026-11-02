@@ -8,6 +8,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 const COOKIE = 'hub_session';
+const DEVICE = 'hub_device';
+const YEAR = 365 * 86400000;
 const DAYS30 = 30 * 86400000;
 const LOCK_MS = 15 * 60000;
 const LOCK_COUNT = 5; // 同じ相手から15分に5回まちがえたら止める
@@ -16,7 +18,17 @@ const MAX_SESSIONS = 20;
 const MIN_PASS = 8;
 
 // 中継された通信（tailscale serve など）なら外から。Mac の中の画面・アプリはこの印を付けない
-const isRemote = req => ['tailscale-user-login', 'x-forwarded-for', 'x-forwarded-host', 'forwarded', 'x-real-ip', 'via'].some(h => req.headers[h] !== undefined);
+const isRemote = req => ['tailscale-user-login', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'x-real-ip', 'via'].some(h => req.headers[h] !== undefined);
+// Shape/host admission only, NOT proof of a local proxy process's identity.
+// Local processes can forge the complete tuple; the passcode/device budgets
+// still apply. Partial proxy headers must never reach the login attempt path.
+function validRemote(req, expectedHost) {
+  const h = req.headers, host = String(expectedHost || '').toLowerCase();
+  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+\.ts\.net$/.test(host)
+    && h.host?.toLowerCase() === host && h['x-forwarded-host']?.toLowerCase() === host
+    && h['x-forwarded-proto'] === 'https'
+    && typeof h['tailscale-user-login'] === 'string' && /^[^\s,\x00-\x1f]{1,200}$/.test(h['tailscale-user-login']);
+}
 // 誰からか：Tailscale のアカウント、無ければ中継元の場所
 function whoOf(req) {
   // Forwarded は先頭の中継元の for= だけを使う（引用付き IPv6 にも対応）。
@@ -27,7 +39,7 @@ function whoOf(req) {
 function cookieOf(req, name = COOKIE) {
   for (const part of String(req.headers.cookie || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0 && part.slice(0, i).trim() === name) { try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return ''; } }
   }
   return '';
 }
@@ -43,7 +55,7 @@ class Remote {
     if (this.data) return this.data;
     let d = {};
     try { d = JSON.parse(fs.readFileSync(this.file, 'utf8')) || {}; } catch (e) { d = {}; }
-    this.data = { enabled: d.enabled === true, passcodeHash: typeof d.passcodeHash === 'string' ? d.passcodeHash : '', salt: typeof d.salt === 'string' ? d.salt : '', host: typeof d.host === 'string' ? d.host : '',
+    this.data = { devices: Array.isArray(d.devices) ? d.devices.filter(x => x && typeof x.id === 'string') : [], enabled: d.enabled === true, passcodeHash: typeof d.passcodeHash === 'string' ? d.passcodeHash : '', salt: typeof d.salt === 'string' ? d.salt : '', host: typeof d.host === 'string' ? d.host : '',
       sessions: Array.isArray(d.sessions) ? d.sessions.filter(s => s && typeof s.id === 'string') : [], failures: Array.isArray(d.failures) ? d.failures.filter(f => f && typeof f.at === 'number') : [] };
     return this.data;
   }
@@ -57,6 +69,7 @@ class Remote {
     const d = this.load(), t = this.now();
     d.sessions = d.sessions.filter(s => t - Date.parse(s.createdAt) < DAYS30);
     d.failures = d.failures.filter(f => t - f.at < LOCK_MS);
+    d.devices = d.devices.filter(x => t - x.at < YEAR);
     return d;
   }
   // 画面に出す物（合言葉の元は出さない）
@@ -73,7 +86,7 @@ class Remote {
       if (typeof passcode !== 'string' || [...passcode].length < MIN_PASS || passcode.length > 200) return { error: lt`合言葉は${MIN_PASS}文字以上にしてください` };
       d.salt = crypto.randomBytes(16).toString('hex');
       d.passcodeHash = hashOf(passcode, d.salt);
-      d.sessions = []; d.failures = [];
+      d.sessions = []; // Keep both trusted-device marks and attack failure history.
     }
     if (enabled !== undefined) {
       if (typeof enabled !== 'boolean') return { error: lt('形式が違います') };
@@ -83,38 +96,55 @@ class Remote {
     this.prune(); this.save();
     return { ok: true };
   }
-  locked(who) {
+  locked(who, device = '') {
     const f = this.prune().failures;
-    return f.filter(x => x.who === who).length >= LOCK_COUNT || f.length >= LOCK_ALL;
+    return device ? f.filter(x => x.device === device).length >= LOCK_COUNT
+      : f.filter(x => !x.device && x.who === who).length >= LOCK_COUNT || f.filter(x => !x.device).length >= LOCK_ALL;
   }
+  enrollment() {
+    const code = crypto.randomBytes(24).toString('base64url');
+    // Only one outstanding code; not persisted or logged. Consumed even on a wrong passcode.
+    this.enrollmentCode = { id: idOf(code), until: this.now() + 10 * 60000 };
+    return { code, expiresAt: new Date(this.enrollmentCode.until).toISOString() };
+  }
+  forgetDevices() { const d = this.load(); d.devices = []; d.sessions = []; this.enrollmentCode = null; this.save(); }
+
   // ログイン：成功したら札（token）を返す
-  login(passcode, who, ua) {
+  login(passcode, who, ua, { deviceToken = '', enrollment = '' } = {}) {
     const d = this.prune();
     if (!d.enabled) return { status: 403, error: lt('外からの利用はオフです') };
-    if (this.locked(who)) return { status: 423, error: lt('15分待ってください') };
+    const known = d.devices.find(x => x.id === idOf(deviceToken));
+    const device = known?.id || '';
+    const once = this.enrollmentCode && this.enrollmentCode.until > this.now() && this.enrollmentCode.id === idOf(enrollment);
+    if (once) this.enrollmentCode = null;
+    if (!once && this.locked(who, device)) return { status: 423, error: lt('15分待ってください') };
     let ok = false;
     if (d.passcodeHash && typeof passcode === 'string' && passcode.length <= 200) {
       const a = Buffer.from(hashOf(passcode, d.salt), 'hex'), b = Buffer.from(d.passcodeHash, 'hex');
       ok = a.length === b.length && crypto.timingSafeEqual(a, b);
     }
     if (!ok) {
-      d.failures.push({ at: this.now(), who });
+      d.failures.push({ at: this.now(), who, ...(device ? { device } : {}) });
       this.save();
-      return this.locked(who) ? { status: 423, error: lt('15分待ってください') } : { status: 401, error: lt('合言葉が違います') };
+      return this.locked(who, device) ? { status: 423, error: lt('15分待ってください') } : { status: 401, error: lt('合言葉が違います') };
     }
     const token = crypto.randomBytes(32).toString('base64url'), at = new Date(this.now()).toISOString();
-    d.failures = d.failures.filter(f => f.who !== who);
-    d.sessions.push({ id: idOf(token), createdAt: at, lastSeen: at, ua: String(ua || '').slice(0, 200) });
+    // A successful owner login never clears an attacker's failure budget.
+    const deviceSecret = known ? deviceToken : crypto.randomBytes(32).toString('base64url');
+    if (known) known.at = this.now();
+    if (!known) d.devices.push({ id: idOf(deviceSecret), at: this.now() });
+    d.devices = d.devices.slice(-100);
+    d.sessions.push({ id: idOf(token), device: idOf(deviceSecret), createdAt: at, lastSeen: at, ua: String(ua || '').slice(0, 200) });
     d.sessions = d.sessions.slice(-MAX_SESSIONS);
     this.save();
-    return { ok: true, token };
+    return { ok: true, token, deviceToken: deviceSecret };
   }
   // 札が生きているか。最後に使った時刻は1分に1回だけ書く
   check(token) {
     if (!token) return null;
     const d = this.load(), id = idOf(token), s = d.sessions.find(x => x.id === id);
     if (!s || this.now() - Date.parse(s.createdAt) >= DAYS30) return null;
-    if (this.now() - Date.parse(s.lastSeen || 0) > 60000) { s.lastSeen = new Date(this.now()).toISOString(); try { this.save(); } catch (e) { /* 書けなくても続ける */ } }
+    if (this.now() - Date.parse(s.lastSeen || 0) > 60000) { s.lastSeen = new Date(this.now()).toISOString(); const device=d.devices.find(x=>x.id===s.device);if(device)device.at=this.now(); try { this.save(); } catch (e) { /* 書けなくても続ける */ } }
     return s;
   }
   logout(token) { const d = this.load(), id = idOf(token), n = d.sessions.length; d.sessions = d.sessions.filter(x => x.id !== id); if (d.sessions.length !== n) this.save(); }
@@ -131,10 +161,11 @@ h1{font-size:20px}input,button{font:inherit;width:100%;box-sizing:border-box;pad
 button{background:#222;color:#fff;border:0}#msg{color:#b00;min-height:1.5em}@media(prefers-color-scheme:dark){body{background:#1c1c1e;color:#eee}input{background:#2c2c2e;color:#eee;border-color:#555}button{background:#eee;color:#111}}</style></head>
 <body><main>${body}</main></body></html>`;
 const offPage = () => page('Project Hub', lt('<h1>Project Hub</h1><p>外からの利用はオフです。Mac の Project Hub の設定で「外から使う（iPhone）」をオンにしてください。</p>'));
+const deviceCookie = token => `${DEVICE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${YEAR / 1000}`;
 const loginPage = () => page(lt('Project Hub ログイン'), lt`<h1>Project Hub</h1><p>Mac の設定で決めた合言葉を入れてください。</p>
-<form id="f"><input id="p" type="password" autocomplete="current-password" placeholder="合言葉" required autofocus><button type="submit">ログイン</button></form><p id="msg" role="alert"></p>
+<form id="f"><input id="p" type="password" autocomplete="current-password" placeholder="合言葉" required autofocus><input id="enrollment" type="password" autocomplete="off" placeholder="新しい端末用の一回限りコード（必要なとき）"><button type="submit">ログイン</button></form><p id="msg" role="alert"></p>
 <script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const m=document.getElementById('msg');m.textContent='';
-try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-Hub':'1'},body:JSON.stringify({passcode:document.getElementById('p').value})});
+try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-Hub':'1'},body:JSON.stringify({passcode:document.getElementById('p').value,enrollment:document.getElementById('enrollment').value})});
 if(r.ok){location.href='/';return;}const j=await r.json().catch(()=>({}));m.textContent=j.error||'ログインできませんでした';}catch(err){m.textContent='つながりませんでした';}};</script>`);
 
-module.exports = { Remote, isRemote, whoOf, cookieOf, sessionCookie, clearCookie, offPage, loginPage, COOKIE, MIN_PASS, LOCK_COUNT };
+module.exports = { DEVICE, deviceCookie, Remote, isRemote, validRemote, whoOf, cookieOf, sessionCookie, clearCookie, offPage, loginPage, COOKIE, MIN_PASS, LOCK_COUNT };

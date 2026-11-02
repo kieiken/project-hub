@@ -66,6 +66,40 @@ test('The generic browser engine translates supplied data and keeps stored attri
   assert.equal(ui.template`質問：${'あなたの番 ${0}'}`, 'Question: あなたの番 ${0}');
   assert.equal(ui.html('<button data-state="完了" value="完了">あなたの番</button>'), '<button data-state="完了" value="完了">Your turn</button>');
 });
+test('Language text cannot become an attribute or borrow opaque HTML from a different template slot', () => {
+  const context = vm.createContext({ HUB_LOCALE: { locale: 'zh-TW', messages: {
+    'あなたの番': '" onmouseover="bad()" x="', '件数：${0}': '<${0}', '通知': '${2}',
+    '通常：${0}': 'Normal: ${0}', '保存': 'Save & close',
+    'disabled title="${0}"': 'disabled onmouseover="bad()" title="${0}"',
+    'value="${0}" ': 'value="${0}" onfocus="bad()" ',
+  } } });
+  vm.runInContext(fs.readFileSync(path.join(hub, 'public/locale.js'), 'utf8'), context);
+  const ui = context.HubI18n;
+  assert.equal(ui.html('<button title="あなたの番">保存</button>'), '<button title="&quot; onmouseover=&quot;bad()&quot; x=&quot;">Save &amp; close</button>');
+  assert.equal(ui.template`<button title="${ui.text('あなたの番')}">保存</button>`, '<button title="&quot; onmouseover=&quot;bad()&quot; x=&quot;">Save &amp; close</button>');
+  assert.equal(ui.template`<b>通知</b>${'<i>trusted</i>'}`, '<b>通知</b><i>trusted</i>');
+  assert.equal(ui.template`件数：${'img src=x onerror=bad()>'}`, '件数：img src=x onerror=bad()>');
+  assert.equal(ui.template`<p>通常：${'opaque \uE0000\uE001 &lt;text&gt;'}</p>`, '<p>Normal: opaque \uE0000\uE001 &lt;text&gt;</p>');
+  assert.equal(ui.template`disabled title="${ui.text('あなたの番')}"`, 'disabled title="&quot; onmouseover=&quot;bad()&quot; x=&quot;"');
+  assert.equal(ui.template`value="${'model'}" `, 'value="model" ');
+});
+test('Native HTML rejects composed tags and escapes interpolated logs while plain alerts retain original text', t => {
+  const f = fixture(t), source = fs.readFileSync(path.join(hub, 'app/window.swift'), 'utf8');
+  const globals = source.slice(source.indexOf('let home ='), source.indexOf('\nlet port ='));
+  const harness = 'import Foundation\n' + globals + '\n' + String.raw`
+    assert(!validPackMessages(["<p>$PLACEHOLDER{0}</p>": "<p><$PLACEHOLDER{0}</p>"]))
+    assert(!validPackMessages(["あなたの番": "<img src=x onerror=bad()>"]))
+    assert(!validPackMessages(["あなたの番": "$PLACEHOLDER{1}"]))
+    assert(validPackMessages(["<p>$PLACEHOLDER{0}</p>": "<p>$PLACEHOLDER{0}</p>"]))
+    let input = "<img src=x onerror=bad()> & \"quoted\""
+    print(tr("<p>$PLACEHOLDER{0}</p>", input))
+    assert(tr("場所：$PLACEHOLDER{0}", input) == "場所：" + input)
+  `.replaceAll('$PLACEHOLDER{', '${');
+  const file = path.join(f.root, 'native-escaping.swift'); fs.writeFileSync(file, harness);
+  const result = spawnSync('swift', [file], { env: { ...process.env, HUB_ROOT: f.root, HUB_LANG: 'ja' }, encoding: 'utf8', timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '<p>&lt;img src=x onerror=bad()&gt; &amp; &quot;quoted&quot;</p>');
+});
 test('Without a pack, Chinese heading compatibility still reads existing steps and sections', t => {
   const f = fixture(t), result = f.run("const l=require('./lib/locale'),s=require('./lib/store');console.log(JSON.stringify({steps:s.readSteps('## 步驟\\n- [x] 原文\\n'),names:l.sectionNames('やったこと'),heading:l.sectionName('手順')}));", path.join(f.root, 'absent'));
   assert.equal(result.status, 0, result.stderr); const data = JSON.parse(result.stdout);
@@ -246,6 +280,9 @@ test('Native and Node select the same pack after rejecting invalid core dictiona
     { name: 'new UI attributes', corrupt: dir => write(path.join(dir, 'ui.json'), { '<b>原文</b>': '<b onclick="alert(1)">Translated</b>' }), expected: 'external' },
     { name: 'immutable attributes with different Unicode encoding', corrupt: dir => write(path.join(dir, 'ui.json'), { '<a href="/caf\u00e9">原文</a>': '<a href="/cafe\u0301">Translated</a>' }), expected: 'external' },
     { name: 'unfinished UI markup', corrupt: dir => write(path.join(dir, 'ui.json'), { '原文': 'Translated <img src=x' }), expected: 'external' },
+    { name: 'combining mark after opening bracket', corrupt: dir => write(path.join(dir, 'ui.json'), { '原文': '<\u0338img src=x onerror=alert(1)>' }), expected: 'external' },
+    { name: 'combining mark after unfinished bracket', corrupt: dir => write(path.join(dir, 'ui.json'), { '原文': '<\u0338img src=x' }), expected: 'external' },
+    { name: 'combining mark after internal marker', corrupt: dir => write(path.join(dir, 'ui.json'), { '原文': '\uE000\u0338' }), expected: 'external' },
     { name: 'backend markup', corrupt: dir => write(path.join(dir, 'backend.json'), { messages: { '原文': '<script>alert(1)</script>' }, labels: {} }), expected: 'external' },
     { name: 'label markup', corrupt: dir => write(path.join(dir, 'backend.json'), { messages: {}, labels: { '完了': '<img src=x>' } }), expected: 'external' },
     { name: 'two invalid candidates', corrupt: badUi, badExternal: true, expected: 'bundled' },
@@ -315,4 +352,23 @@ test('English assets work in setup and both App builds; incomplete or invalid pa
   assert.ok(fs.existsSync(path.join(invalidRoot,'Product/サンプルアプリ/PROJECT.md')));
   const invalidBuild=run('app/build-app.sh',{HUB_LANG:'../bad',HUB_BUNDLE_RUNTIME:'1'});assert.equal(invalidBuild.status,0,invalidBuild.stderr);
   assert.match(fs.readFileSync(path.join(f.root,'apps/Project Hub.app/Contents/Info.plist'),'utf8'),/<key>HubLanguage<\/key><string>ja<\/string>/);
+});
+
+// Run the actual native validators and interpolation without launching the App.
+test('native installed dictionaries reject grapheme-hidden syntax and preserve plain and HTML interpolation', t => {
+  const source=fs.readFileSync(path.join(hub,'app/window.swift'),'utf8'),f=fixture(t);
+  const validator=source.slice(source.indexOf('func validPackMessages('),source.indexOf('func loadNativeMessages('));
+  const translate=source.slice(source.indexOf('func tr('),source.indexOf('\nlet port ='));
+  const file=path.join(f.root,'native-validation.swift');
+  fs.writeFileSync(file,'import Foundation\nvar nativeMessages: [String:String] = [:]\n'+validator+translate+String.raw`
+let invalid = ["<\u{0338}img src=x onerror=alert(1)>", "<\u{0338}img src=x", "\u{E000}\u{0338}", "\u{E001}\u{0338}"]
+for value in invalid { precondition(!validPackMessages(["原文":value])) }
+precondition(validPackMessages(["原文":"Translated\nText", "<p>原文：${'${0}'}</p>":"<p>Text: ${'${0}'}</p>"]))
+nativeMessages=["原文：${'${0}'}":"Text: ${'${0}'}","<p>原文：${'${0}'}</p>":"<p>Text: ${'${0}'}</p>"]
+precondition(tr("原文：${'${0}'}", "A\nB") == "Text: A\nB")
+precondition(tr("<p>原文：${'${0}'}</p>", "<img>&") == "<p>Text: &lt;img&gt;&amp;</p>")
+print("native validation OK")
+`);
+  const result=spawnSync('swift',[file],{encoding:'utf8',timeout:30000});
+  assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/native validation OK/);
 });

@@ -44,5 +44,14 @@
   "書類フォルダにあるプロジェクトの台帳と本体を読み書きするために使います。": "Used to read and write project ledgers and main folders in your Documents folder.",
   "デスクトップにある資料を開くために使います。": "Used to open materials on your Desktop.",
   "Finder に、フォルダやファイルの場所を開いてもらうために使います。": "Used to have Finder show where folders and files are.",
-  "ダウンロードフォルダにある資料を開くために使います。": "Used to open materials in your Downloads folder."
+  "ダウンロードフォルダにある資料を開くために使います。": "Used to open materials in your Downloads folder.",
+  "前の版を開き直してください": "Please reopen the previous version",
+  "<p>Finderで Project Hub.app を開き直してください。</p>": "<p>Reopen Project Hub.app in Finder.</p>",
+  "前の版へ自動で戻せませんでした": "Could not automatically return to the previous version",
+  "<p>アプリの更新が途中で止まっています。前の版を保存したまま起動を止めました。</p>": "<p>The app update stopped partway. Startup was stopped with the previous version kept.</p>",
+  "<p>前の版は ${0} に残っています。Finderで［アプリケーション］へ戻してください。</p>": "<p>The previous version is kept at ${0}. Move it back to [Applications] in Finder.</p>",
+  "音声入力ボタンを押した時に、話した内容を入力欄へ入れるためにマイクを使います。": "Uses the microphone to put what you say into the input box when you press the voice input button.",
+  "話した内容を日本語の文字にします。音声はAppleなどの音声認識サービスで処理される場合があります。": "Turns what you say into Japanese text. Audio may be processed by speech recognition services such as Apple's.",
+  "画面を開けません": "Cannot open the window",
+  "<p>接続先の制限を準備できませんでした。</p>": "<p>Could not prepare the connection restrictions.</p>"
 }

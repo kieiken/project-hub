@@ -67,7 +67,8 @@ class HandoffLicense extends OriginalLicense {
     fixtureLicense = this;
   }
 }
-let hub, updater, port, calls = 0, scans = 0, metrics = [];
+let bodyTick;
+let hub, updater, port, calls = 0, scans = 0, asyncCalls = 0, metrics = [];
 const pendingModule = require('../lib/cli-spool'), pending = pendingModule.pending;
 const failureFile = path.join(runDirs[0], 'failure.json');
 const setFailure = () => fs.writeFileSync(failureFile, JSON.stringify({ error: 'fixture unresolved save' }));
@@ -91,6 +92,8 @@ test.before(async () => {
   updateModule.AppUpdate = class extends OriginalUpdate { constructor(opts) { super(opts); updater = this; } };
   const file = require.resolve('../server');
   licenseModule.License = HandoffLicense;
+  const interval=global.setInterval;
+  global.setInterval=(fn,ms,...args)=>{if(ms===15000&&String(fn).includes('maintainEnabled'))bodyTick=fn;return interval(fn,ms,...args);};
   try {
     if (process.env.HUB_PERF_BASELINE_FILE) {
       // Measurement only: compile the unchanged old state branch beside the new
@@ -103,20 +106,24 @@ test.before(async () => {
       const m = new Module(file, module); m.filename = file; m.paths = Module._nodeModulePaths(path.dirname(file)); require.cache[file] = m;
       m._compile(source.slice(0, a) + baseline + source.slice(a), file); hub = m.exports;
     } else hub = require(file);
-  } finally { updateModule.AppUpdate = OriginalUpdate; licenseModule.License = OriginalLicense; }
+  } finally { global.setInterval=interval; updateModule.AppUpdate = OriginalUpdate; licenseModule.License = OriginalLicense; }
   await fixtureLicense.prepare();
   assert.equal(fixtureLicense.owner, false); assert.equal(fixtureLicense.status().trial.state, 'active');
   assert.doesNotThrow(() => fixtureLicense.require(['webchat']));
   await hub.restoreReady;
+  const handoffAsync = hub.chats.handoffErrorsAsync;
+  hub.chats.handoffErrorsAsync = function (...args) { asyncCalls++; return handoffAsync.apply(this,args); };
   const handoffErrors = hub.chats.handoffErrors;
   hub.chats.handoffErrors = function (...args) { calls++; return handoffErrors.apply(this, args); };
   pendingModule.pending = function (...args) { scans++; return pending.apply(this, args); };
   const emit = hub.server.emit;
   hub.server.emit = function (event, req) {
     if (event !== 'request' || !req.url.startsWith('/api/state')) return emit.apply(this, arguments);
-    const before = { calls, scans };
-    try { return emit.apply(this, arguments); }
-    finally { metrics.push({ mode: req.headers['x-fixture-before'] === '1' ? 'before' : 'after', calls: calls - before.calls, scans: scans - before.scans }); }
+    const before = { calls, scans, asyncCalls };
+    // Routing may await connection validation before starting its read. Count
+    // through response completion, rather than only the synchronous emit call.
+    arguments[2].once('finish',()=>metrics.push({ mode: req.headers['x-fixture-before'] === '1' ? 'before' : 'after', calls: calls - before.calls, scans: scans - before.scans, asyncCalls: asyncCalls - before.asyncCalls }));
+    return emit.apply(this, arguments);
   };
   await new Promise(r => hub.server.listen(port, '127.0.0.1', r));
 });
@@ -127,20 +134,34 @@ test.after(async () => {
 test('600 completed runs: each state build validates once, including unchanged/304 responses', async () => {
   await state(); // Complete startup views before checking stable validators.
   const first = await get('/api/state'); assert.equal(first.status, 200);
-  assert.deepEqual(metrics.at(-1), { mode: 'after', calls: 1, scans: 1 });
+  assert.deepEqual(metrics.at(-1), { mode: 'after', calls: 0, scans: 0, asyncCalls: 1 });
   const same = await get('/api/state', { 'If-None-Match': first.headers.etag });
   assert.equal(same.status, 304); assert.equal(same.body, '');
-  assert.deepEqual(metrics.at(-1), { mode: 'after', calls: 1, scans: 1 });
+  assert.deepEqual(metrics.at(-1), { mode: 'after', calls: 0, scans: 0, asyncCalls: 1 });
   assert.equal(reason(JSON.parse(first.body), 't0'), hasWebchat ? '' : 'feature_not_included');
+});
+test('cold state receipt scan does not block real Hub ping or first chat rows', async () => {
+  // Drop only the display worker; action validation remains untouched.
+  hub.chats.handoffScanner?.close();hub.chats.handoffScanner=null;
+  const request=get('/api/state');
+  while(!hub.chats.handoffScanner?.pending)await new Promise(r=>setTimeout(r,1));
+  const ping=await get('/api/ping');assert.equal(ping.status,200);assert.ok(ping.ms<100,`ping ${ping.ms}ms`);
+  const rows=await new Promise((resolve,reject)=>{
+    const at=performance.now(),req=http.get({host:'127.0.0.1',port,path:'/api/chat/stream?project=P&task=t0',headers:{'X-Hub':'1'}},res=>{
+      let data='';res.on('data',chunk=>{data+=chunk;if(data.includes('"rows"')||data.includes('"type":"rows"')){resolve({ms:performance.now()-at,data});req.destroy();}});
+      res.on('error',e=>{if(e.code!=='ECONNRESET')reject(e);});
+    });req.on('error',reject);req.setTimeout(3000,()=>{req.destroy();reject(Error('rows timeout'));});
+  });
+  assert.ok(rows.ms<100,`first rows ${rows.ms}ms`);assert.equal((await request).status,200);
 });
 test('unresolved save keeps per-task availability, update/restart blocks and reserved restart display', async () => {
   setFailure(); hub.restartControl.reserved = { at: 'fixture-reserved' };
   try {
-    const s = await state(); assert.deepEqual(metrics.at(-1), { mode: 'after', calls: 1, scans: 1 });
+    const s = await state(); assert.deepEqual(metrics.at(-1), { mode: 'after', calls: 0, scans: 0, asyncCalls: 1 });
     assert.equal(s.chatHandoffErrors.length, 1); assert.equal(s.chatHandoffErrors[0].error, 'fixture unresolved save');
     assert.equal(reason(s, 't0'), hasWebchat ? 'webchat_task_busy' : 'feature_not_included'); assert.equal(reason(s, 't1'), hasWebchat ? '' : 'feature_not_included');
-    assert.throws(() => hub.chats.assertHandoffReady('P', 't0'), /終了保存/);
-    assert.doesNotThrow(() => hub.chats.assertHandoffReady('P', 't1'));
+    await assert.rejects(hub.chats.assertHandoffReadyAsync('P', 't0'), /終了保存/);
+    await hub.chats.assertHandoffReadyAsync('P', 't1');
     assert.equal(s.updateBlocked, true); assert.equal(s.restartBusy, true);
     assert.ok(s.restartWaiting.some(x => x.kind === 'chat-handoff' && x.task === 't0'));
     assert.deepEqual(s.restart.waiting, s.restartWaiting);
@@ -149,35 +170,109 @@ test('unresolved save keeps per-task availability, update/restart blocks and res
 test('fresh action checks reject a failure created AFTER a clean state; no send/start/restart occurs', async () => {
   await state(); setFailure();
   const p = { id: 'P', dir: pdir }, t = { id: 't0', state: '未着手' }, o = { project: 'P', task: 't0', ai: 'codex' };
-  const fresh = fn => { const n = calls; const result = fn(); assert.ok(calls > n); return result; };
+  const fresh = async fn => { const n=scans; await fn(); assert.equal(scans,n,'no parent synchronous walk'); };
   try {
-    if (hasWebchat) fresh(() => assert.throws(() => hub.webchat.submit(p, t, 'never sent'), /終了保存/));
-    else { assert.equal(typeof hub.webchat.submit, 'undefined'); assert.throws(() => hub.webchat.availability(p, t), error => error.message === 'feature_not_included' && error.status === 404); }
-    fresh(() => assert.throws(() => hub.chats.send(o), /終了保存/));
-    let n = calls; await assert.rejects(hub.chats.sendQueued(o), /終了保存/); assert.ok(calls > n);
-    fresh(() => assert.throws(() => hub.chats.detachForRestart(), /終了保存/));
-    fresh(() => assert.throws(() => hub.restartControl.request(), /AIの作業/));
-    fresh(() => assert.ok(hub.restartBlockers().some(x => x.kind === 'chat-handoff')));
-    fresh(() => assert.equal(updater.busy(), true));
-    assert.equal(hub.restartControl.committed, false); assert.equal(hub.restartControl.executions, 0);
-    assert.equal(hub.webchat.jobs?.length || 0, 0); assert.equal(hub.chats.running.size, 0);
-    assert.equal(fs.readdirSync(spoolRoot).length, 600);
-  } finally { clearFailure(); }
-  // A displayed failure must not survive a receipt change into the next action.
-  const n = calls;
-  if (hasWebchat) hub.webchat.availability(p, t);
-  else hub.chats.assertHandoffReady('P', 't0');
-  assert.ok(calls > n);
-  assert.equal(updater.busy(), false); assert.equal(hub.restartBlockers().some(x => x.kind === 'chat-handoff'), false);
+    if (hasWebchat) await fresh(() => assert.rejects(hub.webchat.submit(p,t,'never sent'),/終了保存/));
+    else { assert.equal(typeof hub.webchat.submit,'undefined'); }
+    await fresh(() => assert.rejects(hub.chats.send(o),/終了保存/));
+    hub.chats.setQueue('P','t0',[{id:'guard-fixture',text:'must stay'}]);
+    await fresh(() => assert.rejects(hub.chats.sendQueued({...o,request:'guard-fixture'}),/終了保存/));hub.chats.setQueue('P','t0',[]);
+    await fresh(() => assert.rejects(hub.chats.detachForRestart(),/終了保存/));
+    await fresh(() => assert.rejects(hub.restartControl.request(),/AIの作業/));
+    await fresh(() => hub.chats.withStrictHandoff(()=>assert.ok(hub.restartBlockers().some(x=>x.kind==='chat-handoff'))));
+    await fresh(async()=>assert.equal(await updater.strictBusy(),true));
+    assert.equal(hub.restartControl.committed,false);assert.equal(hub.restartControl.executions,0);
+    assert.equal(hub.webchat.jobs?.length||0,0);assert.equal(hub.chats.running.size,0);
+    assert.equal(fs.readdirSync(spoolRoot).length,600);
+  }finally{clearFailure();}
+  const n=scans;
+  await hub.chats.withStrictHandoff(()=>{if(hasWebchat)hub.webchat.availability(p,t);else hub.chats.assertHandoffReady('P','t0');assert.equal(updater.busy(),false);assert.equal(hub.restartBlockers().some(x=>x.kind==='chat-handoff'),false);});
+  assert.equal(scans,n);
 });
 test('unknown handoff owner still blocks every task without extra scans', async () => {
   hub.chats.adoptErrors.push({ run: 'unknown-fixture', stage: 'spool', error: 'unknown owner' });
-  try { const s = await state(); assert.deepEqual(metrics.at(-1), { mode: 'after', calls: 1, scans: 1 });
+  try { const s = await state(); assert.deepEqual(metrics.at(-1), { mode: 'after', calls: 0, scans: 0, asyncCalls: 1 });
     assert.ok(s.projects.find(p => p.id === 'P').tasks.every(t => t.webchatReason === (hasWebchat ? 'webchat_task_busy' : 'feature_not_included')));
     for (const task of tasks) assert.throws(() => hub.chats.assertHandoffReady('P', task), /終了保存/);
     assert.ok(s.restartWaiting.some(x => x.kind === 'chat-handoff'));
     assert.equal(s.updateBlocked, true); assert.equal(s.restartBusy, true);
   } finally { hub.chats.adoptErrors = []; }
+});
+test('periodic preflight shares async scan, skips busy/failure and repeats current receipts before a write',async()=>{
+ const maintain=hub.textBudget.maintainEnabled,scan=hub.chats.handoffErrorsAsync;
+ try{
+  let scans=0,release,checked=0;
+  hub.chats.handoffErrorsAsync=async()=>{scans++;await new Promise(r=>release=r);return [];};
+  hub.textBudget.maintainEnabled=blocked=>{checked++;assert.equal(Boolean(blocked()),true);};
+  const tick=bodyTick();await bodyTick();assert.equal(scans,1);assert.equal(checked,0);
+  // Failure appears AFTER the async clean preflight. The actual synchronous
+  // guard must still reject it, rather than authorizing from that snapshot.
+  setFailure();const n=calls;release();await tick;assert.equal(calls,n);assert.equal(checked,1);clearFailure();
+  hub.chats.handoffErrorsAsync=async()=>[{stage:'spool',error:'scan unavailable'}];
+  const before=calls;await bodyTick();assert.equal(calls,before);assert.equal(checked,2);
+  hub.chats.running.set('P\0t0',{ai:'codex'});
+  hub.chats.handoffErrorsAsync=()=>{throw Error('busy must not scan');};
+  await bodyTick();assert.equal(calls,before);assert.equal(checked,3);
+ }finally{hub.chats.running.delete('P\0t0');clearFailure();hub.textBudget.maintainEnabled=maintain;hub.chats.handoffErrorsAsync=scan;}
+});
+test('body notice clears only after recovery of both passes, preserving scoped and durable warnings',async()=>{
+ const b=hub.textBudget,c=hub.chats,prepare=b.prepareMaintenance,maintain=b.maintainEnabled,scan=c.handoffErrorsAsync;
+ const files=[b.stateFile('P'),b.summaryRequestFile('P','t1')],saved=files.map(f=>fs.existsSync(f)?fs.readFileSync(f):null);
+ const notices=async()=>(await state()).bodyNotices;
+ try{
+  c.handoffErrorsAsync=async()=>{throw Error('fixture body scan failed');};
+  await bodyTick();
+  c.handoffErrorsAsync=async()=>[];
+  assert.ok((await notices()).some(x=>x.scope==='本文整理'&&x.message==='fixture body scan failed'));
+  // These are the global errors caught and reported inside TextBudget itself.
+  b.prepareMaintenance=async notice=>notice('本文整理',['fixture body read failed']);
+  b.maintainEnabled=()=>{};
+  await bodyTick();assert.ok((await notices()).some(x=>x.scope==='本文整理'&&x.message==='fixture body read failed'));
+  b.prepareMaintenance=async()=>{};
+  b.maintainEnabled=(_blocked,notice)=>notice('本文整理',['fixture body maintenance failed']);
+  await bodyTick();assert.ok((await notices()).some(x=>x.scope==='本文整理'&&x.message==='fixture body maintenance failed'));
+  fs.mkdirSync(b.dir,{recursive:true});
+  fs.writeFileSync(files[0],JSON.stringify({tasks:['t1']}));
+  const conflict=Buffer.from(JSON.stringify({stage:'conflict'}));fs.writeFileSync(files[1],conflict);
+  b.maintainEnabled=(_blocked,notice)=>notice('P / t0',['fixture individual warning']);
+  await bodyTick();const recovered=await notices();
+  assert.ok(!recovered.some(x=>x.scope==='本文整理'));
+  assert.ok(recovered.some(x=>x.scope==='P / t0'&&x.message==='fixture individual warning'));
+  assert.ok(recovered.some(x=>x.scope==='P / t1'&&/要約の原文が変わっています/.test(x.message)));
+  assert.deepEqual(fs.readFileSync(files[1]),conflict);
+  b.maintainEnabled=(_blocked,notice)=>notice('P / t0',[]);await bodyTick();
+ }finally{b.prepareMaintenance=prepare;b.maintainEnabled=maintain;c.handoffErrorsAsync=scan;files.forEach((f,i)=>{if(saved[i])fs.writeFileSync(f,saved[i]);else if(fs.existsSync(f))fs.unlinkSync(f);});}
+});
+test('body background state churn performs no action or retry; next periodic pass recovers',async()=>{
+ const b=hub.textBudget,c=hub.chats,prepare=b.prepareMaintenance,maintain=b.maintainEnabled,scan=c.handoffErrorsAsync,admission=c.handoffAdmission;
+ const key='P\0t0',stop=c.stops.get(key);let checks=0,writes=0,churn=true;
+ try{
+  c.handoffErrorsAsync=async()=>[];b.prepareMaintenance=async()=>{};b.maintainEnabled=()=>writes++;
+  c.handoffAdmission={async scan(){checks++;if(churn)c.stops.set(key,checks);return {errors:[],dirs:[]};}};
+  await bodyTick();assert.equal(checks,2);assert.equal(writes,0);
+  assert.ok(!(await state()).bodyNotices.some(x=>x.scope==='本文整理'));
+  // A transient conflict must not erase an earlier real failure either.
+  c.handoffErrorsAsync=async()=>{throw Error('fixture real failure');};await bodyTick();
+  c.handoffErrorsAsync=async()=>[];await bodyTick();assert.equal(checks,4);assert.equal(writes,0);
+  assert.ok((await state()).bodyNotices.some(x=>x.scope==='本文整理'&&x.message==='fixture real failure'));
+  churn=false;await bodyTick();assert.equal(checks,5);assert.equal(writes,1);
+  assert.ok(!(await state()).bodyNotices.some(x=>x.scope==='本文整理'));
+ }finally{b.prepareMaintenance=prepare;b.maintainEnabled=maintain;c.handoffErrorsAsync=scan;c.handoffAdmission=admission;if(stop===undefined)c.stops.delete(key);else c.stops.set(key,stop);}
+});
+test('a skipped background check does not clear real body warnings or run maintenance',async()=>{
+ const b=hub.textBudget,c=hub.chats,prepare=b.prepareMaintenance,maintain=b.maintainEnabled,scan=c.handoffErrorsAsync,admission=c.handoffAdmission;
+ let writes=0;
+ try{
+  c.handoffErrorsAsync=async()=>{throw Error('fixture unavailable scan');};await bodyTick();
+  c.handoffErrorsAsync=async()=>[];b.prepareMaintenance=async()=>{};b.maintainEnabled=()=>writes++;
+  c.handoffAdmission={async scan(){return null;}};
+  await bodyTick();assert.equal(writes,0);
+  assert.ok((await state()).bodyNotices.some(x=>x.scope==='本文整理'&&x.message==='fixture unavailable scan'));
+  c.handoffAdmission={async scan(){throw Error('fixture strict verification failed');}};
+  await bodyTick();assert.equal(writes,0);
+  assert.ok((await state()).bodyNotices.some(x=>x.scope==='本文整理'&&x.message==='fixture strict verification failed'));
+ }finally{b.prepareMaintenance=prepare;b.maintainEnabled=maintain;c.handoffErrorsAsync=scan;c.handoffAdmission=admission;}
+ await bodyTick();
 });
 test('state summarizes steps; separate detail read preserves unread and updates its version/ETag',async()=>{
  const file=path.join(pdir,'.ai/tasks/t0.md'),before=fs.readFileSync(file,'utf8');
@@ -229,4 +324,25 @@ test('isolated before/after latency and exact same-instance state JSON', { skip:
     } finally { hub.restartControl.reserved = null; clearFailure(); }
   }
   if (process.env.HUB_PERF_RESULT) fs.writeFileSync(process.env.HUB_PERF_RESULT, JSON.stringify({ runs: 600, tasks: 43, rows, exactJSON: true }, null, 2) + '\n');
+});
+
+
+test('periodic body reads precede the permit and both clean and blocked callbacks stay synchronous',async()=>{
+ const b=hub.textBudget,c=hub.chats,prepare=b.prepareMaintenance,maintain=b.maintainEnabled,strict=c.withStrictHandoff,scan=c.handoffErrorsAsync;
+ const order=[];let release;
+ try{
+  c.handoffErrorsAsync=async()=>[];
+  b.prepareMaintenance=async()=>{order.push('read');await new Promise(r=>release=r);order.push('read done');};
+  b.maintainEnabled=blocked=>{order.push('write callback');assert.equal(Boolean(blocked()),false);};
+  c.withStrictHandoff=(action,...args)=>strict.call(c,()=>{order.push('permit');const out=action();assert.equal(out,undefined);order.push('permit end');return out;},...args);
+  const tick=bodyTick();await new Promise(r=>setImmediate(r));assert.deepEqual(order,['read']);release();await tick;
+  assert.deepEqual(order,['read','read done','permit','write callback','permit end']);
+  for(const busy of [false,true]){
+   order.length=0;c.handoffErrorsAsync=async()=>[{error:'failed save'}];
+   if(busy)c.running.set('P\0t0',{ai:'codex'});
+   b.maintainEnabled=blocked=>{order.push('blocked callback');assert.equal(Boolean(blocked()),true);};
+   const blockedTick=bodyTick();await new Promise(r=>setImmediate(r));assert.deepEqual(order,['read']);release();await blockedTick;
+   assert.deepEqual(order,['read','read done','blocked callback']);c.running.delete('P\0t0');
+  }
+ }finally{c.running.delete('P\0t0');b.prepareMaintenance=prepare;b.maintainEnabled=maintain;c.withStrictHandoff=strict;c.handoffErrorsAsync=scan;}
 });

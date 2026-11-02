@@ -78,7 +78,7 @@ test('本体status exit128の正式通常previewは未確認を維持し、復�
  const record=fs.readFileSync(h.file(p.id,par.id)),realGit=execFileSync('/usr/bin/which',['git'],{encoding:'utf8'}).trim(),bin=path.join(tmp,'notice-status-bin'),flag=path.join(bin,'fail-status'),trace=path.join(bin,'trace.jsonl'),oldPath=process.env.PATH;
  fs.mkdirSync(bin);fs.writeFileSync(path.join(bin,'git'),'#!'+process.execPath+'\n'+
   'const fs=require("node:fs"),{spawnSync}=require("node:child_process"),a=process.argv.slice(2);\n'+
-  'if(a[0]==="-C"&&a[1]==='+JSON.stringify(body)+'&&a[2]==="status"){fs.appendFileSync('+JSON.stringify(trace)+',JSON.stringify({args:a,locks:process.env.GIT_OPTIONAL_LOCKS,fail:fs.existsSync('+JSON.stringify(flag)+')})+"\\n");if(fs.existsSync('+JSON.stringify(flag)+'))process.exit(128);}\n'+
+  'let i=2;while(a[i]==="-c")i+=2;if(a[0]==="-C"&&a[1]==='+JSON.stringify(body)+'&&a[i]==="status"){fs.appendFileSync('+JSON.stringify(trace)+',JSON.stringify({args:a,locks:process.env.GIT_OPTIONAL_LOCKS,fail:fs.existsSync('+JSON.stringify(flag)+')})+"\\n");if(fs.existsSync('+JSON.stringify(flag)+'))process.exit(128);}\n'+
   'const r=spawnSync('+JSON.stringify(realGit)+',a,{stdio:"inherit"});if(r.error)throw r.error;process.exit(r.status===null?1:r.status);\n',{mode:0o755});
  const preview=async()=>{const res=await fetch(base+'/api/task/preview?project='+encodeURIComponent(p.id)+'&task='+par.id,{headers:{'X-Hub':'1'}});assert.equal(res.status,200);return res.json();};
  process.env.PATH=bin+path.delimiter+oldPath;

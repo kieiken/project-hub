@@ -39,6 +39,14 @@ async function loadSkills(fresh = false) {
   }
 }
 
+function aiToolsNeedDataLocation() {
+  return Boolean(state.dataManagementRoot && state.root === state.dataManagementRoot);
+}
+
+function aiToolsDataLocationMessage() {
+  return UI.text('CLIの更新には、先にデータの保存先を選択し、同じアプリを開き直してください。');
+}
+
 function drawAiTools() {
   return preserveSettingsScroll(() => {
     const box = $('#ai-tools'); if (!box) return;
@@ -48,11 +56,13 @@ function drawAiTools() {
     const targets = AIS.filter(ai => aiTools[ai]?.eligible && aiTools[ai]?.installed);
     const excluded = AIS.filter(ai => !targets.includes(ai));
     const busy = aiBatchPending || Boolean(aiToolsOperation) || AIS.some(ai => aiToolPending[ai]);
-    const reason = aiToolsError || (busy ? UI.text('確認・更新中です…') : running ? UI.text('稼働中のCLIは飛ばし、ほかのCLIを更新できます。') : !targets.length ? UI.text('ログイン済みのCLIがありません。') : '');
+    const needsDataLocation = aiToolsNeedDataLocation();
+    const reason = needsDataLocation ? aiToolsDataLocationMessage() : aiToolsError || (busy ? UI.text('確認・更新中です…') : running ? UI.text('稼働中のCLIは飛ばし、ほかのCLIを更新できます。') : !targets.length ? UI.text('ログイン済みのCLIがありません。') : '');
     const modelText = status => ({ changed: UI.text('変更あり'), same: UI.text('変更なし'), first: UI.text('初回確認'), unknown: UI.text('未確認') }[status] || UI.text('未確認'));
     const excludedText = status => ({ 'not-installed': UI.text('未導入'), 'logged-out': UI.text('未ログイン'), api: UI.text('APIのログインは対象外です'), unknown: UI.text('ログイン状態を確認できませんでした') }[status] || UI.text('ログイン状態を確認できませんでした'));
-    box.innerHTML = UI.template`<div class="ai-update-toolbar"><span class="small">ログイン済みを毎日確認します。</span><button class="btn" type="button" data-ai-update-all ${busy || aiToolsError ? 'disabled' : ''}>一括更新</button>${hubUpdateButton()}${restartControls()}</div>
+    box.innerHTML = UI.template`<div class="ai-update-toolbar"><span class="small">ログイン済みを毎日確認します。</span><button class="btn" type="button" data-ai-update-all ${needsDataLocation || busy || aiToolsError ? 'disabled' : ''}>一括更新</button>${hubUpdateButton()}${restartControls()}</div>
       ${reason ? UI.template`<p class="ai-tool-result" role="status">${esc(reason)}</p>` : ''}
+      ${needsDataLocation ? UI.html('<button type="button" class="btn plain" data-ai-data-location>データの保存先を設定</button>') : ''}
       ${excluded.filter(ai => aiTools[ai]?.notice).map(ai => UI.template`<p class="ai-tool-result" role="status">${esc(AI_LABEL[ai])}：${esc(aiTools[ai].notice)}</p>`).join('')}
       <div class="ai-update-columns small"><span>CLI</span><span>バージョン</span><span>確認日</span><span>モデル一覧</span></div>
       ${targets.map(ai => {
@@ -60,10 +70,10 @@ function drawAiTools() {
         const notice = tool.notice || (check?.ok && check.available === true && check.applicable === false ? UI.text('この導入方法では、Hubから更新できません。導入時の方法で更新してください。') : '');
         const date = check?.ok ? check.checkedAt : check?.failedAt;
         const formatted = date && !Number.isNaN(Date.parse(date)) ? new Date(date).toLocaleString(UI.dateLocale, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : UI.text('未確認');
-        return UI.template`<div class="ai-update-entry" data-ai="${ai}"><div class="ai-update-row"><b>${esc(AI_LABEL[ai])}</b><span class="ai-update-version">${esc(tool.version || UI.text('未確認'))}${check?.ok && check.available === true ? UI.template` <span class="ai-update-change">→ ${esc(check.latestVersion)}</span>` : ''}</span><span class="ai-update-date small" title="${esc(date ? new Date(date).toLocaleString() : '')}"><span class="ai-update-date-label">確認 </span>${esc(formatted)}${check?.ok === false ? UI.text('（失敗）') : ''}</span><span class="ai-update-model small ${tool.modelsStatus === 'changed' ? 'ai-update-change' : ''}">${esc(modelText(tool.modelsStatus))}</span></div><div class="ai-tool-actions"><button type="button" class="btn plain" data-ai-check="${ai}" ${busy || aiCheckPending[ai] || tool.checking ? 'disabled' : ''}>更新を確認</button><button type="button" class="btn" data-ai-update="${ai}" ${busy || tool.busyCount || !check?.ok || !check.available || !check.applicable ? 'disabled' : ''}>更新</button>${tool.busyCount ? UI.template`<span class="small">このCLIが稼働中です</span>` : ''}</div>${notice ? UI.template`<p class="ai-tool-result" role="status">${esc(notice)}</p>` : ''}</div>`;
+        return UI.template`<div class="ai-update-entry" data-ai="${ai}"><div class="ai-update-row"><b>${esc(AI_LABEL[ai])}</b><span class="ai-update-version">${esc(tool.version || UI.text('未確認'))}${check?.ok && check.available === true ? UI.template` <span class="ai-update-change">→ ${esc(check.latestVersion)}</span>` : ''}</span><span class="ai-update-date small" title="${esc(date ? new Date(date).toLocaleString() : '')}"><span class="ai-update-date-label">確認 </span>${esc(formatted)}${check?.ok === false ? UI.text('（失敗）') : ''}</span><span class="ai-update-model small ${tool.modelsStatus === 'changed' ? 'ai-update-change' : ''}">${esc(modelText(tool.modelsStatus))}</span></div><div class="ai-tool-actions"><button type="button" class="btn plain" data-ai-check="${ai}" ${needsDataLocation || busy || aiCheckPending[ai] || tool.checking ? 'disabled' : ''}>更新を確認</button><button type="button" class="btn" data-ai-update="${ai}" ${needsDataLocation || busy || tool.busyCount || !check?.ok || !check.available || !check.applicable ? 'disabled' : ''}>更新</button>${tool.busyCount ? UI.template`<span class="small">このCLIが稼働中です</span>` : ''}</div>${notice ? UI.template`<p class="ai-tool-result" role="status">${esc(notice)}</p>` : ''}</div>`;
       }).join('')}
       <details class="more ai-update-details" ${opened ? 'open' : ''}><summary>${UI.template`詳細（対象外 ${excluded.length} 件）`}</summary>
-      ${excluded.map(ai => UI.template`<p class="small">${esc(AI_LABEL[ai])}：${esc(excludedText(aiTools[ai]?.installed === false ? 'not-installed' : aiTools[ai]?.status))}${aiTools[ai]?.notice ? ` · ${esc(aiTools[ai].notice)}` : ''}${aiTools[ai]?.installed ? UI.template` <button type="button" class="btn plain" data-ai-check="${ai}" ${busy || aiCheckPending[ai] ? 'disabled' : ''}>更新を確認</button>` : ''}</p>`).join('')}
+      ${excluded.map(ai => UI.template`<p class="small">${esc(AI_LABEL[ai])}：${esc(excludedText(aiTools[ai]?.installed === false ? 'not-installed' : aiTools[ai]?.status))}${aiTools[ai]?.notice ? ` · ${esc(aiTools[ai].notice)}` : ''}${aiTools[ai]?.installed ? UI.template` <button type="button" class="btn plain" data-ai-check="${ai}" ${needsDataLocation || busy || aiCheckPending[ai] ? 'disabled' : ''}>更新を確認</button>` : ''}</p>`).join('')}
       ${targets.map(ai => {
         const tool = aiTools[ai], diff = tool.modelDiff;
         return UI.template`<p class="small">${esc(AI_LABEL[ai])} · ${esc(aiToolMethod(tool.method))} · ${esc(tool.source || UI.text('未確認'))}</p><p class="small">${esc((tool.models || []).map(m => m.label || m.id).join(' / '))}</p>${diff ? UI.template`<p class="small">${UI.template`追加：${esc(diff.added.join(' / ') || '—')} · 削除：${esc(diff.removed.join(' / ') || '—')} · 名称変更：${esc(diff.renamed.join(' / ') || '—')}`}</p>` : ''}${tool.modelCheckedAt ? UI.template`<p class="small">${UI.template`モデル確認：${esc(new Date(tool.modelCheckedAt).toLocaleString())}`}</p>` : ''}`;
@@ -143,6 +153,7 @@ function aiToolResultText(action, r) {
 }
 
 async function runAiTool(ai, action) {
+  if (aiToolsNeedDataLocation()) { drawAiTools(); return; }
   if (action === 'check') {
     if (!AIS.includes(ai) || aiCheckPending[ai] || aiTools?.[ai]?.checking || aiTools?.[ai]?.installed === false) return;
     aiCheckPending[ai] = true; aiToolMessage[ai] = UI.text('更新情報を確認しています…'); drawAiTools();
@@ -165,6 +176,7 @@ async function runAiTool(ai, action) {
 }
 
 async function runAiUpdateAll() {
+  if (aiToolsNeedDataLocation()) { drawAiTools(); return; }
   if (aiBatchPending || aiToolsOperation || aiToolsError) return;
   aiBatchPending = true; aiToolsOperation = { kind: 'update-all' }; aiBatchMessage = ''; drawAiTools();
   try {
@@ -316,15 +328,19 @@ function phoneLabelMode() {
   return [...phoneLabelQueue].reverse().find(spec => spec.labels)?.labels || phoneLabelActive?.labels || state.phoneLabels?.labels || 'short';
 }
 
+function phoneLabelKeys() {
+  return [...orderedModels(), ...(webchatUI() ? ['chatgpt|auto'] : []), ...(state.museSupported !== false ? ['muse|direct'] : [])];
+}
+
 function phoneLabelsHtml() {
   const phone = state.phoneLabels || { labels: 'short', names: {} }, full = phoneLabelMode() === 'full';
   return UI.template`<div class="phone-label-mode" role="group" aria-label="AI一覧の名前">
     <label><input type="radio" name="phone-label-mode" data-phone-mode="short" ${full ? '' : 'checked'}> 短い名前</label>
     <label><input type="radio" name="phone-label-mode" data-phone-mode="full" ${full ? 'checked' : ''}> AI名・モデル名（PCと同じ）</label>
   </div><p class="small">名前を入力するとスマホの一覧に使います。空欄で元の短い名前に戻ります（24字以内・改行なし）。</p>
-  <div class="phone-label-rows">${[...orderedModels(), ...(webchatUI()?['chatgpt|auto']:[])].map(key => {
+  <div class="phone-label-rows">${phoneLabelKeys().map(key => {
     const [k, model] = key.split('|'), ai = k === 'claude-code' ? 'claude' : k;
-    const label = ai === 'chatgpt' ? 'ChatGPT' : UI.template`${AI_LABEL[ai]}・${model}`;
+    const label = ai === 'muse' ? UI.text('Muse（外部）') : ai === 'chatgpt' ? 'ChatGPT' : UI.template`${AI_LABEL[ai]}・${model}`;
     return UI.template`<label class="phone-label-row"><span>${esc(label)}</span><input type="text" data-phone-name="${esc(key)}" maxlength="24" aria-label="${esc(label)} のスマホ表示名" placeholder="${esc(shortModelLabel(ai, model))}" value="${esc(phoneLabelDrafts.has(key) ? phoneLabelDrafts.get(key) : phone.names?.[key] || '')}" ${full ? 'disabled' : ''}></label>`;
   }).join('')}</div><p class="small" role="status" id="phone-label-status">${esc(phoneLabelStatus())}</p>`;
 }
@@ -333,7 +349,7 @@ function drawPhoneLabels() {
   return preserveSettingsScroll(() => {
     const box = $('#phone-labels');
     if (view.kind !== 'settings' || !box) return;
-    const inputs = [...box.querySelectorAll('[data-phone-name]')], keys = [...orderedModels(), ...(webchatUI()?['chatgpt|auto']:[])];
+    const inputs = [...box.querySelectorAll('[data-phone-name]')], keys = phoneLabelKeys();
     if (JSON.stringify(inputs.map(el => el.dataset.phoneName)) !== JSON.stringify(keys)) {
       // 候補が変わった時だけ組み直す。入力・保存中は次のpollまで待つ。
       if (inputs.length && (phoneLabelsSaving || box.contains(document.activeElement))) return;
@@ -583,8 +599,8 @@ function accountSettingsHtml() {
     <p id="account-message" class="small" role="status"></p>
     ${rows.map(r => UI.template`<div class="account-row" data-account-row data-auth-terminal="${r.authTerminal ? '1' : '0'}" data-ai="${esc(r.ai)}" data-id="${esc(r.id)}"><div class="ai-account-line"><b>${esc(r.ai === 'agy' ? 'Gemini（Agy）' : AI_LABEL[r.ai])}${r.id !== 'default' ? '・' + esc(UI.label(r.name)) : ''}</b><span class="ai-account-status small">${label(r)}</span><div class="ai-account-note small">${r.email ? UI.template`<span title="${esc(r.email)}">${esc(r.email)}</span>` : ''}${r.authTerminal ? UI.text(' 認証用Terminalを開いています') : r.busy ? UI.text(' 作業中／順番待ち') : ''}${grokInstallReason(r) ? UI.template`<span>${esc(UI.message(r.message))}</span>` : ''}
       ${r.ai === 'agy' ? UI.template`<details class="more" data-ai-fold="agy-${esc(r.id)}"><summary>モデル ${esc((state.agyModels || []).length)}件</summary>${agyModelsHtml()}</details>` : ''}
-      ${r.id !== 'default' ? UI.template`<details class="more" data-ai-fold="edit-${esc(r.ai)}-${esc(r.id)}"><summary>編集</summary><div class="acts ai-detail-body"><input data-account-name maxlength="60" value="${esc(r.name)}" aria-label="${esc(UI.label(r.name))}の新しい名前"><button class="btn plain sm" type="button" data-account-action="rename" ${accountOperation ? 'disabled' : ''}>名前変更</button><button class="btn plain sm" type="button" data-account-action="delete" ${r.busy || accountOperation ? UI.text('disabled title="終了してから操作してください"') : ''}>削除（ゴミ箱へ）</button></div></details>` : ''}</div>
-      <div class="acts">${r.ai === 'grok' && r.status === 'not-installed' ? UI.template`<details class="more" data-ai-fold="grok-install"><summary>導入方法</summary><p class="small ai-detail-body">MacのTerminalで <code>curl -fsSL https://x.ai/cli/install.sh | bash</code> を実行してください。Hubは実行しません。</p></details>` : UI.template`<button class="btn plain sm" type="button" data-account-action="${r.status === 'logged-in' || r.status === 'api' ? 'logout' : 'login'}" ${accountOperation || r.busy && !r.authTerminal ? UI.text('disabled title="終了してから操作してください"') : ''}>${r.status === 'logged-in' || r.status === 'api' ? UI.text('ログアウト') : UI.text('ログイン')}</button>`}</div></div>
+      ${r.id !== 'default' ? UI.template`<details class="more" data-ai-fold="edit-${esc(r.ai)}-${esc(r.id)}"><summary>編集</summary><div class="acts ai-detail-body"><input data-account-name maxlength="60" value="${esc(r.name)}" aria-label="${esc(UI.label(r.name))}の新しい名前"><button class="btn plain sm" type="button" data-account-action="rename" ${accountOperation ? 'disabled' : ''}>名前変更</button><button class="btn plain sm" type="button" data-account-action="delete" ${r.busy || accountOperation ? `disabled title="${esc(UI.text('終了してから操作してください'))}"` : ''}>削除（ゴミ箱へ）</button></div></details>` : ''}</div>
+      <div class="acts">${r.ai === 'grok' && r.status === 'not-installed' ? UI.template`<details class="more" data-ai-fold="grok-install"><summary>導入方法</summary><p class="small ai-detail-body">MacのTerminalで <code>curl -fsSL https://x.ai/cli/install.sh | bash</code> を実行してください。Hubは実行しません。</p></details>` : UI.template`<button class="btn plain sm" type="button" data-account-action="${r.status === 'logged-in' || r.status === 'api' ? 'logout' : 'login'}" ${accountOperation || r.busy && !r.authTerminal ? `disabled title="${esc(UI.text('終了してから操作してください'))}"` : ''}>${r.status === 'logged-in' || r.status === 'api' ? UI.text('ログアウト') : UI.text('ログイン')}</button>`}</div></div>
       ${r.message && !grokInstallReason(r) ? UI.template`<p class="small ai-account-message" role="status">${esc(UI.message(r.message))}</p>` : ''}${r.ai === 'agy' && agyFailed ? UI.template`<p class="small ai-account-message" role="status">${esc(UI.text(agyReason))}</p>` : ''}</div>`).join('')}
     <div class="account-row ai-chatgpt-row">${webchatUI()?.slot() || ''}
       <details class="more ai-mcp-detail" data-ai-fold="mcp"><summary>MCP <span id="chatgpt-mcp-status" class="small" role="status">確認中…</span></summary><div class="ai-detail-body"><div id="chatgpt-box" aria-live="polite">確認中…</div>${chatgptConnectionHelpHtml()}</div></details>
@@ -639,6 +655,7 @@ async function operateAccount(button) {
 // Create the original callback at its original registration point in app.js.
 function appSettingsAiCallback2703() {
   return (e => {
+  if (e.target.closest?.('[data-ai-data-location]')) { openDataLocation(); return; }
   if (e.target.closest?.('[data-ai-update-all]')) { void runAiUpdateAll(); return; }
   const ai = e.target.dataset.aiCheck || e.target.dataset.aiUpdate || e.target.dataset.aiModelRefresh;
   if (ai) runAiTool(ai, e.target.dataset.aiCheck ? 'check' : e.target.dataset.aiUpdate ? 'update' : 'models');

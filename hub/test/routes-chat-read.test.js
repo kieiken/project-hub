@@ -10,7 +10,9 @@ function fixture(t, { kind = 'project' } = {}) {
   const timer = {};
   t.mock.method(global, 'setInterval', (callback, ms) => { order.push(['timer', ms]); timer.callback = callback; return timer; });
   t.mock.method(global, 'clearInterval', id => { assert.equal(id, timer); order.push('clear-timer'); });
+  const records=[];
   const ctx = {
+    record: (...args) => records.push(args),
     send: (res, status, body) => { order.push(['send', status]); return { status, body }; }, lt: s => s,
     store: { readProject: id => { assert.equal(id, 'p'); order.push('project'); return project; },
       taskFile: (p, task) => { assert.deepEqual([p, task], ['p', 't']); order.push('task'); return exists; } },
@@ -34,8 +36,9 @@ function fixture(t, { kind = 'project' } = {}) {
     return { req, res, value };
   }
   t.after(() => { for (const req of requests) req.emit('close'); });
-  return { route, order, writes, timer, queue, open,
+  return { route, order, writes, timer, queue, open, records,
     events: () => writes.filter(v => v.startsWith('data: ')).map(v => JSON.parse(v.slice(6))),
+    pending: fn => { ctx.taskHistory.pendingQuestion = fn; },
     emit: ev => watching(ev), project: value => { project = value; }, exists: value => { exists = value; },
     run: value => { run = value; }, external: value => { external = value; }, generation: value => { generation = value; }, rows: value => { rows = value; } };
 }
@@ -116,4 +119,31 @@ test('chat stream preserves synchronous failures without opening headers after a
   const route = create({ store: { readProject: () => ({}), taskFile: () => true }, setUnread: () => { order.push('read'); throw failure; } }).stream;
   assert.throws(() => route.handle({ method: 'GET' }, { writeHead: () => order.push('head') }, target), error => error === failure);
   assert.deepEqual(order, ['read']);
+});
+
+test('task stream delivers restored questions separately from collapsed summaries, and updates on answer events',t=>{
+  const f=fixture(t),asks=[{question:'保存しますか？',options:['保存（おすすめ：下書きを保持）','待つ'],multi:false}];
+  let pending={source:'saved-source',asks};f.pending(()=>pending);
+  f.rows([{role:'event',summaryAuto:true,text:'要約'},{role:'assistant',asks,text:'説明'}]);f.open();
+  const initial=f.events().at(-1);assert.deepEqual(initial.pendingQuestion,pending);assert.equal(initial.rows[1].questionsManaged,true);
+  assert.equal(initial.rows[0].pendingQuestion,undefined,'the active card is outside the summary');
+  pending=null;f.emit({type:'row',row:{role:'event',answeredQuestionSource:'saved-source',text:''}});
+  assert.equal(f.events().at(-1).pendingQuestion,null);
+});
+
+test('question recovery failure keeps initial and watched messages visible with legacy inline questions',t=>{
+  const f=fixture(t),asks=[{question:'保存しますか？',options:['保存','待つ'],multi:false}];
+  f.pending(()=>{throw Error('fixture archive unavailable');});
+  f.rows([{role:'assistant',asks,text:'説明',at:2}]);
+  assert.doesNotThrow(()=>f.open());
+  const initial=f.events().at(-1);
+  assert.equal(Object.hasOwn(initial,'pendingQuestion'),false);
+  assert.equal(Object.hasOwn(initial.rows[0],'questionsManaged'),false);
+  assert.deepEqual(initial.rows[0].asks,asks);
+  assert.doesNotThrow(()=>f.emit({type:'row',row:{role:'assistant',asks,text:'説明',at:2}}));
+  const next=f.events().at(-1);
+  assert.equal(Object.hasOwn(next,'pendingQuestion'),false);
+  assert.equal(Object.hasOwn(next.row,'questionsManaged'),false);
+  assert.deepEqual(next.row.asks,asks);
+  assert.deepEqual(f.records,Array.from({length:2},()=>['question-display-read-error',{project:'p',task:'t'},{phase:'stream',error:'fixture archive unavailable'}]));
 });

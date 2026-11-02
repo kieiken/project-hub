@@ -197,9 +197,9 @@ test('same-AI model changes retain the selected account, and a new AI uses its o
  const created=await post('/api/accounts',{ai:'claude',name:'fixture profile'});assert.equal(created.status,200);const account=(await created.json()).account.id;
  const baseItem={...queue().find(x=>x.id===id),ai:'claude',model:'Fable 5.1',account,effort:'Ultra',requireModel:true,requiredModel:'claude-fable-5-1',role:'チェック',limitSlot:'main'};
  hub.chats.setQueue(key.project,key.task,[baseItem],true);
- assert.equal((await revise(baseItem,{ai:'claude',model:'claude-opus-5-5'})).status,200);let saved=queue()[0];assert.equal(saved.account,account);assert.equal(saved.requiredModel,'claude-opus-5-5');assert.equal(saved.role,'チェック');assert.equal(saved.limitSlot,undefined);
+ assert.equal((await revise(baseItem,{ai:'claude',model:'claude-opus-5-5'})).status,200);let saved=queue()[0];assert.equal(saved.account,account);assert.equal(saved.requiredModel,'claude-opus-5-5');assert.equal(saved.role,'チェック');assert.equal(saved.limitSlot,'main');
  // Catalog injection is fixture-only; no Grok command, auth or network is used.
  launch.setDiscoveredModels({grok:{models:[{label:'fixture-grok',id:'fixture-grok-id'}]}});
- try{assert.equal((await revise(saved,{ai:'grok',model:'fixture-grok-id'})).status,200);saved=queue()[0];assert.equal(saved.account,'default');assert.equal(saved.effort,'高');assert.match(saved.perm,/^grok /);assert.equal(saved.requiredModel,'fixture-grok-id');assert.equal(saved.role,'チェック');assert.equal(saved.limitSlot,undefined);}
+ try{assert.equal((await revise(saved,{ai:'grok',model:'fixture-grok-id'})).status,200);saved=queue()[0];assert.equal(saved.account,'default');assert.equal(saved.effort,'高');assert.match(saved.perm,/^grok /);assert.equal(saved.requiredModel,'fixture-grok-id');assert.equal(saved.role,'チェック');assert.equal(saved.limitSlot,'main');}
  finally{launch.setDiscoveredModels({});}
 });

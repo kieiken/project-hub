@@ -43,3 +43,11 @@ test('回復UI uses a new recovery identity after an uncertain ordinary abort',a
  await screen.show('A');await screen.click('abandon-preview');screen.check();await screen.click('abandon-confirm');assert.equal(sends,1);assert.equal(screen.button('abandon-preview').disabled,true);
  recovery=true;await screen.show('A');assert.equal(screen.button('abandon-preview').disabled,false);await screen.click('abandon-preview');assert.equal(screen.button('abandon-confirm').disabled,true);
 });
+
+for(const allowed of [true,false])test('自動検査停止UIは人の停止と区別し、選び直し可否を正しく表示：'+allowed,async()=>{
+ const screen=ui(async()=>({...preview(),auto:{stopped:{reason:'成果の形式が不正：作業用コピー保存済み'}},abandon:{allowed,stopKind:'validation',message:'正常終了後の検査停止'}}));
+ await screen.show('A');const html=screen.el('#integrate-sheet').innerHTML;
+ assert.match(html,/停止した統合/);assert.doesNotMatch(html,/人が止めた統合/);assert.match(html,/停止理由.*成果の形式が不正：作業用コピー保存済み/);
+ if(allowed){assert.match(html,/中止して選び直す/);assert.match(html,/選び直せる候補/);}else{assert.doesNotMatch(html,/選び直せる候補/);assert.doesNotMatch(html,/data-integrate-action="abandon-preview"/);assert.match(html,/安全を確認できないため/);}
+});
+test('人の停止UIは従来の見出しを維持',async()=>{const screen=ui(async()=>({...preview(),abandon:{allowed:true,stopKind:'human',message:'人の停止'}}));await screen.show('A');assert.match(screen.el('#integrate-sheet').innerHTML,/人が止めた統合/);});

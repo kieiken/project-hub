@@ -83,7 +83,7 @@ test('Invalid date/headings/IDs are rejected, while an ID-folder mismatch is not
     const f = fixture(t); fs.cpSync(f.source, path.join(f.root, '_hub/langpacks/fr'), { recursive: true });
     const result = f.run(`const p=require('./lib/langpack');p.setRoot(process.env.HUB_ROOT);console.log(JSON.stringify(p.packSettings(process.env.HUB_ROOT,'4.109.1')));`);
     assert.equal(result.status, 0, result.stderr); const data = JSON.parse(result.stdout);
-    assert.ok(!data.available.includes('en')); assert.ok(!data.available.includes('fr')); assert.equal(data.packs.find(row => row.id === 'fr').usable, false);
+    assert.ok(data.available.includes('en')); /* Valid bundled English is selectable. */ assert.ok(!data.available.includes('fr')); assert.equal(data.packs.find(row => row.id === 'fr').usable, false);
   });
 });
 test('CSS and executable files are ignored on import and excluded from exported data', t => {

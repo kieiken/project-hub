@@ -18,9 +18,18 @@ module.exports = function remoteRoutes(ctx) {
         return send(res, 200, remote.status());
       },
     },
+    enrollment: {
+      matches: (req, url) => req.method === 'POST' && url.pathname === '/api/remote/enrollment',
+      handle(req, res) { if(require('../remote').isRemote(req))return send(res,403,{error:'local owner only'});return send(res, 200, remote.enrollment()); },
+    },
+    forget: {
+      matches: (req, url) => req.method === 'POST' && url.pathname === '/api/remote/forget-devices',
+      handle(req, res) { if(require('../remote').isRemote(req))return send(res,403,{error:'local owner only'});remote.forgetDevices(); return send(res, 200, { ok: true }); },
+    },
     logout: {
       matches: (req, url) => url.pathname === '/api/remote/logout-all',
       handle(req, res, url, b) {
+        if(require('../remote').isRemote(req))return send(res,403,{error:'local owner only'});
         const n = remote.logoutAll();
         record('remotelogoutall', {}, { sessions: n });
         return send(res, 200, remote.status());

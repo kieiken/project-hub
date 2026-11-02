@@ -144,11 +144,22 @@ test('実機のClaude正式文でFableからAstra、OpusからSolへ終了後に
   }
 });
 
-test('本文引用/認証/通信/モデル拒否/一時混雑/対象外モデル・役割は交代しない', async () => {
+test('本文引用/認証/通信/モデル拒否/一時混雑は交代しない', async () => {
   config(); for (const scenario of ['quote', 'auth', 'network', 'model', 'temporary', 'synthetic-auth']) {
     const id = task(); await send(id, scenario); await wait(() => replies(id).length === 1); assert.equal(queue(id).length, 0); assert.equal(rows(id).some(r => r.limitSwitch), false); assert.equal(fs.existsSync(path.join(root, '_hub/fable-limit.json')), false);
   }
-  for (const [role, model] of [['文章', 'claude-fable-5-1'], ['司令塔', 'claude-opus-5-5']]) { const id = task(role); await send(id, 'result-only', { model }); await wait(() => replies(id).length === 1); assert.equal(queue(id).length, 0); }
+});
+
+test('手動で選んだ別モデルの正式上限も作業の保存済み交代先へ進む', async () => {
+  config();
+  for (const [role, model, backup] of [['文章', 'claude-fable-5-1', 'GPT-6.1-Sol'], ['司令塔', 'claude-opus-5-5', 'GPT-6-Astra']]) {
+    require('../lib/roles').read(rolesFile); // Record the baseline role-history metadata before comparing bytes.
+    const before = fs.readFileSync(rolesFile), id = task(role);
+    await send(id, 'result-only', { model });
+    await wait(() => replies(id).length === 2 && require('../server').chats.running.size === 0);
+    assert.equal(replies(id)[1].model, backup); assert.equal(queue(id).length, 0);
+    assert.deepEqual(fs.readFileSync(rolesFile), before);
+  }
 });
 
 test('autoオフと変更したbackupを尊重しmain・他役割を変更しない', async () => {

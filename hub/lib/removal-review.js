@@ -2,11 +2,11 @@
 const { lt } = require('./locale');
 // AIには読む道具だけを渡す。判定の保存と削除候補への反映はHubが行う。
 const fs=require('./platform/file-io'),path=require('node:path'),{randomUUID}=require('node:crypto');
-const {noLinks,exists}=require('./remove');
+const {noLinks,readNoLinks,exists}=require('./remove');
 class RemovalReview {
  constructor({store,removal,start,busy,rows,queued=()=>false,pick=()=>null}){Object.assign(this,{store,removal,start,busy,rows,queued,pick});this.starting=new Set();}
- file(project){const p=this.store.readProject(project);if(!p)throw Error(lt('プロジェクトがありません'));const f=path.join(p.dir,'.ai/work/remove-sharing.json');noLinks(f);return f;}
- read(project){const f=this.file(project);if(!exists(f))return null;const st=fs.statSync(f);if(st.size>1024*1024)throw Error(lt('共有確認の記録が大きすぎます'));return JSON.parse(fs.readFileSync(f,'utf8'));}
+ file(project,display=false){const p=this.store.readProject(project);if(!p)throw Error(lt('プロジェクトがありません'));const f=path.join(p.dir,'.ai/work/remove-sharing.json');(display?readNoLinks:noLinks)(f);return f;}
+ read(project){const f=this.file(project,true);if(!exists(f))return null;const st=fs.statSync(f);if(st.size>1024*1024)throw Error(lt('共有確認の記録が大きすぎます'));return JSON.parse(fs.readFileSync(f,'utf8'));}
  save(project,r){const f=this.file(project);fs.mkdirSync(path.dirname(f),{recursive:true});noLinks(f+'.tmp');fs.writeFileSync(f+'.tmp',JSON.stringify(r,null,2));fs.renameSync(f+'.tmp',f);}
  active(project){const r=this.read(project);return this.starting.has(project)||r?.status==='running';}
  async begin(token){

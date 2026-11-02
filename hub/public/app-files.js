@@ -89,7 +89,7 @@ async function showFileViewer(p, kind, trigger, attachment) {
   } catch { /* 履歴が使えなくても閉じるボタンを使える */ }
   prepareFileViewerControls(el, current);
   el.querySelector('[data-fv-close]').focus({ preventScroll: true });
-  const body = el.querySelector('.fv-body'), url = attachment?.url || fileViewUrl(p);
+  const body = el.querySelector('.fv-body'), url = globalThis.HubLocalAuth?.url(attachment?.url || fileViewUrl(p)) || attachment?.url || fileViewUrl(p);
   const fail = () => { if (fileViewer === current) { body.innerHTML = UI.template`<p class="note fv-error" role="alert">このファイルを表示できません。Macで開いてください。</p>`; body.setAttribute('aria-busy', 'false'); } };
   try {
     if (kind === 'text' || kind === 'doc') {
@@ -153,6 +153,52 @@ async function showPath(p, how = 'info') {
     <div class="fs-list">${r.parent ? UI.template`<button type="button" class="fs-row" data-fs-list="${esc(r.parent)}">↩︎ 上のフォルダへ</button>` : ''}
     ${r.entries.length ? r.entries.map(x => UI.template`<button type="button" class="fs-row" ${x.dir ? `data-fs-dir="${esc(x.path)}"` : `data-fs-file="${esc(x.path)}"`}><span>${x.dir ? '📁' : '📄'} ${esc(x.name)}</span><span class="small">${x.dir ? '' : fsize(x.size)}</span></button>`).join('') : UI.html('<p class="note">空のフォルダです</p>')}</div>
     <div class="acts fs-acts">${r.remote ? '' : UI.template`<button type="button" class="btn plain" data-fs-finder="${esc(r.path)}">Finder で開く</button>`}<button type="button" class="btn plain" data-fs-copy="${esc(r.path)}">場所をコピー</button><span class="sp"></span><button type="button" class="btn" data-fs-close>閉じる</button></div></div>`;
+}
+
+// Some drag sources expose their image as an item instead of FileList.
+function droppedFiles(transfer) {
+  const files = Array.from(transfer?.files || []);
+  if (files.length) return files;
+  return Array.from(transfer?.items || []).filter(x => x.kind === 'file').map(x => x.getAsFile?.()).filter(Boolean);
+}
+
+// Bind a delayed macOS file promise to the original screen, not the screen open
+// when its producer eventually finishes writing the screenshot.
+function beginNativeDrop() {
+  if (fileViewer || document.querySelectorAll('dialog[open]').length || !['work','project','newproject'].includes(view.kind)) return null;
+  const anchor = $('#main')?.firstElementChild;
+  if (!anchor) return null;
+  const ticket = String(++nativeDropSequence);
+  nativeDropTickets.set(ticket, {kind:view.kind,project:view.project,task:view.task,anchor,
+    generation:view.project === 'freetalk' ? attachmentGeneration(view.task) : globalThis.HubChatGenerations?.get(view.project+'\0'+view.task)});
+  while (nativeDropTickets.size > 20) nativeDropTickets.delete(nativeDropTickets.keys().next().value);
+  return ticket;
+}
+
+function currentNativeDropTarget(target) {
+  return Boolean(target && target.kind === view.kind && target.project === view.project && target.task === view.task
+    && target.anchor === $('#main')?.firstElementChild && target.anchor.isConnected !== false
+    && target.generation === (view.project === 'freetalk' ? attachmentGeneration(view.task) : globalThis.HubChatGenerations?.get(view.project+'\0'+view.task))
+    && !fileViewer && !document.querySelectorAll('dialog[open]').length);
+}
+
+function consumeNativeDrop(ticket) {
+  const target = nativeDropTickets.get(ticket); nativeDropTickets.delete(ticket);
+  return currentNativeDropTarget(target);
+}
+
+function failNativeDrop(ticket, reason) {
+  if (!consumeNativeDrop(ticket)) return;
+  const messages = {
+    promise: 'Macから画像ファイルを受け取れませんでした。保存した画像を選ぶか、貼り付けてください',
+    'promise-count': 'Macから画像の件数を確認できませんでした。保存した画像を選ぶか、貼り付けてください',
+    timeout: 'Macから画像を受け取るまでに時間がかかりすぎました。保存した画像を選ぶか、貼り付けてください',
+    'temporary-directory': '画像の一時保存先を用意できませんでした。保存した画像を選んでください',
+    'file-location': 'Macから受け取った画像の保存先や形式を確認できませんでした。保存した画像を選んでください',
+    'file-url': '落としたファイルを読み取れませんでした。保存先を確認して選び直してください',
+    'image-data': 'Macから受け取った画像データを読み取れませんでした。保存した画像を選ぶか、貼り付けてください',
+  };
+  toast(UI.text(messages[reason] || '画像を受け取れませんでした。保存した画像を選ぶか、貼り付けてください'));
 }
 
 function dropTarget(el) {
@@ -241,8 +287,20 @@ function appFilesCallback1845() {
 
 // Create the original callback at its original registration point in app.js.
 function appFilesCallback4244() {
-  return (async paths => {
+  return (async (paths, ticket, options) => {
+  if (ticket !== undefined && !consumeNativeDrop(ticket)) return false;
+  if (document.querySelectorAll('dialog[open]').length) return false;
   if (!Array.isArray(paths) || !paths.length) return;
+  // Promised files disappear after this callback. Only consumers which copy
+  // their contents now may receive them; never store their temporary paths.
+  if (options?.temporary === true) {
+    const copiesNow = view.kind === 'project' && view.project && paths.every(isQuickImage)
+      || view.kind === 'work' && $('#chat-in') && (view.project === 'freetalk' || paths.every(isQuickImage));
+    if (!copiesNow) {
+      toast(UI.text('一時ファイルはここでは使えません。保存したファイルを選ぶか、画像を会話画面に落としてください'));
+      return false;
+    }
+  }
   if (view.kind === 'newproject') {
     // 参考の欄に落とした時は参考に。本体の欄（や本体が空の時）は1つ目を本体に、残りは参考に
     if (lastDropZone === 'refs') { addNewRefs(paths); toast(UI.template`参考に ${paths.length} 件足しました`); return; }
@@ -323,14 +381,19 @@ function appFilesCallback4430() {
   return (e => {
   if (document.querySelector('.ideas-dialog[open]')) { e.preventDefault(); return; }
   e.preventDefault();
+  // The native receiver owns this physical drop until its ticket is consumed.
+  // WebKit can also emit an empty or populated DOM drop for the same gesture.
+  if ([...nativeDropTickets.values()].some(currentNativeDropTarget)) return;
   if (view.kind === 'project' && e.dataTransfer) {
-    const images = [...e.dataTransfer.files].filter(isQuickImage);
+    const images = droppedFiles(e.dataTransfer).filter(isQuickImage);
     if (images.length) { e.stopPropagation(); addQuickImages(proj(view.project), images); return; }
   }
   // ブラウザで開いている時は、落としたフォルダの場所が分からない
   if (view.kind === 'newproject' || view.kind === 'project') { toast(UI.text('ブラウザでは場所が分かりません。［選ぶ…］を押すか、アプリの窓で落としてください')); return; }
   if (view.kind !== 'work' || !e.dataTransfer) return;
-  sendFiles([...e.dataTransfer.files], dropTarget(e.target));
+  const files = droppedFiles(e.dataTransfer);
+  if (!files.length) { toast(UI.text('ブラウザから画像データが届きませんでした。保存した画像を選ぶか、貼り付けてください')); return; }
+  return sendFiles(files, dropTarget(e.target));
 });
 }
 

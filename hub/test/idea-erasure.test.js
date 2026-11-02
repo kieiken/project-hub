@@ -132,3 +132,95 @@ test('later hand edits and target-bearing or unproven preserved markdown remain 
    assert.throws(()=>f.ideas.erase('P',request(f,f.a.id)),{code:'erase-markdown'});assert.deepEqual(fs.readFileSync(s.md),bytes);assert.deepEqual(fs.readFileSync(s.file),before);assert.equal(fs.existsSync(path.join(s.controlDir,'erase-intent.json')),false);
  }
 });
+
+function confirmation(f,id,choose=()=>[]) {
+ const availability=f.ideas.eraseAvailability('P',id),review=availability.markdownReview;
+ assert.equal(availability.code,'erase-markdown');assert.ok(review.documents.length);
+ return {token:review.token,confirmed:true,documents:review.documents.map(d=>({hash:d.hash,removeLines:choose(d)}))};
+}
+test('manual markdown reconciliation preserves unrelated original for direct typed and unverified sources without touching preview data',t=>{
+ for(const capture of ['none','unverified']){
+  const f=preserved(t),s=f.ideas.resolve('P');f.ideas.internal('P',U.uuid(),{},d=>{d.items[f.a.id].source={capture};});
+  const old=fs.readFileSync(s.md),ledger=fs.readFileSync(s.file),review=confirmation(f,f.a.id);
+  assert.deepEqual(fs.readFileSync(s.md),old);assert.deepEqual(fs.readFileSync(s.file),ledger);
+  assert.equal(f.ideas.erase('P',{...request(f,f.a.id),markdownReview:review}).deleted,true);
+  assert.deepEqual(fs.readFileSync(s.md),old);assert.equal(f.ideas.read('P').items[f.a.id],undefined);
+  f.ideas.add('P',{opId:U.uuid(),text:'later save'},{human:true});assert.deepEqual(fs.readFileSync(s.md),old);
+ }
+});
+test('manual reconciliation deletes only confirmed target lines in all raw/wrapped copies and preserves CRLF, other records and later writes',t=>{
+ const f=fixture(t),a=f.add('REVIEW-PRIVATE-CANARY'),b=f.add('KEEP-RAW-EXACT'),s=f.ideas.resolve('P'),kept=f.ideas.read('P').items[b.id];
+ const original=Buffer.from('# 手書き帳\r\n別の原文を保持\r\nREVIEW-PRIVATE-CANARY\r\nKEEP-RAW-EXACT\r\n末尾の未登録原文');fs.writeFileSync(s.md,original);
+ f.ideas.backup('P',{opId:U.uuid()});const review=confirmation(f,a.id,d=>d.targetLines),op={...request(f,a.id),markdownReview:review};
+ assert.equal(f.ideas.erase('P',op).deleted,true);const expected=Buffer.from('# 手書き帳\r\n別の原文を保持\r\nKEEP-RAW-EXACT\r\n末尾の未登録原文');
+ assert.deepEqual(fs.readFileSync(s.md),expected);assert.deepEqual(f.ideas.read('P').items[b.id],kept);absent(f.root,'REVIEW-PRIVATE-CANARY');
+ assert.equal(f.restart().erase('P',op).deleted,true);f.add('later');assert.deepEqual(fs.readFileSync(s.md),expected);
+});
+test('manual reconciliation refuses mixed target and kept lines in live originals and retained backups before intent',t=>{
+ for(const mode of ['live-lf','live-crlf','backup-only','overlapping-text']){
+  const f=fixture(t),a=f.add('DELETE-PRIVATE'),b=f.add(mode==='overlapping-text'?'DELETE-PRIVATE-KEEP':'KEEP-OTHER'),s=f.ideas.resolve('P');
+  const eol=mode==='live-crlf'?'\r\n':'\n';
+  fs.writeFileSync(s.md,['original header',`DELETE-PRIVATE ${f.ideas.read('P').items[b.id].text}`,'unregistered original'].join(eol));
+  if(mode==='backup-only'){
+   f.ideas.backup('P',{opId:U.uuid()});
+   fs.writeFileSync(s.md,'original header\nDELETE-PRIVATE\nKEEP-OTHER\n');
+  }
+  const before=new Map(files(f.root).map(file=>[file,fs.readFileSync(file)]));
+  const availability=f.ideas.eraseAvailability('P',a.id);
+  assert.equal(availability.allowed,false,mode);assert.equal(availability.code,'erase-markdown-mixed',mode);
+  assert.equal(availability.markdownReview,undefined,mode);
+  assert.throws(()=>f.ideas.erase('P',{...request(f,a.id),markdownReview:{confirmed:true,token:'old-or-forged',documents:[]}}),{code:'erase-markdown-mixed'},mode);
+  assert.deepEqual(files(f.root).sort(),[...before.keys()].sort(),mode);
+  for(const [file,bytes] of before)assert.deepEqual(fs.readFileSync(file),bytes,mode+': '+file);
+  assert.equal(fs.existsSync(path.join(s.controlDir,'erase-intent.json')),false,mode);
+ }
+});
+test('manual reconciliation rejects stale inventories, unconfirmed/partial decisions, protected lines and whole unknown deletion before intent',t=>{
+ for(const mode of ['no-confirm','stale-raw','stale-ledger','missing-doc','duplicate','target-left','protected','whole','bad-line','busy']){
+  const f=fixture(t),a=f.add('TARGET-ONLY'),b=f.add('KEEP-OTHER'),s=f.ideas.resolve('P');
+  fs.writeFileSync(s.md,mode==='whole'?'unknown one\nunknown two\n':'original header\nTARGET-ONLY\nKEEP-OTHER\n');
+  const review=confirmation(f,a.id,d=>d.targetLines),doc=review.documents[0];
+  if(mode==='no-confirm')review.confirmed=false;
+  if(mode==='stale-raw')fs.appendFileSync(s.md,'concurrent original');
+  if(mode==='stale-ledger')f.add('concurrent note');
+  if(mode==='missing-doc')review.documents=[];
+  if(mode==='duplicate')doc.removeLines=[2,2];
+  if(mode==='target-left')doc.removeLines=[];
+  if(mode==='protected')doc.removeLines.push(3);
+  if(mode==='whole')doc.removeLines=[1,2];
+  if(mode==='bad-line')doc.removeLines.push(1000);
+  if(mode==='busy')f.ideas.internal('P',U.uuid(),{},d=>{d.evidence.busy={type:'verification',finished:false};});
+  const before=fs.readFileSync(s.file),raw=fs.readFileSync(s.md);assert.throws(()=>f.ideas.erase('P',{...request(f,a.id),markdownReview:review}));
+  assert.deepEqual(fs.readFileSync(s.file),before,mode);assert.deepEqual(fs.readFileSync(s.md),raw,mode);assert.equal(fs.existsSync(path.join(s.controlDir,'erase-intent.json')),false,mode);
+ }
+});
+test('exact single target body may be erased after review, while ambiguous full originals stay protected',t=>{
+ const f=fixture(t),a=f.add('ONLY-TARGET'),s=f.ideas.resolve('P');fs.writeFileSync(s.md,'ONLY-TARGET');
+ const review=confirmation(f,a.id,d=>d.targetLines);assert.equal(f.ideas.erase('P',{...request(f,a.id),markdownReview:review}).deleted,true);assert.equal(fs.readFileSync(s.md).length,0);absent(f.root,'ONLY-TARGET');
+});
+
+test('reviewed legacy unknown lines are scrubbed from preserved imports and ledger unknown indexes without changing other legacy entries',t=>{
+ const f=fixture(t);fs.writeFileSync(path.join(f.dir,'アイデア帳.md'),'# 未着手\r\n- KEEP-LEGACY\r\nIMPORT-PRIVATE-CANARY\r\n未登録の原文を保持');
+ f.ideas.initialize('P',U.uuid(),{importLegacy:true});const a=f.add('IMPORT-PRIVATE-CANARY'),s=f.ideas.resolve('P'),kept=Object.values(f.ideas.read('P').items).find(i=>i.text==='KEEP-LEGACY'),before=f.ideas.read('P').items[kept.id];
+ f.ideas.backup('P',{opId:U.uuid()});const review=confirmation(f,a.id,d=>d.targetLines),op={...request(f,a.id),markdownReview:review};
+ assert.equal(f.ideas.erase('P',op).deleted,true);assert.deepEqual(f.ideas.read('P').items[kept.id],before);absent(f.root,'IMPORT-PRIVATE-CANARY');assert.equal(f.restart().erase('P',op).deleted,true);assert.equal(fs.readFileSync(s.md,'utf8'),'# 未着手\r\n- KEEP-LEGACY\r\n未登録の原文を保持');
+});
+test('different unknown originals in backup and current source each require confirmation and preserve their own unmatched bytes',t=>{
+ const f=fixture(t),a=f.add('MULTI-TARGET'),s=f.ideas.resolve('P');f.add('KEPT-MULTI');fs.writeFileSync(s.md,'first original\nMULTI-TARGET\n');f.ideas.backup('P',{opId:U.uuid()});fs.writeFileSync(s.md,'second original\r\nMULTI-TARGET\r\n');
+ const review=confirmation(f,a.id,d=>d.targetLines);assert.equal(review.documents.length,2);assert.equal(f.ideas.erase('P',{...request(f,a.id),markdownReview:review}).deleted,true);assert.equal(fs.readFileSync(s.md,'utf8'),'second original\r\n');
+ const wrapped=files(path.join(f.ideas.control,'backups')).filter(file=>path.basename(file)==='markdown');assert.ok(wrapped.length);for(const file of wrapped)assert.equal(Buffer.from(JSON.parse(fs.readFileSync(file)).base64,'base64').toString(),'first original\n');absent(f.root,'MULTI-TARGET');
+});
+
+for(const eol of ['\n','\r\n'])test(`import line identities survive repeated reviewed deletion and divergent live edits (${JSON.stringify(eol)})`,t=>{
+ const f=fixture(t),original=['# 未着手','FIRST-INDEX-CANARY','- LATER-INDEX-CANARY','THIRD-INDEX-CANARY','KEEP-INDEX-TAIL'].join(eol);fs.writeFileSync(path.join(f.dir,'アイデア帳.md'),original);
+ f.ideas.initialize('P',U.uuid(),{importLegacy:true});const first=f.add('FIRST-INDEX-CANARY'),third=f.add('THIRD-INDEX-CANARY'),kept=f.add('KEEP-INDEPENDENT'),snapshot=f.ideas.read('P').items[kept.id];
+ const s=f.ideas.resolve('P'),later=Object.values(f.ideas.read('P').items).find(i=>i.text==='LATER-INDEX-CANARY'),source=U.clone(later.source),importFile=path.join(s.controlDir,'imports',source.hash+'.md');f.ideas.backup('P',{opId:U.uuid()});
+ const erase=id=>{const op={...request(f,id),markdownReview:confirmation(f,id,d=>d.targetLines)};assert.equal(f.ideas.erase('P',op).deleted,true);return op;};
+ erase(first.id);assert.deepEqual(f.ideas.read('P').items[later.id].source,source);assert.equal(fs.readFileSync(importFile,'utf8'),['# 未着手','','- LATER-INDEX-CANARY','THIRD-INDEX-CANARY','KEEP-INDEX-TAIL'].join(eol));
+ f.ideas.backup('P',{opId:U.uuid()});fs.appendFileSync(s.md,eol+'ADDED-LIVE-ONLY');
+ erase(later.id);const op=erase(third.id),expected=['# 未着手','','','','KEEP-INDEX-TAIL'].join(eol);
+ assert.equal(fs.readFileSync(importFile,'utf8'),expected);assert.deepEqual(f.ideas.read('P').imports[source.hash].unknown,[{line:5,text:'KEEP-INDEX-TAIL'}]);assert.deepEqual(f.ideas.read('P').items[kept.id],snapshot);
+ for(const file of files(path.join(f.ideas.control,'backups')).filter(file=>file.endsWith('/control/imports/'+source.hash+'.md')))assert.equal(Buffer.from(JSON.parse(fs.readFileSync(file)).base64,'base64').toString(),expected);
+ for(const canary of ['FIRST-INDEX-CANARY','LATER-INDEX-CANARY','THIRD-INDEX-CANARY'])absent(f.root,canary);
+ const live=fs.readFileSync(s.md);assert.equal(live.includes(Buffer.from('ADDED-LIVE-ONLY')),true);assert.equal(f.restart().erase('P',op).deleted,true);f.add('later normal save');assert.deepEqual(fs.readFileSync(s.md),live);
+});

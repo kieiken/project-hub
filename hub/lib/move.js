@@ -13,6 +13,25 @@ const CONFIRM = '今のデータを別名に移して読み込む';
 const MAX_ENTRIES = 500000, MAX_MANIFEST = 128 * 1024 * 1024;
 const exists = p => { try { fs.lstatSync(p); return true; } catch (e) { if (e.code !== 'ENOENT') throw e; return false; } };
 const inside = (base, p) => p === base || p.startsWith(base + path.sep);
+// Transfer bundles may land on a case-insensitive disk. Compare credential
+// locations that way even if this machine's source volume is case-sensitive.
+// Repeat casing so capital sharp S (ẞ -> ß -> SS -> ss) also converges.
+const foldedPath = p => path.resolve(p).normalize('NFD').replace(/\p{Default_Ignorable_Code_Point}/gu, '').toUpperCase().toLowerCase().toUpperCase().toLowerCase().normalize('NFD');
+const foldedInside = (base, p) => inside(foldedPath(base), foldedPath(p));
+const browserData = (root, file) => inside(foldedPath(path.join(root, '_hub/webchat')), foldedPath(file));
+// Runtime owner capabilities are local to this account, never portable data.
+const ownerData = file => foldedInside(require('./local-auth').directory(), file);
+const sameDirectory = (a, b) => a.isDirectory() && b.isDirectory() && a.dev === b.dev && a.ino === b.ino;
+// realpath can preserve an APFS Unicode alias. Compare identities on the source
+// disk, so aliases are caught without conflating distinct case-sensitive roots.
+function directoryInside(base, dir) {
+  if (!exists(base) || !exists(dir)) return foldedInside(base, dir);
+  const root = fs.lstatSync(base);
+  for (let p = dir;; p = path.dirname(p)) {
+    if (sameDirectory(root, fs.lstatSync(p))) return true;
+    if (p === path.dirname(p)) return false;
+  }
+}
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/T/, '-').slice(0, 15);
 function check(ok, message) { if (!ok) throw Object.assign(Error(message), { status: 409 }); }
 function json(file) { check(fs.lstatSync(file).isFile(), '記録が通常のファイルではありません'); check(fs.statSync(file).size <= MAX_MANIFEST, '記録が大きすぎます'); return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -34,6 +53,7 @@ function excluded(rel, backups) {
     a[0] === 'Work' || (!backups && a[0] === 'Backups') ||
     /(^|\/)ProjectHub-Move(\/|$)/.test(rel) ||
     /^_hub\/(?:license|updates|cli-runs|move|account-processes)(?:\/|$)/.test(rel) ||
+    /^_hub\/webchat(?:\/|$)/.test(foldedPath('/' + rel).slice(1)) ||
     /^_hub\/(?:accounts|remote)\.json$/.test(rel) ||
     /(?:^|\/)(?:[^/]+\.lock|[^/]+\.sock|Singleton[^/]*)$/.test(rel);
 }
@@ -145,6 +165,7 @@ class Move {
   async inventory(includeBackups) {
     check(portableRoot(this.home, this.root), 'ホーム内の作業データだけを移せます');
     const roots = [{ id: 'workspace', orig: this.root }, { id: 'freetalk', orig: this.freetalk }].filter(r => exists(r.orig));
+    const browser = path.join(this.root, '_hub/webchat'), browserStat = exists(browser) ? fs.lstatSync(browser) : null;
     const notIncluded = [], worktrees = [], entries = [];
     const product = path.join(this.root, 'Product');
     if (exists(product)) for (const project of fs.readdirSync(product)) {
@@ -154,11 +175,19 @@ class Move {
       for (const [label, value] of Object.entries(folders && typeof folders === 'object' ? folders : {})) {
         if (typeof value !== 'string' || !value) continue;
         const orig = path.resolve(value.startsWith('~') ? path.join(this.home, value.slice(1)) : value);
-        if (roots.some(r => inside(r.orig, orig))) continue;
+        if (ownerData(orig)) { notIncluded.push({ path: orig, reason: 'local-owner-capability' }); continue; }
+        if (browserData(this.root, orig)) { notIncluded.push({ path: orig, reason: 'このMac専用のブラウザのログイン情報' }); continue; }
         if (!inside(this.home, orig) || orig === this.home) { notIncluded.push({ path: orig, reason: 'home-outside' }); continue; }
         if (!portableRoot(this.home, orig)) { notIncluded.push({ path: orig, reason: 'private-location' }); continue; }
+        // Resolve case aliases before de-duplicating external roots, without
+        // following a symlink that safeParents would otherwise refuse.
+        if (exists(orig)) {
+          safeParents(orig, this.home);
+          if (browserStat && directoryInside(browser, orig)) { notIncluded.push({ path: orig, reason: 'このMac専用のブラウザのログイン情報' }); continue; }
+          if (roots.some(r => directoryInside(r.orig, orig))) continue;
+        }
         // Ancestors of the workspace/other roots would duplicate data and authentication homes.
-        check(!roots.some(r => inside(orig, r.orig)), 'プロジェクトの場所が保存場所全体を含んでいます');
+        check(!roots.some(r => directoryInside(orig, r.orig)), 'プロジェクトの場所が保存場所全体を含んでいます');
         if (!exists(orig)) { notIncluded.push({ path: orig, reason: 'missing' }); continue; }
         safeParents(orig, this.home); roots.push({ id: `ext-${roots.filter(r => r.id.startsWith('ext-')).length + 1}`, orig, project, label });
       }
@@ -168,12 +197,19 @@ class Move {
       const walk = async (dir, prefix = '') => {
         for (const name of (await fsp.readdir(dir)).sort()) {
           const rel = prefix + name, file = path.join(dir, name);
+          if (browserData(this.root, file) || ownerData(file)) continue;
           if (excluded(rel, includeBackups)) {
             if (/^_hub\/(?:accounts|remote)\.json$/.test(rel)) notIncluded.push({ path: file, reason: 'このMac専用のアカウント・遠隔操作設定。新しいMacで設定してください' });
             continue;
           }
           check(relName(rel), '移せないファイル名があります');
           const st = await fsp.lstat(file), mode = (st.mode & 0o777).toString(8).padStart(3, '0');
+          if (browserStat && sameDirectory(browserStat, st)) continue;
+          // Only the workspace's control directory has this meaning. External
+          // project folders may legitimately have an unrelated _hub link.
+          if (root.id === 'workspace' && foldedPath('/' + rel) === '/_hub' && st.isSymbolicLink()) {
+            notIncluded.push({ path: file, reason: 'ブラウザ設定へのリンクは移しません' }); continue;
+          }
           const e = { root: root.id, rel, nameB64: Buffer.from(rel, 'utf8').toString('base64'), mode, size: 0, sha256: null, link: null };
           if (st.isSymbolicLink()) {
             const link = await fsp.readlink(file);
@@ -206,9 +242,10 @@ class Move {
   }
   capacity(bytes) { safeParents(path.join(this.home, 'Documents'), this.home); check(this.freeBytes(path.join(this.home, 'Documents')) >= Math.ceil(bytes * 1.1), '空き容量が足りません。データの1.1倍の空きが必要です'); }
   async export({ includeBackups = false } = {}) {
-    check(!this.running && !this.busy(), 'AI・順番待ち・保存・更新が終わってから引っ越してください');
-    this.running = true; this.barrier(true); this.state = { mode: 'exporting', progress: 0 };
+    check(!this.running, 'AI・順番待ち・保存・更新が終わってから引っ越してください'); this.running = true;
     try {
+      check(!(this.strictBusy ? await this.strictBusy() : this.busy()), 'AI・順番待ち・保存・更新が終わってから引っ越してください');
+      this.barrier(true); this.state = { mode: 'exporting', progress: 0 };
       const inv = await this.inventory(includeBackups === true); this.capacity(inv.totals.bytes);
       safeParents(this.inbox, this.home); await fsp.mkdir(this.inbox, { recursive: true, mode: 0o700 });
       const bundle = path.join(this.inbox, `ProjectHub-${stamp()}.hubmove`);
@@ -246,7 +283,9 @@ class Move {
     check(typeof m.source.home === 'string' && path.isAbsolute(m.source.home) && path.normalize(m.source.home) === m.source.home && portableRoot(m.source.home, m.source.workspace), '元の保存場所が不正です');
     const ids = new Set(), origins = [];
     for (const r of m.roots) {
-      check(/^(workspace|freetalk|ext-[1-9][0-9]*)$/.test(r.id) && !ids.has(r.id) && portableRoot(m.source.home, r.orig) && !origins.some(p => inside(p, r.orig) || inside(r.orig, p)), 'データの範囲が不正です');
+      check(/^(workspace|freetalk|ext-[1-9][0-9]*)$/.test(r.id) && !ids.has(r.id) && portableRoot(m.source.home, r.orig)
+        && !browserData(m.source.workspace, r.orig)
+        && !origins.some(p => inside(p.normalize('NFC'), r.orig.normalize('NFC')) || inside(r.orig.normalize('NFC'), p.normalize('NFC'))), 'データの範囲が不正です');
       check(r.id !== 'workspace' || r.orig === m.source.workspace, '台帳の場所が一致しません');
       check(r.id !== 'freetalk' || r.orig === path.join(m.source.home, 'Documents/freetalk'), 'freetalkの場所が一致しません');
       safeParents(path.join(bundle, 'data', r.id), this.home);
@@ -256,6 +295,7 @@ class Move {
     const seen = new Map(); let bytes = 0, files = 0;
     for (const e of m.entries) {
       check(ids.has(e.root) && relName(e.rel) && Buffer.from(e.rel).toString('base64') === e.nameB64 && ['file', 'dir', 'link'].includes(e.type) && /^[0-7]{3}$/.test(e.mode) && !excluded(e.rel, true), '目録に移せない項目があります');
+      check(!(e.root === 'workspace' && foldedPath('/' + e.rel) === '/_hub' && e.type === 'link'), 'ブラウザ設定へのリンクは読み込めません');
       const key = e.root + '/' + e.rel.normalize('NFC'); check(!seen.has(key), '同じ名前のデータがあります');
       const parent = path.posix.dirname(e.rel); check(parent === '.' || seen.get(e.root + '/' + parent.normalize('NFC')) === 'dir', '親フォルダがありません'); seen.set(key, e.type);
       check(Number.isSafeInteger(e.size) && e.size >= 0, '大きさが不正です');
@@ -281,9 +321,11 @@ class Move {
     } catch { return false; }
   }
   async import({ action = 'start', bundle: name, confirm } = {}) {
-    check(!this.running && !this.busy(), '別の処理が終わってから引っ越してください');
-    this.running = true; this.barrier(true);
-    try { return await this.importReserved({ action, bundle: name, confirm }); }
+    check(!this.running, '引っ越しの処理中です'); this.running = true;
+    try {
+      check(!(this.strictBusy ? await this.strictBusy() : this.busy()), '別の処理が終わってから引っ越してください');
+      this.barrier(true); return await this.importReserved({ action, bundle: name, confirm });
+    }
     catch (e) { this.state = { ...this.state, mode: 'failed', error: e.message }; throw e; }
     finally { this.running = false; this.barrier(false); }
   }
@@ -301,16 +343,29 @@ class Move {
     try {
       const id = randomUUID(), stage = path.join(this.home, 'Documents/.ProjectHub-move-' + id);
       safeParents(stage, this.home); await fsp.mkdir(stage, { mode: 0o700 });
-      const maps = [], reserved = new Set();
+      const maps = [], reserved = new Set(), entriesByRoot = new Map(m.roots.map(r => [r.id, []]));
+      for (const e of m.entries) entriesByRoot.get(e.root).push(e);
       for (const r of m.roots) {
+        const rootEntries = entriesByRoot.get(r.id);
         let dest = r.id === 'workspace' ? this.root : r.id === 'freetalk' ? this.freetalk : path.join(this.home, path.relative(m.source.home, r.orig));
-        if (r.id.startsWith('ext-') && (exists(dest) || inside(this.root, dest) || inside(dest, this.root) || inside(this.freetalk, dest) || inside(dest, this.freetalk))) {
+        // Reject credential destinations before collision relocation as well:
+        // relocation must not launder a profile from a differently named workspace.
+        check(!ownerData(dest) && !rootEntries.some(e => ownerData(path.join(dest, e.rel))), 'この端末の内部認証は移せません');
+        check(!browserData(this.root, dest)
+          && !rootEntries.some(e => browserData(this.root, path.join(dest, e.rel))), 'ブラウザのログイン情報は読み込めません');
+        if (r.id.startsWith('ext-') && (exists(dest) || foldedInside(this.root, dest) || foldedInside(dest, this.root) || foldedInside(this.freetalk, dest) || foldedInside(dest, this.freetalk))) {
           const label = (String(r.project || 'project') + '-' + String(r.label || 'files')).replace(/[/\\\0]/g, '_');
           dest = path.join(this.home, 'Documents/Project Hub 引っ越し', label);
         }
-        const base = dest; for (let n = 2; (r.id.startsWith('ext-') && exists(dest)) || reserved.has(dest); n++) dest = base + '-' + n;
-        check(portableRoot(this.home, dest), '移す先が安全なデータの場所ではありません');
-        safeParents(path.dirname(dest), this.home); reserved.add(dest); maps.push({ id: r.id, from: r.orig, to: dest });
+        const base = dest; for (let n = 2; (r.id.startsWith('ext-') && exists(dest)) || reserved.has(foldedPath(dest)); n++) dest = base + '-' + n;
+        check(portableRoot(this.home, dest) && !browserData(this.root, dest), '移す先が安全なデータの場所ではありません');
+        // The source workspace name need not match this Mac's workspace. Check
+        // every mapped entry before moving or staging any existing user data.
+        check(!ownerData(dest) && !rootEntries.some(e => ownerData(path.join(dest, e.rel))), 'この端末の内部認証は移せません');
+        check(!rootEntries.some(e => browserData(this.root, path.join(dest, e.rel))), 'ブラウザのログイン情報は読み込めません');
+        check(!rootEntries.some(e => e.type === 'link'
+          && foldedPath(path.join(dest, e.rel)) === foldedPath(path.join(this.root, '_hub'))), 'ブラウザ設定へのリンクは読み込めません');
+        safeParents(path.dirname(dest), this.home); reserved.add(foldedPath(dest)); maps.push({ id: r.id, from: r.orig, to: dest });
         await fsp.mkdir(path.join(stage, r.id));
       }
       for (let i = 0; i < m.entries.length; i++) {
@@ -449,7 +504,7 @@ class Move {
     try { await this.commit(j); return true; } catch (e) { this.state = { mode: 'failed', error: e.message }; throw e; } finally { this.running = false; }
   }
   async trash({ bundle, confirm } = {}) {
-    check(!this.running && !this.busy() && confirm === true && /^[^/\\]+\.hubmove$/.test(bundle), '読み込み済みのデータを確認してください');
+    check(!(this.strictBusy ? await this.strictBusy() : this.busy()) && !this.running && confirm === true && /^[^/\\]+\.hubmove$/.test(bundle), '読み込み済みのデータを確認してください');
     const from = path.join(this.inbox, bundle);
     safeParents(from, this.home); check(regular(path.join(from, 'imported.json')), '読み込み済みのデータではありません');
     const to = path.join(platform.trashDir(this.home), bundle + '-' + randomUUID()); safeParents(path.dirname(to), this.home);

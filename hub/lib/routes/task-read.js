@@ -14,7 +14,7 @@ module.exports = function taskreadRoutes(ctx) {
     },
     preview: {
       matches: (req, url) => req.method === 'GET' && url.pathname === '/api/task/preview',
-      handle(req, res, url) {
+      async handle(req, res, url) {
         if (req.method === 'GET' && url.pathname === '/api/task/preview') {
           const p = store.readProject(url.searchParams.get('project'));
           const file = p && store.taskFile(p.id, url.searchParams.get('task'));
@@ -22,7 +22,7 @@ module.exports = function taskreadRoutes(ctx) {
           const t = store.readTask(file);
           if (!inWork(p, t)) return send(res, 200, null);
           let r = null;
-          try { r = gitw.preview({ dir: expandHome(t.workdir), workRoot: workRoot(p), targetGuard:d=>require('../integration-writes').inspect(gitw,d) }); } catch (e) { r = null; }
+          try { r = await gitw.previewAsync({ dir: expandHome(t.workdir), workRoot: workRoot(p), root: store.root }); } catch (e) { r = null; }
           if(r)r.mainDisplay=taskIntegrate.mainDisplay(p.id,t.id);
           return send(res, 200, r);
         }

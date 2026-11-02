@@ -92,6 +92,113 @@ test('compact list Chrome: themes/sizes, label/order/page, cancel, dropped delet
   assert.equal(await page.locator('.ideas-dialog').evaluate(e=>e.scrollWidth<=e.clientWidth),true);assert.ok(await page.locator('.idea-edit-line button,.idea-edit-line select').evaluateAll(es=>es.every(e=>e.getBoundingClientRect().height>=44)));assert.deepEqual(errors,[]);report.push({theme,width,line,selectiveStorage:true,pageBoundary:true,errors});await context.close();
  }fs.writeFileSync(path.join(artifacts,'report.json'),JSON.stringify(report,null,2));}catch(e){if(activePage){const stamp=Date.now();await activePage.screenshot({path:path.join(artifacts,'failure-'+stamp+'.png')});fs.writeFileSync(path.join(artifacts,'failure-'+stamp+'.json'),JSON.stringify(await activePage.evaluate(()=>({html:document.querySelector('.ideas-dialog')?.outerHTML,draft:Object.fromEntries(Object.entries(localStorage).filter(([k])=>k.startsWith('hub-idea')))})),null,2));}throw e;}finally{await browser.close();}
 });
+test('detail Chrome: category autosave, receipt recovery, delete cancel/busy/double-submit in four layouts', { skip: !chromium || !chrome }, async () => {
+ const browser = await chromium.launch({ executablePath: chrome, headless: true }), artifacts = process.env.HUB_IDEA_TEST_ARTIFACTS || path.resolve(__dirname, '../../.ai/work/idea-redesign');
+ fs.mkdirSync(artifacts, { recursive: true });
+ try { for (const theme of ['dark', 'light']) for (const width of [1280, 390]) {
+  const name = 'Detail-' + theme + '-' + width; project(name);
+  const item = ideas.add(name, { opId: U.uuid(), text: '詳細のまま分類変更と削除', category: 'note' }, { human: true });
+  const kept = ideas.add(name, { opId: U.uuid(), text: '残す項目' }, { human: true }), beforeKept = ideas.read(name).items[kept.id];
+  const context = await browser.newContext({ viewport: { width, height: 900 } }), page = await context.newPage(), posts = [], errors = [];
+  page.setDefaultTimeout(10000); page.on('pageerror', e => errors.push(e.message));
+  page.on('request', r => { if (r.method() === 'POST' && /\/api\/ideas\/(update|delete)$/.test(new URL(r.url()).pathname)) posts.push({ route: new URL(r.url()).pathname, ...r.postDataJSON() }); });
+  const open = async () => { await page.evaluate(([name, theme]) => { HubTheme.set(theme); return HubIdeas.open(name, 'main'); }, [name, theme]); };
+  await page.goto(base); await open();
+  const row = page.locator(`.idea-item[data-item="${item.id}"]`), category = row.locator('[data-row-category]');
+  await row.locator('summary').first().click();
+  assert.deepEqual(await category.locator('option').allTextContents(), ['メモ', 'バグ', '改善', 'アイデア', '相談']);
+  for (const value of ['bug', 'improve', 'feature', 'research', 'note']) {
+   await category.selectOption(value);
+   await page.waitForFunction(([id, value]) => { const row = document.querySelector(`.idea-item[data-item="${id}"]`); return row?.open && row.querySelector('.idea-category').dataset.category === value && !row.querySelector('[data-row-category]').disabled; }, [item.id, value]);
+   assert.equal(ideas.read(name).items[item.id].category, value);
+  }
+  await page.screenshot({ path: path.join(artifacts, `${theme}-${width}-detail.png`) });
+  assert.equal(await page.locator('.ideas-dialog').evaluate(el => el.scrollWidth <= el.clientWidth), true);
+  assert.ok(await category.evaluate(el => el.getBoundingClientRect().height >= 44));
+  // A lost successful update is reconciled by receipt without posting it again.
+  await page.route('**/api/ideas/update', async route => { await route.fetch(); await route.abort(); });
+  await category.selectOption('bug'); await row.locator('[data-idea-action=row-retry]').waitFor();
+  assert.equal(await category.isDisabled(), true); const updates = posts.length;
+  await page.reload(); await open(); await row.locator('summary').first().click();
+  await page.unroute('**/api/ideas/update'); await row.locator('[data-idea-action=row-retry]').click();
+  await page.waitForFunction(id => !document.querySelector(`[data-row-category="${id}"]`).disabled, item.id);
+  assert.equal(posts.length, updates); assert.equal(ideas.read(name).items[item.id].category, 'bug');
+  // Cancel and Escape leave the detail open and never send a deletion.
+  await row.locator('[data-idea-action=delete]').click();
+  await page.waitForFunction(() => document.activeElement.dataset.ideaAction === 'delete-cancel');
+  await row.locator('[data-idea-action=delete-cancel]').click();
+  assert.equal(await row.getAttribute('open'), ''); assert.equal(await row.locator('.idea-delete-confirm').count(), 0);
+  await row.locator('[data-idea-action=delete]').click(); await page.keyboard.press('Escape');
+  assert.equal(await row.locator('.idea-delete-confirm').count(), 0);
+  // The same server preflight blocks deletion while a verification is unfinished.
+  ideas.internal(name, U.uuid(), { fixture: 'detail busy' }, d => { d.evidence.detailCheck = { id: 'detailCheck', type: 'verification', finished: false }; });
+  await row.locator('[data-idea-action=delete]').click();
+  await page.waitForFunction(() => document.querySelector('[data-idea-action=delete-confirm]')?.textContent === '削除できません');
+  assert.equal(await row.locator('[data-idea-action=delete-confirm]').isDisabled(), true);
+  assert.match(await row.locator('.idea-delete-confirm').innerText(), /検証/);
+  await row.locator('[data-idea-action=delete-cancel]').click();
+  ideas.internal(name, U.uuid(), { fixture: 'detail ready' }, d => { delete d.evidence.detailCheck; });
+  assert.equal(posts.filter(p => p.route === '/api/ideas/delete').length, 0);
+  // Unknown delivery retains the original operation and cannot post during unknown receipt.
+  await row.locator('[data-idea-action=delete]').click(); await page.waitForFunction(() => !document.querySelector('[data-idea-action=delete-confirm]').disabled);
+  await page.route('**/api/ideas/delete', route => route.abort());
+  await row.locator('[data-idea-action=delete-confirm]').evaluate(el => { el.click(); el.click(); });
+  await row.locator('[data-idea-action=delete-confirm]').filter({ hasText: '削除の結果を確認' }).waitFor();
+  assert.equal(posts.filter(p => p.route === '/api/ideas/delete').length, 1);
+  await page.route('**/api/ideas/receipt?*', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ saved: 'unknown' }) }));
+  await row.locator('[data-idea-action=delete-confirm]').click(); await page.waitForSelector('[data-idea-status].error');
+  assert.equal(posts.filter(p => p.route === '/api/ideas/delete').length, 1);
+  await page.unroute('**/api/ideas/receipt?*'); await page.unroute('**/api/ideas/delete');
+  await row.locator('[data-idea-action=delete-confirm]').click(); await row.waitFor({ state: 'detached' });
+  const deletions = posts.filter(p => p.route === '/api/ideas/delete');
+  assert.equal(deletions.length, 2); assert.equal(deletions[0].opId, deletions[1].opId);
+  assert.equal(ideas.read(name).items[item.id], undefined); assert.deepEqual(ideas.read(name).items[kept.id], beforeKept);
+  assert.deepEqual(errors, []); await context.close();
+ } } finally { await browser.close(); }
+});
+test('unmatched markdown Chrome: detail/list review, no-op cancel, selective erasure, stale confirmation, busy and uncertain receipt', {skip:!chromium||!chrome}, async()=>{
+ const browser=await chromium.launch({executablePath:chrome,headless:true}),artifacts=process.env.HUB_IDEA_TEST_ARTIFACTS||path.resolve(__dirname,'../../.ai/work/idea-redesign');fs.mkdirSync(artifacts,{recursive:true});
+ try{for(const theme of ['dark','light'])for(const width of [1280,390]){
+  const name='Markdown-'+theme+'-'+width;project(name);const victim=ideas.add(name,{opId:U.uuid(),text:'UI-PRIVATE-CANARY'},{human:true}),kept=ideas.add(name,{opId:U.uuid(),text:'別の項目を保持'},{human:true}),s=ideas.resolve(name);
+  const original=Buffer.from('# 古い手書き帳\r\nUI-PRIVATE-CANARY\r\n別の項目を保持\r\n<script>window.bad=1</script>');fs.writeFileSync(s.md,original);
+  const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),posts=[],errors=[];page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/ideas/delete')posts.push(r.postDataJSON());});
+  const row=page.locator(`[data-item="${victim.id}"]`).filter({has:page.locator('[data-idea-action=delete]')}),open=async()=>{await page.evaluate(([name,theme])=>{HubTheme.set(theme);return HubIdeas.open(name,'main');},[name,theme]);if(width===1280)await page.click('[data-idea-action=list-edit]');else await row.locator('summary').first().click();};
+  await page.goto(base);await open();
+  const review=async()=>{await row.locator('[data-idea-action=delete]').click();await row.locator('[data-idea-action=delete-review]').click();await row.locator('[data-markdown-confirm]').waitFor();};
+  await review();assert.equal(await row.locator('[data-idea-action=delete-confirm]').isDisabled(),true);assert.equal(await page.evaluate(()=>window.bad),undefined);assert.equal(await row.locator('[data-markdown-line="3"]').isDisabled(),true);
+  await row.locator('[data-idea-action=delete-cancel]').click();assert.deepEqual(fs.readFileSync(s.md),original);assert.equal(posts.length,0);
+  await review();await page.keyboard.press('Escape');assert.equal(await row.locator('[data-markdown-confirm]').count(),0);assert.equal(posts.length,0);
+  await review();await row.locator('[data-markdown-confirm]').check();assert.equal(await row.locator('[data-idea-action=delete-confirm]').isDisabled(),true);await row.locator('[data-markdown-line="2"]').check();assert.equal(await row.locator('[data-markdown-confirm]').isChecked(),false);await row.locator('[data-markdown-confirm]').check();
+  await page.screenshot({path:path.join(artifacts,`${theme}-${width}-markdown-review.png`)});assert.equal(await page.locator('.ideas-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  // The server fences a stale confirmation even before the polling view catches up.
+  fs.appendFileSync(s.md,'\r\n同時に追加された原文');await row.locator('[data-idea-action=delete-confirm]').click();await row.locator('[data-idea-action=delete-review]').waitFor();assert.equal(posts.length,1);assert.ok(ideas.read(name).items[victim.id]);assert.equal(await row.locator('[data-markdown-confirm]').count(),0);
+  await row.locator('[data-idea-action=delete-review]').click();await row.locator('[data-markdown-line="2"]').check();await row.locator('[data-markdown-confirm]').check();
+  // Busy evidence is still enforced after a human has confirmed the raw source.
+  ideas.internal(name,U.uuid(),{fixture:'markdown busy'},d=>{d.evidence.markdownBusy={type:'verification',finished:false};});await row.locator('[data-idea-action=delete-confirm]').click();await page.waitForFunction(()=>document.querySelector('.idea-delete-confirm')?.textContent.includes('検証'));assert.ok(ideas.read(name).items[victim.id]);
+  ideas.internal(name,U.uuid(),{fixture:'markdown ready'},d=>{delete d.evidence.markdownBusy;});await row.locator('[data-idea-action=delete-review]').waitFor();await row.locator('[data-idea-action=delete-review]').click();await row.locator('[data-markdown-line="2"]').check();await row.locator('[data-markdown-confirm]').check();
+  // Failed delivery retains exactly the same reviewed operation across reload.
+  await page.route('**/api/ideas/delete',route=>route.abort());await row.locator('[data-idea-action=delete-confirm]').evaluate(el=>{el.click();el.click();});await row.locator('[data-idea-action=delete-confirm]').filter({hasText:'削除の結果を確認'}).waitFor();const attempts=posts.length;
+  await page.route('**/api/ideas/receipt?*',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({saved:'unknown'})}));await row.locator('[data-idea-action=delete-confirm]').click();await page.waitForSelector('[data-idea-status].error');assert.equal(posts.length,attempts);
+  await page.reload();await open();await page.unroute('**/api/ideas/receipt?*');await page.unroute('**/api/ideas/delete');await row.locator('[data-idea-action=delete-confirm]').click();await row.waitFor({state:'detached'});
+  assert.equal(posts.length,attempts+1);assert.deepEqual(posts.at(-1),posts.at(-2));assert.equal(ideas.read(name).items[victim.id],undefined);assert.ok(ideas.read(name).items[kept.id]);assert.deepEqual(fs.readFileSync(s.md),Buffer.from('# 古い手書き帳\r\n別の項目を保持\r\n<script>window.bad=1</script>\r\n同時に追加された原文'));assert.deepEqual(errors,[]);
+  // The screenshot's actual case needs only preserve-original confirmation, with no selected lines.
+  const unrelated=ideas.add(name,{opId:U.uuid(),text:'原文に登場しない後発のメモ'},{human:true});await page.evaluate(name=>HubIdeas.open(name,'main'),name);const next=page.locator(`.idea-item[data-item="${unrelated.id}"]`);await next.locator('summary').click();await next.locator('[data-idea-action=delete]').click();await next.locator('[data-idea-action=delete-review]').click();await next.locator('[data-markdown-confirm]').check();const rawBefore=fs.readFileSync(s.md),countBefore=posts.length;await page.route('**/api/ideas/delete',async route=>{await route.fetch();await route.abort();});await next.locator('[data-idea-action=delete-confirm]').click();await page.waitForSelector('[data-idea-status].error');await page.reload();await page.evaluate(name=>HubIdeas.open(name,'main'),name);await page.waitForFunction(id=>!document.querySelector(`[data-item="${id}"]`),unrelated.id);assert.equal(posts.length,countBefore+1);assert.deepEqual(fs.readFileSync(s.md),rawBefore);assert.ok(ideas.read(name).items[kept.id]);await context.close();
+ }}finally{await browser.close();}
+});
+test('divergent import review Chrome: every original requires its own selected lines in detail and list', {skip:!chromium||!chrome}, async()=>{
+ const browser=await chromium.launch({executablePath:chrome,headless:true});
+ try{for(const width of [1280,390]){
+  const name='ImportReview-'+width,{dir}=project(name);fs.writeFileSync(path.join(dir,'アイデア帳.md'),'# 未着手\r\nKEEP-UNKNOWN-ORIGINAL\r\n- IMPORT-UI-VICTIM\r\nKEEP-IMPORT-TAIL');ideas.initialize(name,U.uuid(),{importLegacy:true});
+  const victim=Object.values(ideas.read(name).items).find(i=>i.text==='IMPORT-UI-VICTIM'),s=ideas.resolve(name),importFile=path.join(s.controlDir,'imports',victim.source.hash+'.md');fs.writeFileSync(s.md,'# 現行の原文\r\n- IMPORT-UI-VICTIM\r\nKEEP-IMPORT-TAIL\r\nLIVE-ONLY');
+  const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),posts=[],errors=[];page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/ideas/delete')posts.push(r.postDataJSON());});
+  await page.goto(base);await page.evaluate(name=>HubIdeas.open(name,'main'),name);const row=page.locator(`[data-item="${victim.id}"]`).filter({has:page.locator('[data-idea-action=delete]')});if(width===390)await page.click('[data-idea-action=list-edit]');else await row.locator('summary').click();
+  await row.locator('[data-idea-action=delete]').click();await row.locator('[data-idea-action=delete-review]').click();const review=ideas.eraseAvailability(name,victim.id).markdownReview;assert.equal(review.documents.length,2);assert.equal(await row.locator('.idea-markdown-review fieldset').count(),2);
+  const ack=row.locator('[data-markdown-confirm]'),button=row.locator('[data-idea-action=delete-confirm]');
+  for(let n=0;n<review.documents.length;n++){const doc=review.documents[n];for(const line of doc.targetLines)await row.locator(`[data-markdown-hash="${doc.hash}"][data-markdown-line="${line}"]`).check();await ack.check();assert.equal(await button.isDisabled(),n!==review.documents.length-1);}
+  assert.equal(await page.locator('.ideas-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),true);await button.click();await row.waitFor({state:'detached'});
+  assert.equal(posts.length,1);assert.equal(posts[0].markdownReview.documents.length,2);assert.equal(fs.readFileSync(s.md,'utf8'),'# 現行の原文\r\nKEEP-IMPORT-TAIL\r\nLIVE-ONLY');assert.equal(fs.readFileSync(importFile,'utf8'),'# 未着手\r\nKEEP-UNKNOWN-ORIGINAL\r\n\r\nKEEP-IMPORT-TAIL');assert.deepEqual(ideas.read(name).imports[victim.source.hash].unknown,[{line:2,text:'KEEP-UNKNOWN-ORIGINAL'},{line:4,text:'KEEP-IMPORT-TAIL'}]);assert.deepEqual(errors,[]);await context.close();
+ }}finally{await browser.close();}
+});
 test('free redesign Chrome: 4条件・7状態・保存/許可/失敗/下書き/Tab/絞込/画像', { skip: !chromium || !fs.existsSync(chrome) }, async () => {
  const browser = await chromium.launch({ executablePath: chrome, headless: true }), artifacts = process.env.HUB_IDEA_TEST_ARTIFACTS||path.resolve(__dirname, '../../.ai/work/idea-redesign'); fs.mkdirSync(artifacts, { recursive: true }); const report = [];
  try { for (const theme of ['dark', 'light']) for (const width of [1280, 390]) {
@@ -100,10 +207,12 @@ test('free redesign Chrome: 4条件・7状態・保存/許可/失敗/下書き/T
   const open = async () => { await page.evaluate(([p,t]) => { document.documentElement.dataset.theme = t; return window.HubIdeas.open(p, 'main'); }, [name, theme]); await page.waitForFunction(() => document.querySelector('[data-idea-status]').textContent !== '読み込み中'); };
   const shot = async state => { await page.locator('#idea-text').scrollIntoViewIfNeeded(); assert.ok(await page.locator('.ideas-dialog').evaluate(el => el.scrollWidth <= el.clientWidth), state + ' overflow'); await page.screenshot({ path: path.join(artifacts, `${theme}-${width}-${state}.png`) }); };
   await page.goto(base); await open(); assert.equal(await page.locator('#idea-settings').isVisible(), Boolean(runtime.ideaLane)); if(!runtime.ideaLane){assert.equal(await page.evaluate(()=>typeof window.HubIdeaAutomation),'undefined');assert.equal(await page.locator('[data-idea-action=auto],[data-idea-lane],[data-idea-runtime],[data-idea-action=prepare]').count(),0);} assert.equal(await page.locator('[data-idea-add]').innerText(), '保存'); await shot('empty-unconfigured');
-  // Logical keyboard order starts in the composer, then visits header settings.
+  // Follow DOM/visual order: microphone sits beside Save, before header settings.
   await page.locator('#idea-text').focus(); const tab = [];
-  for (let n = 0; n < 7; n++) { tab.push(await page.evaluate(() => { const e = document.activeElement; return e.id || e.getAttribute('aria-label') || e.getAttribute('data-idea-action') || e.textContent.trim(); })); await page.keyboard.press('Tab'); }
-  assert.deepEqual(tab.slice(0, 5), ['idea-text', '📎 画像', '種類', '扱い', '保存']); if(runtime.ideaLane){assert.equal(tab[5], '台帳の設定');assert.equal(await page.locator('[data-idea-settings]').count(),1);assert.match(await page.locator('#idea-settings').innerText(),/1[\s\S]*実行先[\s\S]*2[\s\S]*自動で作る[\s\S]*3[\s\S]*本体へ反映/);} for (let n=0;n<7;n++) await page.keyboard.press('Shift+Tab'); assert.equal(await page.evaluate(()=>document.activeElement.id), 'idea-text');
+  const voiceEnabled = await page.locator('.ideas-dialog .voice-button').isEnabled(), steps = 7 + Number(voiceEnabled);
+  for (let n = 0; n < steps; n++) { tab.push(await page.evaluate(() => { const e = document.activeElement; return e.id || e.getAttribute('aria-label') || e.getAttribute('data-idea-action') || e.textContent.trim(); })); await page.keyboard.press('Tab'); }
+  const composerOrder = ['idea-text', '📎 画像', '種類', '扱い', '保存', ...(voiceEnabled ? ['日本語で音声入力を始める'] : [])];
+  assert.deepEqual(tab.slice(0, composerOrder.length), composerOrder); if(runtime.ideaLane){assert.equal(tab[composerOrder.length], '台帳の設定');assert.equal(await page.locator('[data-idea-settings]').count(),1);assert.match(await page.locator('#idea-settings').innerText(),/1[\s\S]*実行先[\s\S]*2[\s\S]*自動で作る[\s\S]*3[\s\S]*本体へ反映/);} for (let n=0;n<steps;n++) await page.keyboard.press('Shift+Tab'); assert.equal(await page.evaluate(()=>document.activeElement.id), 'idea-text');
   await page.fill('#idea-text', '操作を分かりやすくする'); await page.selectOption('[data-idea-category]', 'improve'); await page.selectOption('[data-idea-intent]', 'build'); if(runtime.ideaLane)assert.match(await page.locator('[data-idea-intent-hint]').innerText(), /実行先/);
   await page.reload(); await open(); assert.equal(await page.inputValue('[data-idea-category]'), 'improve'); assert.equal(await page.inputValue('[data-idea-intent]'), 'build');
   await page.route('**/api/ideas/add', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ saved: false, message: '表示確認：保存先に書き込めません' }) }));

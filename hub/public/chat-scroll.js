@@ -2,6 +2,10 @@
 (() => {
   const instances = new WeakMap();
   window.HubChatScroll = {
+    change(box, update) {
+      const api = instances.get(box);
+      if (api) api.change(update); else update();
+    },
     capture(box, key) {
       return box && box.dataset.scrollKey === key ? (instances.get(box)?.capture() || { top: box.scrollTop, follow: box.scrollHeight - box.scrollTop - box.clientHeight < 80 }) : null;
     },
@@ -15,6 +19,13 @@
       const anchor = () => {
         const top = box.getBoundingClientRect?.().top;
         if (top === undefined) return null;
+        // Chat rows are ordered blocks. While the same row still crosses the
+        // viewport top, it remains the first visible row after appends/reflow.
+        const current = position?.anchor?.node;
+        if (current?.parentElement === box) {
+          const rect = current.getBoundingClientRect();
+          if (rect.top <= top && rect.bottom > top && rect.height) return { node: current, offset: rect.top - top, height: rect.height };
+        }
         for (const node of box.children) {
           const rect = node.getBoundingClientRect();
           if (rect.bottom > top && rect.height) return { node, offset: rect.top - top, height: rect.height };
@@ -66,6 +77,14 @@
       observer?.observe(box);
       if (!observer) window.addEventListener?.('resize',resize);
       const api = { capture, restore, rows(position) { restore(first ? (saved || {follow:true}) : position); first = false; },
+        // An explicit disclosure action keeps its button in view and pauses
+        // bottom following. Subsequent appends preserve this reading position.
+        change(update) {
+          const top = box.scrollTop;
+          update();
+          box.scrollTop = top;
+          remember(false);
+        },
         dispose() {
           if (disposed) return;
           disposed = true; observer?.disconnect();

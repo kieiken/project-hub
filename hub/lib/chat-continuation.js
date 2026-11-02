@@ -72,7 +72,7 @@ function resolve(pdir,task,{id,expectedUpdated,evidence}){
 }
 function prompt(pdir,task,port=4545){try{
  const items=Object.values(read(pdir,task).entries).filter(x=>['open','waiting','resuming'].includes(x.status));
- return items.length?`未完の依頼の記録：${file(pdir,task)}（${items.length}件）。「未完の作業は？」と聞かれたらこの記録の原文・途中成果・会話参照を読み、完了済みや取消済みを重ねて依頼しない。再開は人の指示後だけ。完了を確認した時だけ http://127.0.0.1:${port}/api/chat/unfinished/resolve に X-Hub:1 / Content-Type:application/json で {project,task,id,expectedUpdated:記録のupdated,evidence:確認した成果の参照と理由} をPOSTする。記録を直接編集せず、未確認のまま完了扱いにしない。`:'';
+ return items.length?`未完の依頼の記録：${file(pdir,task)}（${items.length}件）。「未完の作業は？」と聞かれたらこの記録の原文・途中成果・会話参照を読み、完了済みや取消済みを重ねて依頼しない。再開は人の指示後だけ。完了を確認した時だけ http://127.0.0.1:${port}/api/chat/unfinished/resolve に X-Hub:1（ローカル認証は curl -H @"$HUB_HEADERS" を使用。秘密を本文に書かない） / Content-Type:application/json で {project,task,id,expectedUpdated:記録のupdated,evidence:確認した成果の参照と理由} をPOSTする。記録を直接編集せず、未確認のまま完了扱いにしない。`:'';
  }catch{return `未完の依頼の記録を読めません：${file(pdir,task)}。確認せず再送・自動開始しない。`;}}
 
 // Kept apart from process termination: no signal, ownership or stop generation is changed here.
@@ -145,7 +145,12 @@ const methods={
    if(a.mode!=='fifo'&&!a.stopVerified)verifyStopped(a);
    if(!proven(a.source)&&!a.liveFinished)throw Error('前のAIの終了・保存を確認できません。待ち指示は保留しています');
    if(automatic){this.stopControl?.assert(b,a.source.stopTicket);if(this.stopControl?.held(b))throw Error('停止後の指示は保留しています');if(this.stops.has(this.key(b.project,b.task))&&this.stops.get(this.key(b.project,b.task))!==a.source.stopVersion)throw Error('停止後の指示は保留しています');}
-   this.assertHandoffReady(b.project,b.task);this.startBarrier?.(b);
+   await this.assertHandoffReadyAsync(b.project,b.task);
+   const latest=read(b.pdir,b.task).advances[a.source.turn];
+   if(!latest||!['waiting','blocked'].includes(latest.phase))throw Error('この切替は既に受け付けています');
+   if(!proven(a.source)&&!a.liveFinished)throw Error('前のAIの終了・保存を確認できません。待ち指示は保留しています');
+   if(automatic){this.stopControl?.assert(b,a.source.stopTicket);if(this.stopControl?.held(b)||this.stops.has(this.key(b.project,b.task))&&this.stops.get(this.key(b.project,b.task))!==a.source.stopVersion)throw Error('停止後の指示は保留しています');}
+   this.startBarrier?.(b);
    if(this.busy(b.project,b.task))throw Error('別の指示の開始・終了を確認中です');
    let q=this.queue(b.project,b.task);
    // A durable user row is evidence of a start attempt, including an unknown or failed outcome.

@@ -2,7 +2,7 @@
 // Formal HTTP, persisted queue and cold server; fixture executables only.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),Module=require('node:module');
 const file=require.resolve('./integration-organizer-start.test'),source=fs.readFileSync(file,'utf8'),m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));
-m._compile(source.slice(0,source.indexOf("for(const state of ['完了'"))+`\nmodule.exports={post,g,chat,tick,root,tmp,runtime:()=>runtime,cold:async()=>{assert.equal(runtime.chats.running.size,0);runtime.stopControl.cleanExit();runtime.server.closeAllConnections();await new Promise(r=>runtime.server.close(r));delete require.cache[require.resolve('../server')];runtime=require('../server');await new Promise(r=>runtime.server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));}};`,file);
+m._compile(source.slice(0,source.indexOf("for(const state of ['完了'"))+`\nmodule.exports={post,g,chat,tick,root,tmp,runtime:()=>runtime,cold:async()=>{assert.equal(runtime.chats.running.size,0);runtime.stopControl.cleanExit();runtime.server.closeAllConnections();await new Promise(r=>runtime.server.close(r));delete require.cache[require.resolve('../server')];runtime=require('../server');await new Promise(r=>runtime.server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));await require('../server').restoreReady;}};`,file);
 const h=m.exports,rt=()=>h.runtime(),git=require('../lib/git'),sibling=require('../lib/integration-sibling');
 const wait=async fn=>{for(let n=0;n<400;n++){if(fn())return;await new Promise(r=>setTimeout(r,25));}throw Error('fixture timeout');};
 let serial=0;

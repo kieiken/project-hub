@@ -3,9 +3,14 @@ const launch = require('./launch');
 // 設定画面のmain/backupを実際の起動へ結ぶ。設定自体は書き換えない。
 function limitIdentity(data, o) {
   const matches = slot => slot && launch.AI_KEY[o.ai] === slot.ai && launch.flagFor(o.ai, slot.model) === launch.flagFor(o.ai, o.model);
-  const row = (data.roles || []).find(r => (!o.role || r.name === o.role) && (matches(r.main) || matches(r.backup)));
+  const row = (data.roles || []).find(r => o.role ? r.name === o.role : matches(r.main) || matches(r.backup));
   if (!row) return null;
-  return { role: row.name, limitSlot: matches(row.main) ? 'main' : 'backup' };
+  if (matches(row.main)) return { role: row.name, limitSlot: 'main' };
+  if (matches(row.backup)) return { role: row.name, limitSlot: 'backup' };
+  // 手動の別モデルも、その作業の保存済みbackupへ。別の役割を推測せず、
+  // 起動時の欄を保持するだけで既定mainや手動選択そのものは書き換えない。
+  return o.role && launch.AIS.includes(o.ai) && launch.flagFor(o.ai, o.model)
+    ? { role: row.name, limitSlot: 'main' } : null;
 }
 // Classification only: guard an already requested handoff; no target selection or execution.
 function capacityModel(model) {

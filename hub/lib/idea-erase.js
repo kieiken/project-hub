@@ -77,7 +77,8 @@ function availability(ideas,project,id) {
   try {
     U.opId(id);const s=ideas.resolve(project),d=ideas.read(project);U.check(s,'item','項目が見つかりません',404);
     const {entries,c,ledgers}=preflight(ideas,project,s,d,id),receipt={opId:U.uuid(),bodyHash:U.hash({preview:id}),at:new Date(ideas.clock()).toISOString(),result:{id,deleted:true,imageIds:c.imageIds}};
-    plannedOutputs(entries,c,ledgers,receipt);return {id,allowed:true};
+    const review=markdownReview(entries,c,ledgers,receipt,d);
+    return review.documents.length?{id,allowed:false,code:'erase-markdown',message:'未照合の原文を確認すると削除できます',markdownReview:review}:{id,allowed:true};
   }
   catch(e){return {id,allowed:false,code:e.code||'storage',message:e.message};}
 }
@@ -255,7 +256,7 @@ function context(entries,d,id) {
   c.preservedMarkdown=[...new Set(c.preservedMarkdown)];
   return {c,ledgers};
 }
-function sanitizedLedger(input,c,receipt) {
+function sanitizedLedger(input,c,receipt,reviewedProjection) {
   const d=U.clone(input);order.normalize(d);
   const already=d.erased?.[c.id]?.opId===receipt.opId;
   const changed=Boolean(d.items[c.id]);delete d.items[c.id];d.itemOrder=d.itemOrder.filter(id=>id!==c.id);if(changed)d.orderRev++;
@@ -281,13 +282,18 @@ function sanitizedLedger(input,c,receipt) {
   for(const r of Object.values(d.receipts))if(r.opId!==receipt.opId&&references(r.result,affected))r.result={removed:true,id:c.id};
   if(c.runIds.includes(d.observed?.runId))d.observed={state:'idle'};
   for(const h of Object.keys(c.imports))if(d.imports?.[h])d.imports[h].redacted=true;
+  for(const [hash,lines] of Object.entries(c.importResolutions||{}))if(d.imports?.[hash]){d.imports[hash].redacted=true;d.imports[hash].unknown=(d.imports[hash].unknown||[]).filter(row=>!lines.includes(row.line));}
+  // Complete journals prepared before import decisions had their own binding.
+  if(!c.importResolutions)for(const r of c.markdownResolutions||[])if(d.imports?.[r.before]){d.imports[r.before].redacted=true;d.imports[r.before].unknown=(d.imports[r.before].unknown||[]).filter(row=>!r.removeLines.includes(row.line));}
   d.erased||={};d.erased[c.id]={opId:receipt.opId,imageIds:c.imageIds,runIds:c.runIds,...(c.cancelledRuns?{cancelledRuns:c.cancelledRuns}:{})};
   if(!d.receipts[receipt.opId]) {d.rev++; d.receipts[receipt.opId]={...receipt,ledgerRev:d.rev,result:{...receipt.result,rev:d.rev}};}
-  if(c.preservedMarkdown?.includes(d.projection?.existingHash)&&!d.projection.hash)d.projection={...d.projection,preservedOrigin:{hash:d.projection.existingHash,rev:1}};
+  const reviewed=c.markdownResolutions?.find(r=>r.before===reviewedProjection);
+  if(reviewed)d.projection={preserved:true,existingHash:reviewed.after};
+  else if(c.preservedMarkdown?.includes(d.projection?.existingHash)&&!d.projection.hash)d.projection={...d.projection,preservedOrigin:{hash:d.projection.existingHash,rev:1}};
   else d.projection={hash:U.hash(projection.render(d)),rev:d.rev};
   require('./ideas').validate(d);return d;
 }
-function outputs(entries,c,ledgers,receipt) {
+function outputs(entries,c,ledgers,receipt,unmatched) {
   const result=new Map(),rendered=new Map();
   for(const l of ledgers)if(l.projection?.hash) {
     const bytes=Buffer.from(projection.render(sanitizedLedger(l,c,receipt)));
@@ -299,7 +305,7 @@ function outputs(entries,c,ledgers,receipt) {
     if(e.kind.startsWith('wrapped-')){const out=transform({...e,kind:e.kind.slice(8)},unwrap(e,bytes));return out===null?null:Buffer.from(U.bytes({base64:out.toString('base64')}));}
     const rel=e.relative||'',name=path.basename(e.archiveOf||e.file);
     if(e.kind==='temporary')return null;
-    if(e.kind==='ledger')return Buffer.from(U.bytes(sanitizedLedger(json(bytes),c,receipt)));
+    if(e.kind==='ledger')return Buffer.from(U.bytes(sanitizedLedger(json(bytes),c,receipt,e.reviewedProjection)));
     if(e.kind==='image')return c.imageFiles.includes(name)?null:bytes;
     if(e.kind==='staging')return c.imageIds.some(id=>rel.includes('/'+id+'/'))?null:bytes;
     if(e.kind==='blob')return c.blobFiles.some(f=>path.basename(f)===name)?null:bytes;
@@ -307,14 +313,22 @@ function outputs(entries,c,ledgers,receipt) {
     if(e.kind==='review')return c.reviewIds.some(id=>rel.startsWith('reviews/'+id+'/'))?null:bytes;
     if(e.kind==='verification')return c.evidenceIds.some(id=>rel.startsWith('verification/'+id+'/'))?null:bytes;
     if(e.kind==='import') {
+      if(e.reviewedImport){const r=e.reviewedImport,hash=U.hash(bytes);if(hash===r.after)return bytes;U.check(hash===r.before,'erase-recovery','確認した取り込み控えが変わっています',503);const out=blankLines(bytes,r.removeLines);U.check(U.hash(out)===r.after,'erase-recovery','確認した取り込み控えを再構成できません',503);return out;}
+      // Legacy in-flight journals still reconstruct their original output.
+      const reviewed=c.markdownResolutions?.find(r=>r.before===e.reviewedMarkdown);
+      if(reviewed)return U.hash(bytes)===reviewed.after?bytes:removeLines(bytes,reviewed.removeLines);
       const lines=c.imports[name.replace(/\.md$/,'')];if(!lines)return bytes;
       return Buffer.from(bytes.toString().split('\n').map((line,i)=>lines.includes(i+1)?'':line).join('\n'));
     }
     if(e.kind==='markdown') {
+      const hash=U.hash(bytes),reviewed=c.markdownResolutions?.find(r=>r.before===e.reviewedMarkdown);
+      if(reviewed){if(hash===reviewed.after)return bytes;const out=removeLines(bytes,reviewed.removeLines);U.check(U.hash(out)===reviewed.after,'erase-recovery','確認した原文を再構成できません',503);return out;}
       const known=rendered.get(U.hash(bytes));if(known)return known;
       // A legacy import may be the still-preserved original projection.
       const lines=c.imports[U.hash(bytes)];if(lines)return Buffer.from(bytes.toString().split('\n').map((line,i)=>lines.includes(i+1)?'':line).join('\n'));
       if(c.preservedMarkdown?.includes(U.hash(bytes)))return bytes;
+      if(!bytes.length)return bytes;
+      if(unmatched&&bytes.length){unmatched.set(hash,bytes);return bytes;}
       U.check(!Object.keys(c.projections).length && !Object.keys(c.imports).length,'erase-markdown','手で変更されたアイデア帳の境界を確認してから削除してください',409);
       U.check(bytes.length===0,'erase-markdown','未照合のアイデア帳があるため削除できません',409);return bytes;
     }
@@ -333,9 +347,79 @@ function outputs(entries,c,ledgers,receipt) {
   }
   return result;
 }
-function plannedOutputs(entries,c,ledgers,receipt) {
+function plannedOutputs(entries,c,ledgers,receipt,unmatched) {
   for(const l of ledgers)if(l.projection?.hash)c.projections[l.projection.hash]=U.hash(projection.render(sanitizedLedger(l,c,receipt)));
-  return outputs(entries,c,ledgers,receipt);
+  return outputs(entries,c,ledgers,receipt,unmatched);
+}
+// Split with the original LF/CRLF bytes attached. Unselected lines are never
+// normalized, searched/replaced, or regenerated from the structured ledger.
+function rawLines(bytes){return bytes.toString('utf8').match(/[^\n]*\n|[^\n]+$/g)||[];}
+function removeLines(bytes,lines){const removed=new Set(lines);return Buffer.from(rawLines(bytes).filter((_,n)=>!removed.has(n+1)).join(''));}
+// Legacy source.line and imports.unknown address the original line numbers.
+// Keep those slots (and their original line endings) in import retention copies.
+function blankLines(bytes,lines){const removed=new Set(lines);return Buffer.from(rawLines(bytes).map((line,n)=>removed.has(n+1)?line.match(/\r?\n$/)?.[0]||'':line).join(''));}
+function markdownReview(entries,c,ledgers,receipt,d) {
+  const unmatched=new Map();plannedOutputs(entries,c,ledgers,receipt,unmatched);
+  // Hand edits can separate the live original from its import retention copy.
+  // A manual review must cover both; a live document's selection cannot safely
+  // be applied to a different copy using its shifted or stale line numbers.
+  if(unmatched.size)for(const e of entries.filter(e=>e.kind.replace(/^wrapped-/,'')==='import')){const raw=checked(e.file);if(raw===null)continue;const bytes=unwrap(e,raw);if(bytes.length)unmatched.set(U.hash(bytes),bytes);}
+  const target=[],kept=[];
+  function collect(item,out){if(!item)return;out.push(...[item.id,...item.text.split(/\r?\n/).map(x=>x.trim())].filter(Boolean));for(const im of item.images||[])out.push(...[im.id,im.hash,im.name].filter(Boolean));for(const h of item.revisionHistory||[])collect(h.previous,out);}
+  for(const l of ledgers)for(const item of Object.values(l.items))collect(item,item.id===c.id?target:kept);
+  const documents=[...unmatched].map(([hash,bytes])=>{
+    U.check(Buffer.from(bytes.toString('utf8')).equals(bytes),'erase-markdown-encoding','原文の文字コードを照合できません。原文は保持しています',409);
+    const lines=rawLines(bytes).map(x=>x.replace(/\r?\n$/,'')),protectedLines=[],targetLines=[];
+    lines.forEach((line,n)=>{
+      const hasKept=kept.some(t=>line.includes(t)),hasTarget=target.some(t=>line.includes(t));
+      // A whole-line decision cannot erase the target while preserving another
+      // item's original on that same line. Refuse before issuing a review token
+      // or writing an intent, including when only a retained copy is mixed.
+      U.check(!(hasKept&&hasTarget),'erase-markdown-mixed','削除対象と他の項目の原文が同じ行にあり、安全に分けられないため削除できません。原文は保持しています',409);
+      if(hasKept)protectedLines.push(n+1);else if(hasTarget)targetLines.push(n+1);
+    });
+    return {hash,lines,protectedLines,targetLines,canRemoveAll:ledgers.some(l=>l.items[c.id]?.text.trim()===bytes.toString('utf8').trim())};
+  }).sort((a,b)=>a.hash.localeCompare(b.hash));
+  // Seal the complete inventory, not just the visible document. New archives,
+  // other-item edits and relocation all require a fresh human confirmation.
+  const token=U.hash({id:c.id,rev:d.rev,files:entries.map(e=>{const bytes=checked(e.file);return [e.file,e.kind,bytes===null?null:U.hash(bytes)];}).sort((a,b)=>a[0].localeCompare(b[0]))});
+  return {token,documents};
+}
+function resolveMarkdown(entries,c,ledgers,receipt,d,s,confirmation) {
+  const review=markdownReview(entries,c,ledgers,receipt,d);
+  if(!review.documents.length){U.check(!confirmation,'erase-markdown-changed','保存内容が変わりました。原文を確認し直してください',409);return;}
+  U.check(confirmation?.confirmed===true&&confirmation.token===review.token&&Array.isArray(confirmation.documents),'erase-markdown','未照合の原文を画面で確認してから削除してください',409);
+  U.check(confirmation.documents.length===review.documents.length&&new Set(confirmation.documents.map(r=>r.hash)).size===review.documents.length,'erase-markdown-review','すべての原文を確認してください',409);
+  const current=checked(s.md),currentMarkdownHash=current===null?null:U.hash(current);
+  c.markdownResolutions=review.documents.map(doc=>{
+    const selected=confirmation.documents.find(r=>r.hash===doc.hash)?.removeLines;
+    U.check(Array.isArray(selected)&&new Set(selected).size===selected.length&&selected.every(n=>Number.isSafeInteger(n)&&n>0&&n<=doc.lines.length&&!doc.protectedLines.includes(n)),'erase-markdown-review','他の項目の原文は削除できません。選んだ行を確認してください',409);
+    U.check(doc.targetLines.every(n=>selected.includes(n)),'erase-markdown-review','削除対象の記載が残っています。該当する行を確認してください',409);
+    const entry=entries.find(e=>['markdown','import'].includes(e.kind.replace(/^wrapped-/,''))&&checked(e.file)!==null&&U.hash(unwrap(e,checked(e.file)))===doc.hash),bytes=unwrap(entry,checked(entry.file)),out=removeLines(bytes,selected);
+    // An arbitrary unknown document may never be erased wholesale. Only a
+    // document that is exactly one known target body can be wholly removed.
+    U.check(!selected.length||out.toString('utf8').trim()||doc.canRemoveAll,'erase-markdown-review','対象不明の原文全体は削除できません。対象以外の行を残してください',409);
+    return {before:doc.hash,after:U.hash(out),removeLines:[...selected].sort((a,b)=>a-b)};
+  });
+  // Bind each file to its original decision. One document's resulting bytes
+  // can equal another document's input; content hash alone is then ambiguous.
+  c.importResolutions={};
+  for(const e of entries){
+    const kind=e.kind.replace(/^wrapped-/,''),raw=checked(e.file);if(raw===null)continue;
+    if(['markdown','import'].includes(kind)){
+      const bytes=unwrap(e,raw),hash=U.hash(bytes),r=c.markdownResolutions.find(r=>r.before===hash);
+      if(r&&kind==='markdown')e.reviewedMarkdown=hash;
+      if(r&&kind==='import'){
+        e.reviewedImport={before:hash,after:U.hash(blankLines(bytes,r.removeLines)),removeLines:r.removeLines};
+        const key=path.basename(e.archiveOf||e.file).replace(/\.md$/,'');
+        c.importResolutions[key]=[...new Set([...(c.importResolutions[key]||[]),...r.removeLines])];
+      }
+    }
+    if(kind==='ledger'){
+      const l=json(unwrap(e,raw)),hash=e.file===s.file?currentMarkdownHash:l.projection?.existingHash||l.projection?.hash;
+      if(c.markdownResolutions.some(r=>r.before===hash))e.reviewedProjection=hash;
+    }
+  }
 }
 const prefix=(partial,bytes)=>partial.length<=bytes.length&&bytes.subarray(0,partial.length).equals(partial);
 function execute(ideas,s,intent) {
@@ -439,6 +523,7 @@ function erase(ideas,project,b) {
   if(prior){U.check(prior.bodyHash===bodyHash,'op-conflict','同じ送信識別の内容が変わっています');return {saved:true,receipt:prior,...prior.result};}
   const item=d.items[b.id];U.check(item,'item','項目が見つかりません',404);U.check(item.contentRev===b.baseContentRev&&item.controlRev===b.baseControlRev,'item-revision','項目が更新されました。表示を読み直してください');
   const {entries,c,ledgers}=preflight(ideas,project,s,d,b.id),receipt={opId:b.opId,bodyHash,at:new Date(ideas.clock()).toISOString(),result:{id:b.id,deleted:true,imageIds:c.imageIds}};
+  resolveMarkdown(entries,c,ledgers,receipt,d,s,b.markdownReview);
   const out=plannedOutputs(entries,c,ledgers,receipt);
   const files=entries.map(e=>{const bytes=checked(e.file);return {...e,before:bytes===null?null:U.hash(bytes),after:out.get(e.file)===null?null:U.hash(out.get(e.file))};});
   const intent={schema:1,projectUid:s.projectUid,opId:b.opId,context:c,receipt,external:files.filter(e=>!U.inside(ideas.control,e.file)).map(e=>e.file),files};

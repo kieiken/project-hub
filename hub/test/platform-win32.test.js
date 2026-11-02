@@ -285,13 +285,16 @@ test('declared Windows supervisor set loads in isolation with no live Hub depend
 
 test('startup browser readiness binds the HTTP server to its own child PID and runtime directory', async () => {
   const { serverReady } = require('../start-windows'); let calls = [];
-  const probe = body => async url => { calls.push(url); return { ok: true, json: async () => body }; };
-  assert.equal(await serverReady('http://localhost:1234', 42, __dirname, probe({ pid: 43, runtimePath: __dirname })), false);
+  const owner = { pid: 42, token: 'a'.repeat(64) }, verify = async port => { assert.equal(port, 1234); return owner; };
+  const probe = body => async (url, options) => { calls.push(url); assert.equal(options.headers['X-Hub-Token'], require('../lib/local-auth').capability(owner.token)); return { ok: true, json: async () => body }; };
+  assert.equal(await serverReady('http://localhost:1234', 42, __dirname, probe({ pid: 43, runtimePath: __dirname }), verify), false);
   assert.equal(calls.length, 1); calls = [];
-  assert.equal(await serverReady('http://localhost:1234', 42, __dirname, probe({ pid: 42, runtimePath: '/unrelated' })), false);
+  assert.equal(await serverReady('http://localhost:1234', 42, __dirname, probe({ pid: 42, runtimePath: '/unrelated' }), verify), false);
   assert.equal(calls.length, 1); calls = [];
-  assert.equal(await serverReady('http://localhost:1234', 42, __dirname, probe({ pid: 42, runtimePath: __dirname })), true);
+  assert.equal(await serverReady('http://localhost:1234', 42, __dirname, probe({ pid: 42, runtimePath: __dirname }), verify), true);
   assert.deepEqual(calls, ['http://localhost:1234/api/ping', 'http://localhost:1234/api/state']);
+  calls=[];assert.equal(await serverReady('http://localhost:1234',42,__dirname,probe({}),async()=>({...owner,pid:43})),false);assert.equal(calls.length,0);
+  await assert.rejects(serverReady('http://localhost:1234',42,__dirname,probe({}),async()=>{throw Error('unverified_hub');}),/unverified_hub/);assert.equal(calls.length,0);
 });
 
 test('console Ctrl+C waits for the attached server instead of forcibly terminating it on Windows', async () => {
@@ -302,7 +305,9 @@ test('console Ctrl+C waits for the attached server instead of forcibly terminati
   const directory = path.resolve(__dirname, '..'); let browserOpened = false;
   const platform = { shellCandidates: () => ['git-bash'], persistence: { syncDirectory() {} }, openUrl: async () => { browserOpened = true; } };
   const modules = {
-    'node:fs': { existsSync: () => true }, 'node:os': require('node:os'), 'node:path': path,
+    'node:fs': { existsSync: () => true }, 'node:os': require('node:os'), 'node:path': path, 'node:url': require('node:url'),
+    './lib/local-auth': { capability: () => 'fixture-owner-capability' },
+    './app/open-browser.cjs': { verify: async () => ({ pid:42,token:'fixture-owner' }), launch: async (port,open) => { assert.equal(port,4545); await open('/fixture-owner-launch.html'); return {cleanup(){}}; } },
     'node:child_process': { spawn(file, args, options) {
       assert.equal(file, 'node.exe'); assert.deepEqual(Array.from(args), [path.join(directory, 'server.js')]);
       assert.equal(options.stdio, 'inherit'); assert.equal(options.detached, undefined); assert.equal(options.shell, false);
@@ -376,4 +381,26 @@ test('integrated native payload combines write-through same-volume rename with p
   for(const part of ['ValidateDirectory(parent,before,false)','ValidateDirectory(sourceParent,origin,false)',
     'case "license-directory"','case "secret-get"','case "secret-put"','case "clock"','case "watch"',
     'ProtectedData.Unprotect','ProtectedData.Protect','HubWindowsLicense.MachineHint']) assert.ok(code.includes(part),part);
+});
+
+test('picker Promise distinguishes native failure from cancellation and legacy callbacks remain compatible', async () => {
+  for (const synchronous of [false, true]) {
+    const p = create({ native: { asyncCall(action, request, done) {
+      const error = Error('private native diagnostic');
+      if (synchronous) throw error;
+      done(error);
+    } } });
+    await assert.rejects(p.pickFolder('choose'), e => e.code === 'folder_picker_unavailable' && e.message === 'folder_picker_unavailable');
+    let result; p.pickFolder('choose', value => { result = value; }); assert.equal(result, '');
+  }
+  for (const value of ['', 'C:\\chosen']) {
+    const p = create({ native: { asyncCall(action, request, done) { done(null, value); } } });
+    assert.equal(await p.pickFolder('choose'), value);
+  }
+});
+test('Windows private-directory adapter passes path and create mode to the shared native helper', () => {
+  const calls = [], p = create({ native: { call(action, data) { calls.push({action,data}); return true; } } });
+  assert.equal(p.privateDirectory('C:\\private', false), true);
+  assert.equal(p.privateDirectory('C:\\private', true), true);
+  assert.deepEqual(calls, [false,true].map(create => ({action:'private-directory',data:{path:'C:\\private',create}})));
 });

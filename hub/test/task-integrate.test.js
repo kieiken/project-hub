@@ -180,14 +180,17 @@ for(const mode of ['手順全済','完了確認待ち','まだ続ける'])test('
 test('拒否理由は祖先関係・未承認中間親・承認済み親・子の手順と質問を共通に返す',t=>{
  const f=fixture(t),mid=f.child('中間',f.parent.id,false),leaf=f.child('下',mid.id,false),stranger=f.store.createTask('Fixture',{title:'別作業'});
  const only=task=>[{project:'Fixture',task,expectTitle:f.store.readTask(f.store.taskFile('Fixture',task)).title}];
+ // Supply the in-flight reservation only for context checks; a saved unfinished
+ // record would switch preview into resume mode and test a different contract.
+ const context=task=>{f.integrate.active={id:'test',project:'Fixture',task:f.parent.id,items:[]};try{return f.transfer.context('Fixture',task,{targetProject:'Fixture',targetTask:f.parent.id,integrating:'test'});}finally{delete f.integrate.active;}};
  assert.throws(()=>f.preview(only(leaf.id)),/未完の中間親「中間」/);
- assert.throws(()=>f.transfer.context('Fixture',leaf.id,{targetProject:'Fixture',targetTask:f.parent.id,integrating:'test'}),/未完の中間親「中間」/);
+ assert.throws(()=>context(leaf.id),/未完の中間親「中間」/);
  assert.equal(f.integrate.preview('Fixture',mid.id,only(leaf.id)).items[0].task,leaf.id);
  assert.throws(()=>f.preview(only(stranger.id)),/祖先ではありません/);
  f.store.setStep('Fixture',mid.id,0,false);assert.match(f.preview(only(mid.id)).items[0].cleanupBlockers.join(' '),/手順・質問が残って/);
  f.store.setStep('Fixture',mid.id,0,true);f.store.updateTask('Fixture',mid.id,{question:'回答待ち'});
  const d=f.preview(only(mid.id));assert.ok(d.items[0].cleanupBlockers.some(x=>x.includes('手順・質問')));
- assert.throws(()=>f.transfer.context('Fixture',mid.id,{targetProject:'Fixture',targetTask:f.parent.id,integrating:'test'}),/手順・質問が残って/);
+ assert.throws(()=>context(mid.id),/手順・質問が残って/);
  f.store.decideTask('Fixture',f.parent.id,'approve',f.store.readTask(f.store.taskFile('Fixture',f.parent.id)).completionHash);
  const p=f.store.listProjects()[0];assert.deepEqual(graph.integrators(p,p.tasks.find(x=>x.id===mid.id)),[]);
  assert.throws(()=>f.preview(only(mid.id)),/親は完了済み.*本体に取り込む/);

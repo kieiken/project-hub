@@ -22,10 +22,10 @@ test('display shares each repository stamp once and refreshes HEAD and index on 
   try{
     const first=f.view.view(f.all);assert.deepEqual(first,f.rows.map(r=>({...r,receiptChecked:false})));assert.equal(heads,1);
     const initial=f.builds.at(-1).signature;
-    f.view.view(f.all);assert.equal(heads,2);assert.equal(f.builds.at(-1).signature,initial);
-    fs.writeFileSync(path.join(f.git,'HEAD'),'b'.repeat(40)+'\n');f.view.view(f.all);assert.equal(heads,3);
+    f.view.view(f.all);assert.equal(heads,1);assert.equal(f.builds.at(-1).signature,initial);
+    fs.writeFileSync(path.join(f.git,'HEAD'),'b'.repeat(40)+'\n');f.view.view(f.all);assert.equal(heads,2);
     const detached=f.builds.at(-1).signature;assert.notEqual(detached,initial);
-    fs.writeFileSync(path.join(f.git,'index'),'index changed');f.view.view(f.all);assert.equal(heads,4);assert.notEqual(f.builds.at(-1).signature,detached);
+    fs.writeFileSync(path.join(f.git,'index'),'index changed');f.view.view(f.all);assert.equal(heads,2);assert.notEqual(f.builds.at(-1).signature,detached);
   }finally{fs.readFileSync=read;}
 });
 

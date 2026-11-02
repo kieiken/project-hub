@@ -49,10 +49,12 @@ function notificationBadges(p, tasks, count = false) {
   const reply = kinds.filter(k => k === 'reply').length;
   const work = kinds.filter(k => k === 'work').length;
   const done = kinds.filter(k => k === 'done').length;
+  const results = kinds.filter(k => k === 'results').length;
   const badge = (n, kind, label, tip) => n ? UI.template`<span class="notice ${kind}" title="${tip}">${label}${count ? ' ' + n : ''}</span>` : '';
   const html = badge(unread, 'notice-unread', UI.text('未読'), UI.text('まだ開いていないAIの結果です。作業の会話を開くと消えます'))
     + badge(reply, 'notice-reply', UI.text('返事待ち'), UI.text('質問への返事・停止の対処・AIへの入力が必要です'))
-    + badge(work, 'notice-work', UI.text('作業中'), UI.text('AIや成果整理が動いている、または指示が順番待ちです'))
+    + badge(work, 'notice-work', !count && tasks.length === 1 && tasks[0].resultsPending ? resultsNotice(p, tasks[0]).label : UI.text('作業中'), UI.text('AI・成果確認・成果整理が動いている、または指示が順番待ちです'))
+    + badge(results, 'notice-results', UI.text('成果確認'), UI.text('成果の記録に確認が必要です。質問への返事待ちではありません'))
     + badge(done, 'notice-confirm', UI.text('完了'), UI.text('完了に移すか、まだ続けるかを選んでください'));
   return html ? UI.template`<span class="notifications">${html}</span>` : '';
 }
@@ -104,6 +106,8 @@ function taskLight(p, t, isLive) {
   const kind = notificationKind(p, t);
   if (kind === 'reply' && t.chatQueueHeld) return { cls: 'wait', tip: WORKING(p,t) ? UI.text('AIや成果整理は作業中です。停止前の指示は保留中です') : UI.text('停止前の指示は保留中です。自動では始まりません') };
   if (kind === 'reply') return { cls: 'wait', tip: UI.text('返事待ち：質問への返事や停止の対処が必要です') };
+  if (kind === 'results') return { cls: 'wait', tip: UI.text('成果確認：成果の記録を確認してください。質問への返事は不要です') };
+  if (kind === 'work' && t.resultsPending) return { cls: 'pl-work', tip: resultsNotice(p,t).text };
   if (kind === 'work' || isLive) return { cls: 'pl-work', tip: UI.text('AIや成果整理が動いている、または指示が順番待ちです') };
   if (kind === 'done') return { cls: 'confirm', tip: UI.text('完了：完了に移すか、まだ続けるかを選んでください') };
   if (t.state === '停止') return { cls: 'wait', tip: UI.text('停止中です') };
@@ -153,19 +157,20 @@ function freetalkTopics(p) {
   return p.tasks.map(t => UI.template`<div class="freetalk-row ${notificationKind(p, t) === 'reply' ? 'waiting' : WORKING(p, t) ? 'running' : ''} ${view.kind === 'work' && view.project === p.id && view.task === t.id ? 'sel' : ''}"><button class="freetalk-topic" data-go="work" data-p="${esc(p.id)}" data-t="${esc(t.id)}" type="button" title="${esc(t.title)}">${esc(t.title)}${(state.unread || []).some(x => x.project === p.id && x.task === t.id) ? ' ●' : ''}</button><button class="freetalk-del" data-act="freetalkdelete" data-t="${esc(t.id)}" type="button" aria-label="この話題を削除" title="この話題を削除">×</button></div>`).join('');
 }
 
-function sidebarGroup(name, label, content) {
+function sidebarGroup(name, label, content, action = '') {
   const expanded = open.has('g:' + name), id = 'sidebar-' + name;
-  return UI.template`<section class="sidebar-group"><button class="sidebar-group-toggle" id="${id}-toggle" data-toggle="g:${name}" data-sidebar-group="${name}" type="button" aria-expanded="${expanded}" aria-controls="${id}-content"><span aria-hidden="true">${expanded ? '▼' : '▶'}</span> ${label}</button><div class="sidebar-group-body" id="${id}-content" ${expanded ? '' : 'hidden'}>${content}</div></section>`;
+  return UI.template`<section class="sidebar-group"><div class="sidebar-group-header"><button class="sidebar-group-toggle" id="${id}-toggle" data-toggle="g:${name}" data-sidebar-group="${name}" type="button" aria-expanded="${expanded}" aria-controls="${id}-content"><span aria-hidden="true">${expanded ? '▼' : '▶'}</span> ${label}</button>${action}</div><div class="sidebar-group-body" id="${id}-content" ${expanded ? '' : 'hidden'}>${content}</div></section>`;
 }
 
 function freetalkFrame() {
   const p = state.projects.find(x => x.kind === 'freetalk');
-  return sidebarGroup('freetalk', 'freetalk', UI.template`<div class="freetalk-frame" aria-label="freetalk 自由対話"><button class="lnk" type="button" data-go="project" data-p="freetalk" ${p ? '' : 'disabled'}>全体を見る</button><button class="newp freetalk-new" type="button" data-act="freetalknew" ${state.freetalk?.ready ? '' : 'disabled'}>＋ 新しい話題</button>${state.freetalk?.reason ? UI.template`<p class="note" role="status">${esc(state.freetalk.reason)}</p>` : ''}${p ? freetalkTopics(p) : ''}</div>`);
+  return sidebarGroup('freetalk', 'freetalk', UI.template`<div class="freetalk-frame" aria-label="freetalk 自由対話"><button class="newp freetalk-new" type="button" data-act="freetalknew" ${state.freetalk?.ready ? '' : 'disabled'}>＋ 新しい話題</button>${state.freetalk?.reason ? UI.template`<p class="note" role="status">${esc(state.freetalk.reason)}</p>` : ''}${p ? freetalkTopics(p) : ''}</div>`, UI.template`<button class="btn plain sm freetalk-overview-link" type="button" data-go="project" data-p="freetalk" ${p ? '' : 'disabled'}>全体を見る</button>`);
 }
 
 function renderTree() {
   const roots = projectSiblings('');
-  $('#list').innerHTML = UI.template`${freetalkFrame()}${sidebarGroup('projects', UI.text('プロジェクト'), UI.template`<button class="newp ${view.kind === 'newproject' ? 'sel' : ''}" data-go="newproject" type="button">＋ 新しいプロジェクト</button><div class="tree">${roots.map(p => projectNode(p, 0)).join('')}</div>`)}`;
+  const free = freetalkFrame(), projects = sidebarGroup('projects', UI.text('プロジェクト'), UI.template`<button class="newp ${view.kind === 'newproject' ? 'sel' : ''}" data-go="newproject" type="button">＋ 新しいプロジェクト</button><div class="tree">${roots.map(p => projectNode(p, 0)).join('')}</div>`);
+  if (!window.HubConversationSearch?.treeRender(free, projects)) $('#list').innerHTML = UI.template`${free}${projects}`;
   renderedTreeKey = treeKey();
   syncFreetalkAttachmentControls();
 }
@@ -176,8 +181,10 @@ function updateTurnCounts() {
   const replies = kinds.filter(k => k === 'reply').length;
   const working = kinds.filter(k => k === 'work').length;
   const confirmations = kinds.filter(k => k === 'done').length;
+  const results = kinds.filter(k => k === 'results').length;
   $('#turn-n').textContent = UI.text('返事待ち ') + replies;
   $('#turn-work-n').textContent = UI.text('作業中 ') + working;
+  $('#turn-results-n').textContent = UI.text('成果確認 ') + results;
   $('#turn-done-n').textContent = UI.text('完了 ') + confirmations;
-  $('#turn').setAttribute('aria-label', UI.template`あなたの番：返事待ち ${replies}件、作業中 ${working}件、完了 ${confirmations}件`);
+  $('#turn').setAttribute('aria-label', UI.template`あなたの番：返事待ち ${replies}件、作業中 ${working}件、成果確認 ${results}件、完了 ${confirmations}件`);
 }

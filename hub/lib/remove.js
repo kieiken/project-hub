@@ -6,6 +6,7 @@ const fs=require('./platform/file-io'),path=require('node:path'),os=require('nod
 const {randomUUID,createHash,createHmac,randomBytes}=require('node:crypto'),{execFileSync}=require('node:child_process');
 const {expandHome}=require('./store');
 const gitw=require('./git');
+const stateRead=require('./state-read');
 const {trashRootFor,isTrashDestination}=require('./trash');
 const hash=x=>createHash('sha256').update(x).digest('hex');
 const inside=(a,b)=>b===a||b.startsWith(a+path.sep);
@@ -62,11 +63,11 @@ function containsPath(a,b,witness,leafWitness=true) {
 }
 const overlaps=(a,b,witness)=>containsPath(a,b,witness)||containsPath(b,a,witness,false);
 // A batch checks its directory once; each direct child still rejects links.
-function noLink(f) {try{if(fs.lstatSync(f).isSymbolicLink())throw Error(lt('リンクを含む場所は移せません'));}catch(e){if(e.code!=='ENOENT')throw e;}}
+function noLink(f) {try{const st=fs.lstatSync(f);if(st.isSymbolicLink())throw Object.assign(Error(lt('リンクを含む場所は移せません')),{code:'REMOVAL_MANUAL_TRASH'});return st;}catch(e){if(e.code!=='ENOENT')throw e;}}
 function noLinks(f) {for(let q=path.resolve(f);;q=path.dirname(q)){noLink(q);if(q===path.dirname(q))break;}}
 // Display reads can share ancestor checks within one synchronous state build.
 // Keep noLinks itself strict, including when a writer runs inside a read scope.
-function readNoLinks(f) {for(let q=path.resolve(f);;q=path.dirname(q)){require('./state-read').memo(noLink,q,()=>noLink(q));if(q===path.dirname(q))break;}}
+function readNoLinks(f) {for(let q=path.resolve(f);;q=path.dirname(q)){stateRead.memo(noLink,q,()=>noLink(q));if(q===path.dirname(q))break;}}
 function copyContains(base,ref,dir=process.cwd()) {
  // .. はリンク先を辿った後に処理する。不在配下もリンク先の実在親で照合する。
  // 最終先が外でも、途中でコピーを通る参照は移動すると切れるため残す。
@@ -114,7 +115,7 @@ function externalShared(base,ref,dir,witness) {
 }
 function snapshot(f,{contentOnly=false}={}) {
  noLinks(f);let n=0,bytes=0;const rows=[];
- const walk=q=>{if(++n>20000)throw Error(lt('ファイルが多すぎて照合できません'));const st=fs.lstatSync(q);if(st.isSymbolicLink()||!st.isFile()&&!st.isDirectory())throw Error(lt('リンクや特殊なファイルを含むため移せません'));bytes+=st.isFile()?st.size:0;if(bytes>256*1024*1024)throw Error(lt('照合できる大きさを超えています'));const rel=path.relative(f,q),digest=st.isFile()?hash(fs.readFileSync(q)):'';rows.push(contentOnly?[rel,st.mode,st.isFile()?st.size:0,digest]:[rel,st.ino,st.size,st.mtimeMs,digest]);if(st.isDirectory())for(const x of fs.readdirSync(q).sort())walk(path.join(q,x));};walk(f);return hash(JSON.stringify(rows));
+ const walk=q=>{if(++n>20000)throw Object.assign(Error(lt('ファイルが多すぎて照合できません')),{code:'REMOVAL_MANUAL_TRASH'});const st=fs.lstatSync(q);if(st.isSymbolicLink()||!st.isFile()&&!st.isDirectory())throw Object.assign(Error(lt('リンクや特殊なファイルを含むため移せません')),{code:'REMOVAL_MANUAL_TRASH'});bytes+=st.isFile()?st.size:0;if(bytes>256*1024*1024)throw Object.assign(Error(lt('照合できる大きさを超えています')),{code:'REMOVAL_MANUAL_TRASH'});const rel=path.relative(f,q),digest=st.isFile()?hash(fs.readFileSync(q)):'';rows.push(contentOnly?[rel,st.mode,st.isFile()?st.size:0,digest]:[rel,st.ino,st.size,st.mtimeMs,digest]);if(st.isDirectory())for(const x of fs.readdirSync(q).sort())walk(path.join(q,x));};walk(f);return hash(JSON.stringify(rows));
 }
 function referenceTexts(text,file) {
  if(!/\.(?:jsonl?|original)$/.test(file))return [text];
@@ -243,7 +244,7 @@ class Removal {
    let trash=this.trash;while(!exists(trash))trash=path.dirname(trash);noLinks(trash);
    if(fs.statSync(f).dev!==fs.statSync(trash).dev)throw Error(lt('別ディスクのため選べません。Finderで手動でゴミ箱へ移してください'));
    x.fingerprint=snapshot(f);x.selectable=true;
-  }catch(e){x.unavailableWhy=e.message;if(/多すぎ|大きさ|リンク|特殊|太多|過多|大小|連結/.test(e.message))x.unavailableWhy+=lt('。Finderで手動でゴミ箱へ移してください');}
+  }catch(e){x.unavailableWhy=e.message;if(e.code==='REMOVAL_MANUAL_TRASH')x.unavailableWhy+=lt('。Finderで手動でゴミ箱へ移してください');}
   return x;
  }
  approval(r) {

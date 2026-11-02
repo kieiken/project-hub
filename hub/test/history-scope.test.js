@@ -90,7 +90,7 @@ for(const lang of ['ja','zh-TW']){
   const {ctx,state}=startup(lang,'selecting');state.queue=[{id:'first',ai:'codex'},{id:'second',ai:'claude'}];const before=JSON.stringify(state.queue);await ctx.step('p','t');assert.equal(JSON.stringify(state.queue),before);assert.deepEqual(state.events,[]);
  });
  test(lang+' CLI operation appearing at final startup gate reserves instead of fallback/failure',async()=>{
-  const first=startup(lang);first.ctx.delegateRequest=async(o,c)=>{c.writeHead(409);c.end(JSON.stringify({error:first.lt('AI の更新・モデル再取得が進行中です')}));};
+  const first=startup(lang);first.ctx.delegateRequest=async(o,c)=>{c.writeHead(409);c.end(JSON.stringify({code:'HUB_AI_MAINTENANCE',error:first.lt('AI の更新・モデル再取得が進行中です')}));};
   await first.ctx.step('p','t');assert.equal(first.state.job.stage,'reserved');assert.equal(first.state.events.some(e=>e[0]==='finish'),false);
   const next=startup(lang,'selecting');next.state.queue=[{id:'original-request',ai:'codex',limitWaiting:true,limitSwitch:{sourceAI:'claude'}}];const before=JSON.stringify(next.state.queue);
   next.ctx.chats.sendQueued=async()=>{throw Error(next.lt('AI の更新・モデル再取得が進行中です'));};await next.ctx.step('p','t');assert.equal(next.state.job.stage,'selecting');assert.equal(next.state.job.selectionResume.state,'waiting');assert.equal(JSON.stringify(next.state.queue),before);

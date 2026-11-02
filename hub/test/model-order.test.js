@@ -122,3 +122,32 @@ test('旧手動・アプリのスマホ名は編集候補から外し、拒否�
   assert.equal(view.setPhone({key:'chatgpt|auto',name:'Chat'},catalog).error,undefined);
   assert.equal(view.phone().names['chatgpt|auto'],'Chat');assert.equal(JSON.parse(fs.readFileSync(file)).future,true);
 });
+
+
+test('Muse表示名は固定キーだけ保存・再読でき、空欄復帰と既存設定を保つ', t => {
+  const { file, view } = fixture(t), catalog = { codex: ['GPT-6.1-Sol'] }, key = 'muse|direct';
+  view.setPhone({ key: 'codex|GPT-6.1-Sol', name: 'ソル' }, catalog);
+  view.setPhone({ key: 'chatgpt|auto', name: 'チャット' }, catalog);
+  const before = view.read();
+  assert.equal(view.setPhone({ key, name: ' ミューズ <&> ' }, catalog).phoneLabels.names[key], 'ミューズ <&>');
+  assert.equal(new ModelView(file).phone().names[key], 'ミューズ <&>');
+  assert.equal(view.setPhone({ labels: 'full' }, catalog).phoneLabels.names[key], 'ミューズ <&>');
+  assert.equal(view.setPhone({ key, name: 'あ'.repeat(24) }, catalog).error, undefined);
+  const saved = fs.readFileSync(file);
+  for (const spec of [
+    { key: 'muse|other', name: 'x' }, { key: 'muse|direct|x', name: 'x' }, { key: 'Muse|direct', name: 'x' },
+    { key, name: 'あ'.repeat(25) }, { key, name: 'x\ny' }, { key, name: 'x\ry' },
+    { key, name: '\u2028' }, { key, name: '\t' }, { key, name: 3 }, { key, name: 'x', extra: true },
+  ]) {
+    assert.equal(view.setPhone(spec, catalog).status, 400);
+    assert.deepEqual(fs.readFileSync(file), saved);
+  }
+  view.setPhone({ key, name: ' ' }, catalog);
+  view.setPhone({ labels: 'short' }, catalog);
+  assert.deepEqual(new ModelView(file).read(), before);
+  // 500通常モデル＋ChatGPT＋Museの末尾も切り落とさない。
+  const names = Object.fromEntries(Array.from({length:500}, (_, i) => ['codex|model'+i, '名'+i]));
+  Object.assign(names, {'chatgpt|auto':'チャット', [key]:'Muse'});
+  fs.writeFileSync(file, JSON.stringify({phone:{labels:'short', names}}));
+  assert.deepEqual(view.phone().names, names);
+});

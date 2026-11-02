@@ -54,3 +54,11 @@ test('順番待ちの依頼IDが変わっても保存した正式依頼文で識
  assert.equal(h.status(a.id).draft,'待機からの要約');chat.append(ft.ledger,a.id,{role:'user',text:s.requestShown});chat.append(ft.ledger,a.id,{role:'assistant',text:'引用への回答'});
  assert.equal(h.status(a.id).draft,'待機からの要約');assert.equal(h.status(a.id).stale,true);
 });
+
+test('English legacy summary envelopes recover only the marker immediately below the heading',t=>{
+ const {ft,a,history:h}=fixture(t);h.save(a.id,{generation:1,summary:{id:'legacy-en',marker:'[freetalk-summary:legacy-en]',intent:'promote'}});
+ chat.append(ft.ledger,a.id,{role:'user',text:'[Delegated request: Summarize topic]\n[freetalk-summary:legacy-en]\nrequest'});
+ chat.append(ft.ledger,a.id,{role:'assistant',text:'Recovered summary'});assert.equal(h.status(a.id).draft,'Recovered summary');
+ chat.append(ft.ledger,a.id,{role:'user',text:'A quoted marker:\n[Delegated request: Summarize topic]\n[freetalk-summary:legacy-en]'});
+ assert.equal(h.status(a.id).stale,true);assert.equal(h.status(a.id).draft,'Recovered summary');
+});

@@ -9,13 +9,16 @@ function readResults(file) {
   noLinks(file);
   const rows = [], text = fs.readFileSync(file, 'utf8');
   let active = false, fenced = false, sections = 0;
-  for (const line of text.split('\n')) {
+  for (const [index, line] of text.split('\n').entries()) {
     if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; continue; }
     if (fenced) continue;
     if (/^##\s/.test(line)) { active = /^##\s+成果\s*$/.test(line); if (active) sections++; continue; }
     if (!active || !line.trim()) continue;
     const m = line.match(/^\s*[-*]\s+(ファイル|本体保存済み|なし)[：:]\s*(.+?)\s*$/);
-    if (!m) throw Error(lt('「## 成果」はファイル・本体保存済み・なしの行で書いてください'));
+    if (!m) {
+      const label=line.match(/^\s*[-*]\s+([^：:]{1,40})[：:]/)?.[1];
+      throw Object.assign(Error(lt('「## 成果」はファイル・本体保存済み・なしの行で書いてください')+'（'+(index+1)+'行目'+(label?'、未対応の種類「'+label+'」':'、行の形式が不正')+'）。例：- 本体保存済み：body:.@保存commit。専用コピーに保存した履歴も同じ種類で指定します'),{code:'TASK_RESULTS_FORMAT',line:index+1});
+    }
     const description = m[2].match(/^(.*?)\s*[（(]([^（）()]*)[）)]$/);
     const value = (description ? description[1] : m[2]).trim();
     if (!value) throw Error(lt('「## 成果」の場所・理由を空にしないでください'));

@@ -8,6 +8,7 @@ const path = require('path');
 const { createHash } = require('node:crypto');
 const { execFileSync, execFile } = require('child_process');
 
+const read = require('./git-read');
 const bookkeeping = require('./git-bookkeeping');
 
 const MAX_FILES = 20000;          // これより多いフォルダは自動で保存を始めない
@@ -27,14 +28,54 @@ function git(dir, args, {readOnly=false}={}) {
 }
 function blob(dir, ref, file) { return execFileSync('git',['-C',dir,'show',`${ref}:${file}`],{encoding:'utf8',maxBuffer:MAX_GIT_OUTPUT,stdio:['ignore','pipe','pipe']}); }
 function tryGit(dir, args) { try { return git(dir, args); } catch (e) { return null; } }
-// The display still asks Git for the current HEAD on every request. Overlap
-// this read-only process with state construction instead of blocking Node.
-// Commit identity is irrelevant to rev-parse; action paths keep savedHead.
+// Only the display may reuse a successful HEAD read. Inspect repository/ref
+// metadata on every call, with no TTL; actions continue to use savedHead.
+const displayHeads=new Map();
+function headStamp(dir,{directoryMetadata=true}={}){
+  // Respect Git's environment-driven discovery by leaving unusual overrides
+  // to Git. Do not guess a repository different from the command's target.
+  if(['GIT_DIR','GIT_COMMON_DIR','GIT_WORK_TREE','GIT_NAMESPACE','GIT_CEILING_DIRECTORIES','GIT_DISCOVERY_ACROSS_FILESYSTEM'].some(k=>process.env[k]))return null;
+  const mark=f=>{try{const st=fs.statSync(f);return [st.dev,st.ino,st.size,st.mtimeMs,st.ctimeMs,st.mode].join(':');}catch(e){if(e.code==='ENOENT')return '-';throw e;}};
+  try{
+    let base=path.resolve(dir),own;
+    for(;;){const candidate=path.join(base,'.git');if(fs.existsSync(candidate)){own=candidate;break;}const parent=path.dirname(base);if(parent===base)return null;base=parent;}
+    const directoryMark=f=>{const s=fs.statSync(f);return directoryMetadata?mark(f):[s.dev,s.ino,s.mode].join(':');};
+    const parts=[own,directoryMark(own)];
+    if(fs.statSync(own).isFile()){
+      const text=fs.readFileSync(own,'utf8'),m=text.match(/^gitdir: (.+)\s*$/);if(!m)return null;
+      own=path.resolve(base,m[1].trim());parts.push(own,directoryMark(own));
+    }
+    let common=own;const cf=path.join(own,'commondir');parts.push(mark(cf));
+    if(fs.existsSync(cf))common=path.resolve(own,fs.readFileSync(cf,'utf8').trim());
+    if(fs.existsSync(path.join(common,'reftable')))return null;
+    parts.push(common,mark(path.join(common,'config')),mark(path.join(own,'config.worktree')),mark(path.join(common,'packed-refs')));
+    let ref=path.join(own,'HEAD');const seen=new Set();
+    for(let i=0;i<16;i++){
+      if(seen.has(ref))return null;seen.add(ref);parts.push(ref,mark(ref));
+      if(!fs.existsSync(ref))return JSON.stringify(parts);
+      const text=fs.readFileSync(ref,'utf8').trim();parts.push(text);
+      if(!text.startsWith('ref: '))return JSON.stringify(parts);
+      const name=text.slice(5);if(!name.startsWith('refs/')||name.split('/').some(x=>!x||x==='.'||x==='..'))return null;
+      // Per-worktree refs live in the private Git dir, ordinary refs in common.
+      const local=/^refs\/(?:bisect|worktree|rewritten)\//.test(name);ref=path.join(local?own:common,name);
+    }
+  }catch{/* Failed discovery cannot justify reusing an old value. */}
+  return null;
+}
 function savedHeadAsync(dir) {
+  const stamp=headStamp(dir),old=displayHeads.get(dir);
+  if(stamp!==null&&old?.stamp===stamp)return Promise.resolve(old.head);
+  displayHeads.delete(dir);
   return new Promise(resolve => execFile('git', ['-C', dir, '-c', 'gc.auto=0', 'rev-parse', 'HEAD'], {
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
     encoding: 'utf8', maxBuffer: MAX_GIT_OUTPUT,
-  }, (error, stdout) => resolve(error ? null : stdout.trim())));
+  }, (error, stdout) => {
+    const head=error?null:stdout.trim();
+    // A ref changed while Git ran: serve its result, but never label it as the
+    // earlier stamp or reuse it on the next request. Failures are not cached.
+    if(head&&stamp!==null&&headStamp(dir)===stamp){if(displayHeads.size>=128)displayHeads.delete(displayHeads.keys().next().value);displayHeads.set(dir,{stamp,head});}
+    resolve(head);
+  }));
 }
 
 // git を呼ぶたびに確かめると起動回数が倍になるので、場所ごとの答えを1分覚えておく（名前を設定してから最長1分は仮の名前のまま）
@@ -67,6 +108,7 @@ function dirty(dir) { return Boolean(tryGit(dir, ['status', '--porcelain'])); }
 // ignore の無いプロジェクトでも、新しい秘密設定は自動保存に含めない。
 // すでに追跡されているファイルは変更せず、例示用の .env は許容する。
 function stageAll(dir) {
+  require('./nested-git').assertNone(dir);
   git(dir, ['add', '-A']);
   const added = git(dir, ['diff', '--cached', '--name-only', '--diff-filter=A', '--no-renames', '-z'])
     .split('\0').filter(Boolean);
@@ -209,6 +251,45 @@ function preview({ dir, workRoot, target, from, targetGuard }) {
   return { files, added: num(/(\d+) insertions?/), removed: num(/(\d+) deletions?/), conflict, conflictPaths, conflictKind, mainDirty, sourceDirty, sourceHead, targetHead:mainHead, noChanges, paths: (tryGit(wt, ['diff', '--name-only', '-z', base]) || '').split('\0').filter(Boolean) };
 }
 
+// Display previews can run many synchronous Git commands. Keep them off the
+// HTTP/event-stream loop, including a preview already started by another view.
+// Completed display results are keyed by both repositories' full live Git
+// inputs. Actions never use this cache and retain their own fresh checks.
+const previewReads = new Map(),previewResults=new Map();
+async function previewFingerprint(dirs){
+  const values=await Promise.all(dirs.map(async dir=>{
+    const before=read.stamp(dir);if(!before)return null;
+    const [head,status,diff]=await Promise.all([
+      read.command(dir,['rev-parse','HEAD']),
+      read.command(dir,['status','--porcelain=v1','-z','--untracked-files=all'],{trim:false}),
+      read.command(dir,['diff','--no-ext-diff','--no-textconv','--binary','HEAD','--'],{encoding:null})
+    ]);
+    const untracked=[];
+    for(const entry of status.split('\0'))if(entry.startsWith('?? ')){
+      const file=path.join(dir,entry.slice(3)),st=await fs.promises.lstat(file);
+      untracked.push([entry,st.mode,st.size,st.mtimeMs,st.ctimeMs,st.ino]);
+    }
+    const after=read.stamp(dir);if(JSON.stringify(before)!==JSON.stringify(after))throw Error('Git state changed');
+    return [dir,before,head,status,require('node:crypto').createHash('sha256').update(diff).digest('hex'),untracked];
+  }));
+  return values.some(v=>v===null)?null:JSON.stringify(values);
+}
+function previewAsync({dir,workRoot,root,target,from}){
+  if(![dir,workRoot].every(v=>typeof v==='string'&&path.isAbsolute(v))||root!==undefined&&!path.isAbsolute(root))return Promise.reject(Error('invalid preview paths'));
+  const key=JSON.stringify([dir,workRoot,root,target,from]);if(previewReads.has(key))return previewReads.get(key).then(structuredClone);
+  const pending=(async()=>{
+    const main=target||await read.mainOf(dir),dirs=[dir,main].filter(Boolean);
+    const before=await previewFingerprint(dirs),old=previewResults.get(key);
+    if(before!==null&&old?.fingerprint===before)return structuredClone(old.value);
+    previewResults.delete(key);
+    const value=await require('./integration-read-worker').run('git.preview',{dir,workRoot,root,target:main,from},{dirs});
+    const after=await previewFingerprint(dirs);
+    if(before!==null&&after!==null&&before!==after)throw Error('確認中にGitの状態が変わりました。最新の記録を確認してください');
+    if(value&&before!==null&&after!==null){while(previewResults.size>=32)previewResults.delete(previewResults.keys().next().value);previewResults.set(key,{fingerprint:after,value:structuredClone(value)});}
+    return value;
+  })().finally(()=>previewReads.delete(key));previewReads.set(key,pending);return pending;
+}
+
 // ゴミ箱へ移す（完全には消さない）
 function toTrash(dir, trash) {
   const dest = trashPath(dir, trash);
@@ -327,6 +408,9 @@ function commitsSince(dir, head) { return isAncestor(dir, head) ? Number(git(dir
 function inspect(dir, {readOnly=false,ignore=[]}={}) {
   const scope=ignore.length?['--','.',...ignore.map(f=>':(top,exclude,literal)'+f)]:[];
   const wt = repoTop(dir); if (!wt) return null;
+  const allUntracked = execFileSync('git',['-C',wt,'ls-files','--others','--exclude-standard','-z'],{env:{...process.env,GIT_OPTIONAL_LOCKS:'0'},encoding:'utf8',maxBuffer:MAX_GIT_OUTPUT,stdio:['ignore','pipe','pipe']}).split('\0').filter(Boolean);
+  require('./nested-git').assertNone(wt,allUntracked);
+  const untracked=allUntracked.filter(f=>!ignore.includes(f));
   // porcelainの同じ変更マークでも、中身・ステージ・未追跡ファイルが変われば拒否する。
   const digest = createHash('sha256');
   for (const args of [['diff','--binary','--no-ext-diff','--no-textconv','HEAD'], ['diff','--cached','--binary','--no-ext-diff','--no-textconv']]) {
@@ -334,20 +418,48 @@ function inspect(dir, {readOnly=false,ignore=[]}={}) {
     const data = execFileSync('git', ['-C',wt,'-c','diff.autoRefreshIndex=false',...args,...scope], {maxBuffer:256*1024*1024,stdio:['ignore','pipe','pipe']});
     digest.update(String(data.length)+':').update(data);
   }
-  const untracked = execFileSync('git',['-C',wt,'ls-files','--others','--exclude-standard','-z'],{encoding:'utf8',maxBuffer:MAX_GIT_OUTPUT,stdio:['ignore','pipe','pipe']}).split('\0').filter(f=>f&&!ignore.includes(f));
   // 保存から除外するローカル設定も、確認後に変わったなら片付けない。
   const local=fs.readdirSync(wt).filter(n=>LOCAL_FILES.test(n));
   if(fs.existsSync(path.join(wt,'.claude/settings.local.json')))local.push('.claude/settings.local.json');
   const files = [...new Set([...untracked,...local.filter(f=>!ignore.includes(f))])].sort();
-  let bytes=0;if(files.length>MAX_FILES)throw Error(lt('未追跡ファイルが多すぎて照合できません'));
+  let bytes=0;if(files.length>MAX_FILES)throw require('./nested-git').error('INSPECT_FILE_LIMIT',lt('未追跡ファイルが多すぎて照合できません'));
   for (const f of files) {
     const file=path.join(wt,f),st=fs.lstatSync(file);
-    if(!st.isFile()&&!st.isSymbolicLink())throw Error(lt('未追跡ファイルが多すぎて照合できません'));
-    if((bytes+=st.size)>256*1024*1024)throw Error(lt('未追跡ファイルが大きすぎて照合できません'));
+    if(!st.isFile()&&!st.isSymbolicLink())throw require('./nested-git').error('INSPECT_FILE_TYPE',lt('照合できない種類の未追跡項目があります'));
+    if((bytes+=st.size)>256*1024*1024)throw require('./nested-git').error('INSPECT_BYTE_LIMIT',lt('未追跡ファイルが大きすぎて照合できません'));
     const data=st.isSymbolicLink()?Buffer.from(fs.readlinkSync(file)):fs.readFileSync(file);
     digest.update(JSON.stringify([f,st.mode,data.length])).update(data);
   }
   return { head: git(wt, ['rev-parse', 'HEAD']), branch: git(wt, ['rev-parse', '--abbrev-ref', 'HEAD']), status: git(wt, ['-c','core.quotepath=false','status', '--porcelain',...scope],{readOnly}), content: digest.digest('hex') };
+}
+async function inspectAsync(dir, {ignore=[]}={}) {
+  return read.consistent([dir],async()=>{
+  const scope=ignore.length?['--','.',...ignore.map(f=>':(top,exclude,literal)'+f)]:[];
+  const wt = await read.repoTop(dir); if (!wt) return null;
+  const allUntracked = (await read.command(wt,['ls-files','--others','--exclude-standard','-z'],{encoding:null,maxBuffer:MAX_GIT_OUTPUT})).toString().split('\0').filter(Boolean);
+  require('./nested-git').assertNone(wt,allUntracked);
+  const untracked=allUntracked.filter(f=>!ignore.includes(f));
+  // porcelainの同じ変更マークでも、中身・ステージ・未追跡ファイルが変われば拒否する。
+  const digest = createHash('sha256');
+  for (const args of [['diff','--binary','--no-ext-diff','--no-textconv','HEAD'], ['diff','--cached','--binary','--no-ext-diff','--no-textconv']]) {
+    // diffのstat更新はGIT_OPTIONAL_LOCKS=0でも起こる。内容検査にindexの更新は不要。
+    const data = await read.command(wt,[...args,...scope],{encoding:null});
+    digest.update(String(data.length)+':').update(data);
+  }
+  // 保存から除外するローカル設定も、確認後に変わったなら片付けない。
+  const local=fs.readdirSync(wt).filter(n=>LOCAL_FILES.test(n));
+  if(fs.existsSync(path.join(wt,'.claude/settings.local.json')))local.push('.claude/settings.local.json');
+  const files = [...new Set([...untracked,...local.filter(f=>!ignore.includes(f))])].sort();
+  let bytes=0;if(files.length>MAX_FILES)throw require('./nested-git').error('INSPECT_FILE_LIMIT',lt('未追跡ファイルが多すぎて照合できません'));
+  for (const f of files) {
+    const file=path.join(wt,f),st=fs.lstatSync(file);
+    if(!st.isFile()&&!st.isSymbolicLink())throw require('./nested-git').error('INSPECT_FILE_TYPE',lt('照合できない種類の未追跡項目があります'));
+    if((bytes+=st.size)>256*1024*1024)throw require('./nested-git').error('INSPECT_BYTE_LIMIT',lt('未追跡ファイルが大きすぎて照合できません'));
+    const data=st.isSymbolicLink()?Buffer.from(fs.readlinkSync(file)):fs.readFileSync(file);
+    digest.update(JSON.stringify([f,st.mode,data.length])).update(data);
+  }
+  return { head: await read.command(wt, ['rev-parse', 'HEAD']), branch: await read.command(wt, ['rev-parse', '--abbrev-ref', 'HEAD']), status: await read.command(wt, ['-c','core.quotepath=false','status', '--porcelain',...scope]), content: digest.digest('hex') };
+  });
 }
 // 復旧先は同じリポジトリの保存済みの場所だけ。確認自体では保存しない。
 // Include every paused Git operation; state belongs to this worktree, not the
@@ -465,4 +577,4 @@ function integrationReceipt(dir, record, task) {
   return {dir, commit:record.commit, files:record.files, github:remoteInfo(dir)};
 }
 function changedBetween(dir, from, to) { return git(dir,["diff","--name-only","-z",from,to]).split("\0").filter(Boolean); }
-module.exports = {mergeTargetProblem, savedHeadAsync, savedHead:dir=>tryGit(dir,['rev-parse','HEAD']), mergeLocks, withCommonGit, remoteSummary, changedBetween, hasOrigin, tooBig, integrationReceipt, available, repoTop, mainOf, save, init, prepare, merge, preview, toTrash, cleanupCopy, finishCleanupCopy, inspect, merging, recoveryTarget, isAncestor, commitsSince, countCopies, dirty, copyLocalFiles, remoteInfo, remoteInfoCache, webUrl };
+module.exports = {headStamp, inspectAsync, repoTopAsync:read.repoTop, mainOfAsync:read.mainOf, isAncestorAsync:(...a)=>read.consistent([a[0]],()=>read.isAncestor(...a)), mergingAsync:dir=>read.consistent([dir],()=>read.merging(dir)), dirtyAsync:dir=>read.consistent([dir],async()=>Boolean(await read.attempt(dir,['status','--porcelain']))), mergeTargetProblemAsync:read.mergeTargetProblem, readAsync:read.command, mergeTargetProblem, savedHeadAsync, savedHead:dir=>tryGit(dir,['rev-parse','HEAD']), mergeLocks, withCommonGit, remoteSummary, changedBetween, hasOrigin, tooBig, integrationReceipt, available, repoTop, mainOf, save, init, prepare, merge, preview, previewAsync, toTrash, cleanupCopy, finishCleanupCopy, inspect, merging, recoveryTarget, isAncestor, commitsSince, countCopies, dirty, copyLocalFiles, remoteInfo, remoteInfoCache, webUrl };

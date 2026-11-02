@@ -10,24 +10,24 @@ models:                      # 各 AI 可選的模型
   claude-code: [Opus 5.5, Fable 5.1]
   codex:       [GPT-6.1-Sol]
 
-agents: [範例負責人]        # 虛構 Discord 負責人識別碼，請改成實際負責人。
+agents: ["範例負責人"]        # 虛構 Discord 負責人識別碼，請改成實際負責人。
 
 roles:
-  司令塔:       { main: [claude-code, Fable 5.1, 極高], backup: [codex, GPT-6.1-Sol, 高], job: 規劃、分工與進度管理 }
-  調査:         { main: [claude-code, Opus 5.5, 高],   backup: [codex, GPT-6.1-Sol, 高], job: 蒐集資訊與摘要 }
-  デザイン:     { main: [claude-code, Opus 5.5, 高],   backup: [codex, GPT-6.1-Sol, 高], job: 畫面、架構與視覺設計 }
-  画像生成:     { main: [codex, GPT-6.1-Sol, 中],     backup: [人],                     job: 生成圖片 }
-  コーディング: { main: [codex, GPT-6.1-Sol, 高],     backup: [claude-code, Opus 5.5, 高], job: 程式開發 }
-  チェック:     { main: [claude-code, Fable 5.1, 極高], backup: [codex, GPT-6.1-Sol, 高], job: 獨立審查（開發者仍須自行測試） }
-  文章:         { main: [claude-code, Opus 5.5, 中],   backup: [codex, GPT-6.1-Sol, 中], job: 說明文件與手冊 }
-  最終確認:     { main: [人],                          backup: [人],                     job: 判斷是否完成 }
+  司令塔:       { main: [claude-code, Fable 5.1, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '規劃、分工與進度管理' }
+  調査:         { main: [claude-code, Opus 5.5, "高"],   backup: [codex, GPT-6.1-Sol, "高"], job: 蒐集資訊與摘要 }
+  デザイン:     { main: [claude-code, Opus 5.5, "高"],   backup: [codex, GPT-6.1-Sol, "高"], job: '畫面、架構與視覺設計' }
+  画像生成:     { main: [codex, GPT-6.1-Sol, "中"],     backup: ["人"],                     job: '生成圖片' }
+  コーディング: { main: [codex, GPT-6.1-Sol, "高"],     backup: [claude-code, Opus 5.5, "高"], job: '程式開發' }
+  チェック:     { main: [claude-code, Fable 5.1, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '獨立審查（開發者仍須自行測試）' }
+  文章:         { main: [claude-code, Opus 5.5, "中"],   backup: [codex, GPT-6.1-Sol, "中"], job: 說明文件與手冊 }
+  最終確認:     { main: ["人"],                          backup: ["人"],                     job: 判斷是否完成 }
 
 # 使用前確認模型、思考程度與圖片生成方式是否可用，以及相關費用。
 
 permissions:                 # 工作權限（最大權限，略過確認）
   claude-code: claude --dangerously-skip-permissions
   codex:       codex --dangerously-bypass-approvals-and-sandbox
-  ask_before: []             # 寫下需要詢問的操作，例如 [付費, 公開]。
+  ask_before: []             # 寫下需要詢問的操作，例如 ["付費", "公開"]。
 
 switch:                      # 從第二階段開始使用
   auto: false                # 新導入時關閉自動交接，須先由人批准。

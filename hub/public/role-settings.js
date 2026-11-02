@@ -43,9 +43,9 @@ function roleSettingsHtml() {
       ${m.defaultSavedAt?UI.template`<button type="button" class="btn plain" data-role-setting="default" ${disabled?'disabled':''}>デフォルトに戻す</button>`:''}
       <button type="button" class="btn plain" data-role-setting="save-default" ${roleSettingsBusy||m.review?'disabled':''}>現状をデフォルトにする</button>
       ${reviewUI?.cancelButton(m) || ''}</div>
-    <p class="small role-meta">${reviewUI?.lastDate(m) || ''}<span>デフォルト：${esc(m.defaultSavedAt?roleDateLabel(m.defaultSavedAt):UI.text('未設定'))}</span>${reviewUI?.topicButton(m) || ''}</p>
+    <div class="acts role-review-status"><span class="small" role="status">${esc(roleSettingsNotice || reviewUI?.status(m) || '')}</span>${reviewUI?.topicButton(m) || ''}</div>
+    <p class="small role-meta">${reviewUI?.lastDate(m) || ''}<span>デフォルト：${esc(m.defaultSavedAt?roleDateLabel(m.defaultSavedAt):UI.text('未設定'))}</span></p>
     ${rolesDirty()?UI.template`<p class="small">${reviewUI?.dirtyMessage || UI.text('編集中の設定を保存するか、［元に戻す］で編集を取り消してから復元できます。')}</p>`:''}
-    <p class="small" role="status">${esc(roleSettingsNotice || reviewUI?.status(m) || '')}</p>
     <details class="more role-about"><summary>${reviewUI?.aboutTitle || UI.text('デフォルトについて')}</summary>${reviewUI?.about || ''}<p class="small">［現状をデフォルトにする］で表示中の役割を保存します。</p>${reviewUI?.lastMessage(m) || ''}</details>
     ${roleHistoryOpen?UI.template`<div class="role-history"><h3>変更履歴</h3><p class="small">日時はこの端末の時刻です。日付を選ぶと、その日の最後の設定を表示します。変更がない日は直前の記録を使います。</p>
       <div class="acts"><label>日付 <input id="role-history-date" type="date" value="${esc(roleHistoryDate)}"></label>

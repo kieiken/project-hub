@@ -44,9 +44,15 @@ function dataMessages(messages) {
     /[^\x00-\x7f]/.test(tag) && !/[\s='"/]/.test(tag) ? '<literal>'
       : tag.replace(/\b(title|aria-label|aria-valuetext|placeholder)\s*=\s*(["'])[\s\S]*?\2/g, '$1=""'));
   return Object.fromEntries(Object.entries(messages).map(([source, value]) => {
-    if (/<\/?[a-z!]/i.test(value)) {
+    // A placeholder is application-owned markup in some templates. A pack must
+    // not invent one, or turn a fragment followed by one into a new HTML tag.
+    const slots = text => (text.match(/\$\{\d+\}/g) || []).sort();
+    if (/[\uE000\uE001]/.test(value) || /<\s*\/?\s*\$\{/.test(value)
+      || JSON.stringify(slots(source)) !== JSON.stringify(slots(value))) throw Error('言語パックの差し込み位置が不正です');
+    if (value.includes('<')) {
       if (JSON.stringify(tags(source)) !== JSON.stringify(tags(value))
-        || /<\/?[a-z!]/i.test(value.replace(/<[^>]*>/g, ''))) throw Error('言語パックには実行可能なHTMLを追加できません');
+        || (value.replace(/<[^>]*>/g, '').match(/</g) || []).length
+          !== (source.replace(/<[^>]*>/g, '').match(/</g) || []).length) throw Error('言語パックには実行可能なHTMLを追加できません');
       // Whole-page legacy phrases retain only application-owned scripts.
       const scripts = source.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) || [];
       let index = 0;
@@ -79,6 +85,7 @@ function loadPack({ root, dir, warn = true, needs = [] } = {}) {
       if (need === 'native') {
         const native = read('native.json');
         if (!dictionary(native) || !Object.keys(native).length) throw Error('Invalid native language pack');
+        dataMessages(native);
       } else if (need === 'templates') {
         readable('templates/project', true);
         for (const file of ['_hub/roles.yaml', 'project/PROJECT.md', 'project/.ai/rules.md', 'project/.ai/tasks/_template.md']) readable('templates/' + file);

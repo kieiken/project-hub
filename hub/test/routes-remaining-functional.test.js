@@ -24,15 +24,15 @@ test('an integrating transfer falls through to integration without applying a ha
   assert.equal(applied, false);
 });
 
-test('merge status obtains the current flow only when requested, without an initialization snapshot', () => {
-  let current = { status: () => ({ state: 'first' }) }, reads = 0;
+test('merge status obtains the current flow only when requested, without an initialization snapshot', async () => {
+  let current = { statusAsync: async () => ({ state: 'first' }) }, reads = 0;
   const t = { id: 't', workdir: 'copy' }, routes = require('../lib/routes/task-integration')({ send,
     store: { readProject: () => ({ tasks: [t] }) }, inWork: () => true, copyMissing: () => false,
-    expandHome: s => s, gitw: { mainOf: () => 'main' }, getMainMergeFlow: () => { reads++; return current; } });
+    expandHome: s => s, gitw: { mainOfAsync: async () => 'main' }, getMainMergeFlow: () => { reads++; return current; } });
   assert.equal(reads, 0);
   const run = () => routes.mergeStatus.handle({}, {}, url('/api/task/merge/status'), { project: 'p', task: 't', flow: true });
-  assert.equal(run().body.state, 'first'); current = { status: () => ({ state: 'second' }) };
-  assert.equal(run().body.state, 'second'); assert.equal(reads, 2);
+  assert.equal((await run()).body.state, 'first'); current = { statusAsync: async () => ({ state: 'second' }) };
+  assert.equal((await run()).body.state, 'second'); assert.equal(reads, 2);
 });
 
 test('MCP rejects missing Hub marker before reading a request body', async () => {

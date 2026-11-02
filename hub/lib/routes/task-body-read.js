@@ -5,10 +5,10 @@ module.exports = function taskBodyReadRoutes(ctx) {
   return {
     preview: {
       matches: (req, url) => req.method==='GET'&&url.pathname==='/api/task/body/preview',
-      handle(req, res, url) {
+      async handle(req, res, url) {
         if(req.method==='GET'&&url.pathname==='/api/task/body/preview'){
           if(req.headers['x-hub']!=='1')return send(res,403,{error:'forbidden'});
-          try{return send(res,200,textBudget.preview(url.searchParams.get('project'),url.searchParams.get('task'),url.searchParams.get('request')));}catch(e){return send(res,409,{error:e.message});}
+          try{return send(res,200,await textBudget.previewAsync(url.searchParams.get('project'),url.searchParams.get('task'),url.searchParams.get('request')));}catch(e){return send(res,409,{error:e.message});}
         }
       },
     },

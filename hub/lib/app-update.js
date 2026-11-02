@@ -198,7 +198,7 @@ class AppUpdate {
   async advance() {
     if (this.ownerEdition || this.platform === 'win32') return this.status();
     if (!this.enabled) return this.defer('disabled');
-    if (this.busy()) return this.defer('busy');
+    if ((this.strictBusy ? await this.strictBusy() : this.busy())) return this.defer('busy');
     if (await this.dirty()) return this.defer('dirty');
     await this.persist();
     if (this.data.job && this.data.job.context?.upstreamSha !== this.data.latestCommit) this.data.job = null;
@@ -206,7 +206,7 @@ class AppUpdate {
     if (!this.data.job && this.translate && !this.translationDue()) return this.defer('retry');
     if (!this.data.job) await this.prepare();
     if (!this.enabled) return this.defer('disabled');
-    if (this.busy()) return this.defer('busy');
+    if ((this.strictBusy ? await this.strictBusy() : this.busy())) return this.defer('busy');
     if (await this.dirty()) return this.defer('dirty');
     if (await this.git(['rev-parse', 'HEAD']) !== this.data.job.sourceHead) { this.data.job = null; return this.defer('changed'); }
     await this.install();
@@ -273,7 +273,7 @@ class AppUpdate {
       if (this.verify) await this.verify(fresh); else await this.platformApi.appUpdater.verify(fresh, { env: this.env }, this.run.bind(this));
       if (this.beforeInstall) await this.beforeInstall(fresh);
       if (!this.enabled) { await this.defer('disabled'); return; }
-      if (this.busy()) { await this.defer('busy'); return; }
+      if ((this.strictBusy ? await this.strictBusy() : this.busy())) { await this.defer('busy'); return; }
       if (await this.dirty()) { await this.defer('dirty'); return; }
       if (await this.git(['rev-parse', 'HEAD']) !== job.sourceHead) { this.data.job = null; await this.defer('changed'); return; }
       // A candidate waiting for AI must still point at exactly the tested source.
@@ -285,7 +285,7 @@ class AppUpdate {
       this.data.install = { target: this.appPath, old, fresh, backup };
       await this.persist();
       if (!this.enabled) { this.data.install = null; await this.defer('disabled'); return; }
-      if (this.busy()) { this.data.install = null; await this.defer('busy'); return; }
+      if ((this.strictBusy ? await this.strictBusy() : this.busy())) { this.data.install = null; await this.defer('busy'); return; }
       if (fs.existsSync(this.appPath)) { this.rename(this.appPath, old); moved = true; }
       this.rename(fresh, this.appPath); installed = true;
       this.data.install = null;
@@ -315,13 +315,13 @@ class AppUpdate {
     if (!this.enabled || !this.publish || !this.data.publishPending || !this.data.publication || !this.publishDue()) return this.installedStatus();
     const publication = this.data.publication;
     try {
-      if (this.busy()) return await this.defer('busy');
+      if ((this.strictBusy ? await this.strictBusy() : this.busy())) return await this.defer('busy');
       noLinks(publication.stage);
       if (await this.git(['status', '--porcelain', '--untracked-files=normal'], publication.stage) ||
         await this.git(['rev-parse', 'HEAD'], publication.stage) !== publication.head) throw Error(message('publish'));
       await this.phase('publishing');
       if (!this.enabled) return await this.defer('disabled');
-      if (this.busy()) return await this.defer('busy');
+      if ((this.strictBusy ? await this.strictBusy() : this.busy())) return await this.defer('busy');
       Object.assign(this.data, { lastPublishAttempt: new Date(this.now()).toISOString(), lastPublishCommit: publication.context.upstreamSha });
       await this.persist();
       if (!this.enabled) return await this.defer('disabled');

@@ -124,10 +124,11 @@ test('torn-history recovery preserves both names if its first namespace flush fa
   const dir = fixture(t), file = path.join(dir, 'history.json'), bytes = '{torn'; fs.writeFileSync(file, bytes);
   const sha256 = require('node:crypto').createHash('sha256').update(bytes).digest('hex');
   const p = { ...native.persistence, withDirectorySync() { throw Error('namespace flush failed'); } };
+  const h = {dir, file:()=>path.join(dir,'current.json')};
   const R = modules(p)('integration-abandon-recovery'), x = { file, sha256, action: 'quarantine' };
-  assert.throws(() => R.commit({}, x, {}), /namespace flush failed/);
+  assert.throws(() => R.commit(h, x, {}), /namespace flush failed/);
   assert.equal(fs.readFileSync(file, 'utf8'), bytes); assert.equal(fs.readFileSync(file + '.torn-' + sha256, 'utf8'), bytes);
-  const healthy = modules(native.persistence)('integration-abandon-recovery'); healthy.commit({}, x, {});
+  const healthy = modules(native.persistence)('integration-abandon-recovery'); healthy.commit(h, x, {});
   assert.equal(fs.existsSync(file), false); assert.equal(fs.readFileSync(file + '.torn-' + sha256, 'utf8'), bytes);
 });
 test('idea recovery retains intent and candidate until both file and namespace durability are confirmed', t => {

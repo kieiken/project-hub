@@ -2,33 +2,33 @@
 
 [繁體中文版](README.zh-TW.md) — `HUB_LANG=zh-TW`（未設定は日本語）。
 
-**Project Hub 4.125は正式版です。** 現在の配布版は [Mac 4.126.41](https://github.com/kieiken/project-hub/releases/tag/v4.126.41) と [Windows 4.125.2](https://github.com/kieiken/project-hub/releases/tag/v4.125.2) です。使ってみた感想、不具合の報告、Pull Request を歓迎します。送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
-
-このリポジトリの公開ソースは4.125.0時点のもので、配布アプリの版とは異なります。
+**Project Hub は Mac・Windows とも正式版です。** 現在の配布版は [Mac 4.126.41](https://github.com/kieiken/project-hub/releases/tag/v4.126.41) と [Windows 4.125.2](https://github.com/kieiken/project-hub/releases/tag/v4.125.2) です。使ってみた感想、不具合の報告、Pull Request を歓迎します。送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
 
 プロジェクトと作業を一覧にして、画面の中で Claude Code / Codex を動かす管理ソフトです。1人で使う Mac、または Windows 11 x64 で使います。待ち受けるのは `127.0.0.1` だけで、利用者の認証はありません。Web サービスや共有サーバーとしては使えません。
 
 使う前に、[hub/README.md](hub/README.md) の「使う前に知っておくこと」を読んでください。
 
+ソース版：4.126.94（公開済みの配布版は上記のとおりです）。
+
 ## 画面の例
 
-以下は過去の版で撮影した実際の画面です。個人情報・事業内容・実際の会話は黒塗りしています。撮影時点の版のため、現在の画面とは異なる場合があります。
+以下は v4.126.41 の画面です。プロジェクト・作業・会話の内容は、説明のために用意した架空のものです（実際の利用者のデータは含みません）。
 
-### 会話画面と作業中の指示（取り消し／追加説明／次の指示）
+### 作業の会話画面
 
-2026-09-29 撮影、v4.10.0 時点の画面（黒塗り加工済み）
+架空のプロジェクト「カフェ開業準備」で、AI がまとめた価格表を会話の中で確認し、次の指示を書いているところです。上部には、今のフェーズと手順の残りが表示されます。
 
-![会話画面と作業中の指示（v4.10.0 時点、黒塗り加工済み）](docs/screenshots/conversation-redacted.png)
+![作業の会話画面（v4.126.41、架空のデータ）](docs/screenshots/conversation.png)
 
-### 会話画面と次の指示が並ぶ画面
+### 会話の検索
 
-2026-09-30 撮影、v4.16.0 時点の画面（黒塗り加工済み）
+すべてのプロジェクトとフリートークの会話から言葉で探し、見つかった発言と前後の会話を開けます。
 
-![会話画面と次の指示が並ぶ画面（v4.16.0 時点、黒塗り加工済み）](docs/screenshots/queued-instructions-redacted.png)
+![会話の検索結果（v4.126.41、架空のデータ）](docs/screenshots/search.png)
 
 ## 前提
 
-- macOS。Windows 11 x64 は、下の「Windows 版」を参照してください
+- macOS（Apple Silicon、macOS 13 以降）または Windows 11 x64。Windows は下の「Windows 版」を参照してください
 - Node.js 22 以上、Git
 - 使う AI の CLI（Claude Code / Codex / GeminiのAgy CLI）を入れて、ログインしておく
 - 作業画面の部品（node-pty）とアプリ（Project Hub.app）を作るには、Apple の開発ツールが必要
@@ -51,15 +51,13 @@ bash hub/setup.sh
 
 ## Windows 版
 
-Windows 11 x64 向けの正式版 4.125.2 を配布しています。Mac だけで使える隔離実行など、Windows では使えない機能もあります。
-
 Windows 11 x64 向けに、ブラウザで開く方法と、WebView2 を使う未署名の専用窓を用意しています。準備と起動の手順は [Windows 専用窓の案内](hub/app/windows/README.md) を読んでください。準備済みのフォルダでは `hub/start-window.cmd` で専用窓、`hub/start.cmd` でブラウザ版を開きます。普通の権限で使い、管理者として起動しないでください。Mac 用の `setup.sh` は使いません。
 
-専用窓の起動、日本語の表示・保存、保存操作をしない再起動前後の比較、閉じる操作での通常終了を、Windows 実機で限定確認しています。全機能や実際の AI を使う動作の合格ではありません。利用権の保管は実装済みですが、本番の購入受付は準備中です。隔離実行・自動更新など、Windows で未対応の操作もあります。統合後の版でのWindows実機確認は別途必要です。
+Windows 11 x64 向けの正式版を [リリースページ](https://github.com/kieiken/project-hub/releases) で配布しています。発行者の署名がないため、初回に Windows の警告が出る場合があります。アプリ内の自動更新は、アプリ内の処理だけを入れ替えます。Mac だけで使える隔離実行など、Windows では使えない機能もあります。
 
 保存先は固定のローカル NTFS です。ファイルの書き込み確定と同じドライブ内の置き換えを使うため、管理者権限は不要です。ただし、ファイル名の変更や削除の直後に停電した時の確実さは、ドライブ全体の書き込み確定を使う以前の方式より弱くなる可能性があります。
 
-専用窓の文字がぼやけるとの報告があり、表示品質は確認中です。確認済みの保存・終了の結果とは分けて扱っています。
+専用窓の文字がぼやけるとの報告があり、改善を確認中です。
 
 ## 注意
 

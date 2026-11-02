@@ -9,7 +9,7 @@ function applyWindowPolicy(res, { platform, launch, port }) {
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
-    "connect-src 'self' ws://127.0.0.1:" + port,
+    "connect-src http://127.0.0.1:" + port,
     "worker-src 'self' blob:",
     "frame-src 'self' blob:",
     "object-src 'none'",

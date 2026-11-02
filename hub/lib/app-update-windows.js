@@ -74,12 +74,12 @@ class WindowsPackagedUpdate extends PackagedUpdate {
   }
   async install() {
     const job = this.data.prepared; if (!job || this.data.pendingConfirm) return this.status();
-    if (this.busy()) { this.phase('deferred', { reason: this.idleMessage() }); return this.status(); }
+    if ((this.strictBusy ? await this.strictBusy() : this.busy())) { this.phase('deferred', { reason: this.idleMessage() }); return this.status(); }
     const m = verifyManifest(job.envelope, this.trust, { now: this.now(), version: this.currentVersion, maxSeq: this.data.maxSeq, allowAccepted: true });
     if (job.envelope.payload !== this.data.envelope?.payload || !compatible(m, { platform: 'win32', arch: this.arch, macOS: await this.macOS(), node: this.node }) || eligibility(m, this.license?.status(), this.license?.config?.build) !== 'install') fail('requirements');
     validateCurrent(this.home, job, this.trust, { now: this.now(), pending: true });
     if (!this.supported()) fail('unsupported');
-    if (this.busy()) { this.phase('deferred', { reason: this.idleMessage() }); return this.status(); }
+    if ((this.strictBusy ? await this.strictBusy() : this.busy())) { this.phase('deferred', { reason: this.idleMessage() }); return this.status(); }
     // current, previous and confirmation journal change in ONE SQLite FULL commit.
     // No live executable, native DLL, original launcher or license file is replaced.
     const previous = this.data.current || { runtime: this.bootstrap, version: this.currentVersion };

@@ -13,6 +13,10 @@ class TaskIntegrate {
   constructor({store,transfer,removal,baseOf=p=>p.dir,gitw=git}) {
     Object.assign(this,{store,transfer,removal,baseOf,gitw});this.tokens=new Map();
     this.dir=path.join(store.root,'_hub/task-integrations');
+    this.pendingCache=new (require('./record-read-cache').RecordReadCache)(bytes=>{
+      const r=JSON.parse(bytes),complete=continuation.childrenComplete(r),mainPending=continuation.pendingMain(r);
+      return complete&&!mainPending&&(!r.auto||r.auto.main?.state==='done')?[]:[{auto:r.auto,project:r.project,task:r.task,id:r.id,stage:r.abandoned?'abandoned':complete?'main':'children',...(r.abandoned?{abandoned:{at:r.abandoned.at,reason:r.abandoned.reason}}:{}),mainPending,items:complete?[]:r.items.map(x=>({project:x.project,task:x.task,title:x.title,state:x.state}))}];
+    });
     this.simple=new (require('./integration-simple').SimpleIntegration)(this);
     transfer.integrationPolicy=(p,t,o)=>this.simple.policy(p,t,o);
     transfer.beforeCleanup=r=>this.cleanupCopy(r);
@@ -35,7 +39,7 @@ class TaskIntegrate {
   }
   readLane(project,task,sibling){return sibling?require('./integration-sibling').read(this,project,task):this.read(project,task);}
   records(project,task){return [this.read(project,task),require('./integration-sibling').read(this,project,task)].filter(Boolean);}
-  save(r){require('./integration-consultation-close').assertWritable(this,r);const sibling=require('./integration-sibling');if(r.stoppedSibling)return sibling.save(this,r);sibling.blocked(this,r);return sibling.primarySave(this,r,()=>{const f=this.file(r.project,r.task);noLinks(f);fs.mkdirSync(this.dir,{recursive:true});fs.writeFileSync(f+'.tmp',JSON.stringify(r,null,2));fs.renameSync(f+'.tmp',f);});}
+  save(r){require('./integration-consultation-close').assertWritable(this,r);const sibling=require('./integration-sibling');if(r.stoppedSibling)return sibling.save(this,r);sibling.blocked(this,r);return sibling.primarySave(this,r,()=>{const f=this.file(r.project,r.task);noLinks(f);fs.mkdirSync(this.dir,{recursive:true});fs.writeFileSync(f+'.tmp',JSON.stringify(r,null,2));fs.renameSync(f+'.tmp',f);this.pendingCache.invalidate(f);});}
   // Display evidence only. Never settle the old intent or change replay guards.
   // Called by explicit previews, not the polling state path (no Git in pending()).
   mainDisplay(project,task,r){
@@ -56,11 +60,13 @@ class TaskIntegrate {
     return out;
   }
   pending(){
-    if(!exists(this.dir))return [];noLinks(this.dir);
-    const directories=[this.dir,path.join(this.dir,'siblings')].filter(exists);
-    return directories.flatMap(dir=>{noLinks(dir);return fs.readdirSync(dir).filter(n=>/^[a-f0-9]{64}\.json$/.test(n)).flatMap(n=>{
-      try{const f=path.join(dir,n);noLink(f);const r=JSON.parse(fs.readFileSync(f,'utf8')),complete=continuation.childrenComplete(r),mainPending=continuation.pendingMain(r);return complete&&!mainPending&&(!r.auto||r.auto.main?.state==='done')?[]:[{auto:r.auto,project:r.project,task:r.task,id:r.id,stage:r.abandoned?'abandoned':complete?'main':'children',...(r.abandoned?{abandoned:{at:r.abandoned.at,reason:r.abandoned.reason}}:{}),mainPending,items:complete?[]:r.items.map(x=>({project:x.project,task:x.task,title:x.title,state:x.state}))}];}catch{return [];}
-    });}).concat(require('./integration-consultation-close').pending(this));
+    if(!exists(this.dir)){this.pendingCache.clear();return [];}noLinks(this.dir);
+    const directories=[this.dir,path.join(this.dir,'siblings')];
+    return directories.flatMap(dir=>{
+      if(!exists(dir)){this.pendingCache.prune(dir,[]);return [];}noLinks(dir);
+      const names=fs.readdirSync(dir).filter(n=>/^[a-f0-9]{64}\.json$/.test(n));this.pendingCache.prune(dir,names);
+      return names.flatMap(n=>{try{return structuredClone(this.pendingCache.read(path.join(dir,n))||[]);}catch{return [];}});
+    }).concat(require('./integration-consultation-close').pending(this));
   }
   // Conversation eligibility only: leave pending(), replay guards and old intents intact.
   // Git is read only for a completed receipt with a separate historical main intent;
@@ -193,6 +199,7 @@ class TaskIntegrate {
     for(const i of items)blockers.push(...(i.blockers||[]));
     return {project:r.project,task:r.task,target:a.target,resume:true,id:r.id,items,auto:r.auto,ancestorHash:a.t.completionHash,targetSnapshot,recordHash:hash(JSON.stringify(r)),handoffHash:hash(JSON.stringify(r.items.map(i=>this.transfer.read(i.project,i.task)))),legacy:r.schemaVersion!==2,blockers:[...new Set(blockers)],recover:recover?{savedTarget:r.target,currentTarget:a.target,reasons}:null};
   }
+  previewAsync(project,task,only,options={}){return require('./integration-read-worker').integration(this,null,{project,task,only,options});}
   preview(project,task,only,{allowBusy=false,issueToken=true,simple=false,sibling=false,assignments}={}){
     const assignment=require('./integration-assignment'),policy=assignment.normalize(assignments,this.validateAssignment);
     if(policy&&!simple)throw Error('担当指定は新しい簡単統合で確認してください');

@@ -15,7 +15,31 @@ function fixture(t) {
   const env = {...process.env, HOME:home, PATH:bin+':/usr/bin:/bin', HUB_ROOT:path.join(root,'workspace'), HUB_APP_DIR:apps,
     HUB_SKIP_NPM:'1', HUB_SKIP_APP:'1', HUB_NO_DESKTOP_LINK:'1', HUB_STORAGE_GUARD:'', HUB_LANGPACK_DIR:path.resolve(__dirname,'..')};
   delete env.HUB_LANG;
-  return {root, apps, env, run:(file, extra={}) => spawnSync('/bin/bash',[path.join(hub,file)],{env:{...env,...extra},encoding:'utf8',timeout:15000})};
+  let sourceHub = hub;
+  const publicSource = () => {
+    // A portable build must use exported sources, never bypass the owner guard.
+    // Prepare only a disposable fixture using the real export exclusions.
+    const repository = path.dirname(hub), target = path.join(root, 'public-source');
+    const { excluded } = require('../../../scripts/export-public');
+    const copy = name => {
+      const file=path.join(repository,name), stat=fs.lstatSync(file);
+      if (stat.isDirectory()) {
+        if (['node_modules','.git'].includes(path.basename(name))) return;
+        for (const child of fs.readdirSync(file)) copy(path.join(name,child));
+      } else if (stat.isFile() && !excluded(name.split(path.sep).join('/'))) {
+        fs.mkdirSync(path.dirname(path.join(target,name)),{recursive:true});
+        fs.copyFileSync(file,path.join(target,name));
+      }
+    };
+    for (const name of ['hub', 'docs/project-hub/templates', 'langpacks/zh-TW', 'README.md', 'README.zh-TW.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_NOTICES.zh-TW.md']) {
+      copy(name);
+    }
+    // Existing offline dependencies are fixture inputs, not fetched or installed.
+    fs.cpSync(path.join(hub, 'node_modules'), path.join(target, 'hub/node_modules'), { recursive: true });
+    sourceHub = path.join(target, 'hub');
+    assert.equal(fs.existsSync(path.join(sourceHub, 'lib/license/owner-edition.js')), false);
+  };
+  return {root, apps, env, publicSource, run:(file, extra={}) => spawnSync('/bin/bash',[path.join(sourceHub,file)],{env:{...env,...extra},encoding:'utf8',timeout:15000})};
 }
 test('Mock App builds keep the Japanese default and store Chinese language without changing terminal output', t => {
   const f=fixture(t);
@@ -56,8 +80,17 @@ test('Installed C catalogs enable the translation workflow only with explicit op
   }
 });
 test('Portable App bundles the runtime and templates with relocatable location and no creator workspace', t => {
-  const f=fixture(t), result=f.run('app/build-app.sh',{HUB_LANG:'zh-TW',HUB_BUNDLE_RUNTIME:'1'});
+  const f=fixture(t), marker=path.join(hub,'lib/license/owner-edition.js');
+  const owner=fs.existsSync(marker) ? fs.readFileSync(marker) : null;
+  if (owner) {
+    const rejected=f.run('app/build-app.sh',{HUB_LANG:'zh-TW',HUB_BUNDLE_RUNTIME:'1'});
+    assert.equal(rejected.status,1);assert.match(rejected.stdout,/製作者版の印/);
+    assert.equal(fs.existsSync(path.join(f.apps,'Project Hub.app')),false);
+  }
+  f.publicSource();
+  const result=f.run('app/build-app.sh',{HUB_LANG:'zh-TW',HUB_BUNDLE_RUNTIME:'1'});
   assert.equal(result.status,0,result.stderr);
+  if (owner) assert.deepEqual(fs.readFileSync(marker),owner);
   assert.match(fs.readFileSync(path.join(f.apps,'swift-args'),'utf8'),/-target\n(?:arm64|x86_64)-apple-macosx12\.0/);
   const app=path.join(f.apps,'Project Hub.app'), runtime=path.join(app,'Contents/Resources/runtime');
   const plist=fs.readFileSync(path.join(app,'Contents/Info.plist'),'utf8');
@@ -72,6 +105,7 @@ test('Portable App bundles the runtime and templates with relocatable location a
 
 test('Portable Chinese build finds the default pack without an explicit override', t => {
   const f = fixture(t); delete f.env.HUB_LANGPACK_DIR;
+  f.publicSource();
   const result = f.run('app/build-app.sh', { HUB_LANG: 'zh-TW', HUB_BUNDLE_RUNTIME: '1' });
   assert.equal(result.status, 0, result.stderr);
   const app = path.join(f.apps, 'Project Hub.app');

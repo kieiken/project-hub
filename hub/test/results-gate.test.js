@@ -96,3 +96,22 @@ for(const heading of ['やったこと','やったこと（確認結果）',null
  assert.match(f.store.readTask(f.file).done,/受領メモ/);
  const c=f.current();assert.equal(f.gate.approvalIssue(c.p,c.t,c.all).ok,true);
 });
+
+ test('正式成果検査の隠しパス拒否を通知で隠さず、実合格後だけ完了承認へ戻す',t=>{
+ const f=fixture(t),vm=require('node:vm'),{app}=require('./fixtures/app-ui-harness.cjs'),a=app();
+ fs.mkdirSync(path.join(f.dir,'.ai/probe'),{recursive:true});fs.writeFileSync(path.join(f.dir,'.ai/probe/result.txt'),'report');
+ f.declare('- ファイル：.ai/probe/result.txt（結果）');
+ const c=f.current(),before=fs.readFileSync(f.file,'utf8'),bad=f.transfer.resultIssue(c.p,c.t);
+ assert.equal(bad.ok,false);assert.equal(bad.code,'candidates');
+ f.block='AIが作業中です';const shown=f.gate.decorate(c.p,c.t,c.all,{issue:bad});
+ assert.equal(shown.completionPending,false);assert.equal(shown.question,'');assert.equal(shown.resultsPending.auto,'blocked');
+ a.context.data={projects:[{...c.p,tasks:[shown]}],sessions:[],chatting:[{project:'P',task:shown.id,ai:'codex'}]};
+ vm.runInContext('state=data',a.context);assert.equal(vm.runInContext('notificationKind(state.projects[0],state.projects[0].tasks[0])',a.context),'work');
+ a.context.data.chatting=[];vm.runInContext('state=data',a.context);assert.equal(vm.runInContext('notificationKind(state.projects[0],state.projects[0].tasks[0])',a.context),'results');
+ assert.equal(f.gate.approvalIssue(c.p,c.t,c.all).ok,false);assert.equal(fs.readFileSync(f.file,'utf8'),before);assert.equal(f.launches,0);
+ fs.writeFileSync(path.join(f.dir,'report.txt'),'report');f.declare('- ファイル：report.txt（結果）');
+ const good=f.current(),issue=f.transfer.resultIssue(good.p,good.t);assert.equal(issue.ok,true);
+ const ready=f.gate.decorate(good.p,good.t,good.all,{issue});assert.equal(ready.completionPending,true);assert.equal(ready.resultsPending,undefined);
+ a.context.data.projects[0].tasks=[ready];vm.runInContext('state=data',a.context);assert.equal(vm.runInContext('notificationKind(state.projects[0],state.projects[0].tasks[0])',a.context),'done');
+ assert.equal(f.launches,0);
+ });

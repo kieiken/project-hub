@@ -14,11 +14,12 @@ function guardedConnect(...args) {
   return connect.apply(this, args);
 }
 net.Socket.prototype.connect = guardedConnect;
+require('./local-auth-client.cjs');
 const originalFetch = global.fetch;
 function guardedFetch(input, options) {
   const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
   if (!['http:', 'https:'].includes(url.protocol) || !local(url.hostname)) reject('external_fetch');
-  return originalFetch(input, options);
+  return originalFetch(input, { ...options, headers: require('./local-auth-client.cjs').headers(url.port || 80, options?.headers || input?.headers) });
 }
 global.fetch = guardedFetch;
 const udp = {};

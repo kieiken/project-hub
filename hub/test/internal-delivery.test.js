@@ -27,3 +27,8 @@ test('user delegation needs its private part and entitlement; core internal acce
  const response=await invoke({ai:'codex'},{});assert.equal(response.status,400);assert.equal(response.code,undefined);
  const paid=await invoke({ai:'codex'},{},{origin:'delegate'});assert.equal(paid.status,404);
 });
+
+test('maintenance refusal carries a stable type alongside the translated message',async()=>{
+ const deliver=require('../lib/request-delivery').createDelivery({license:{prepare(){}},licenseGuard(){},send:(_r,status,body)=>({status,...body}),store:{readProject:()=>({id:'P'}),taskFile:()=>'/fixture'},launch:{AIS:['codex']},discussion:{active:()=>false},aiTools:{isOperating:()=>true},lt:()=> 'Maintenance in any language'});
+ assert.deepEqual(await deliver({project:'P',task:'T',ai:'codex',text:'selection'},{}),{status:409,error:'Maintenance in any language',code:'HUB_AI_MAINTENANCE'});
+});

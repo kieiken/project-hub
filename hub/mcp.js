@@ -10,10 +10,11 @@ const VERSION = (() => { try { return require('./package.json').version; } catch
 const PROTOCOL = '2025-06-18';
 const log = (...a) => process.stderr.write(`[project-hub mcp] ${a.join(' ')}\n`);
 
-function hub(method, p, body) {
+async function hub(method, p, body) {
+  const owner = await require('./app/open-browser.cjs').verify(PORT);
   return new Promise((resolve, reject) => {
     const data = body === undefined ? null : JSON.stringify(body);
-    const rq = http.request({ host: '127.0.0.1', port: PORT, path: p, method, headers: { 'X-Hub': '1', Accept: 'application/json', ...(data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}) } }, res => {
+    const rq = http.request({ host: '127.0.0.1', port: PORT, path: p, method, headers: { 'X-Hub': '1', 'X-Hub-Token': require('./lib/local-auth').capability(owner.token), Accept: 'application/json', ...(data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {}) } }, res => {
       const chunks = []; res.on('data', c => chunks.push(c));
       res.on('end', () => { let j = {}; try { j = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (e) { j = { error: lt('Hub の返事を読めません') }; } resolve({ status: res.statusCode, body: j }); });
     });

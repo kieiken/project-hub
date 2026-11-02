@@ -31,7 +31,8 @@ function guard(route, body) {
   if (hasTarget(body, true)) return lt('freetalk は正規の名前「freetalk」で指定してください。') + PROTECTED;
   if (!hasTarget(body)) return '';
   if (['/api/freetalk/project-start','/api/freetalk/project-preview','/api/freetalk/promotion-intent','/api/freetalk/promote','/api/freetalk/clean','/api/freetalk/delete','/api/freetalk/summary','/api/freetalk/rotate','/api/chat/send','/api/chat/note','/api/chat/stop','/api/chat/unqueue','/api/webchat/retry','/api/webchat/stop','/api/delegate','/api/task/read',
-    '/api/task/attach','/api/reveal','/api/acceleration/task','/api/accounts/select','/api/chatgpt/prompt','/api/chatgpt/result','/api/roles/review','/api/discussion/start','/api/discussion/summary'].includes(route)) return '';
+    '/api/task/attach','/api/reveal','/api/acceleration/task','/api/accounts/select','/api/chatgpt/prompt','/api/chatgpt/result','/api/roles/review','/api/discussion/start','/api/discussion/summary',
+    '/api/muse/chat','/api/muse/read','/api/muse/reconcile'].includes(route)) return '';
   if (route === '/api/task' && !Object.keys(body).some(k => !['project','task','state','question','memo','owner','model','effort'].includes(k)) && body.state !== '完了') return '';
   return PROTECTED;
 }
