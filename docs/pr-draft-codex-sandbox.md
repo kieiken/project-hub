@@ -2,14 +2,15 @@
 
 > 狀態：草稿，尚未推送、尚未開 PR。給 kieiken/project-hub 的第一片 adapter PR。
 > 基底：`refs/remotes/origin/main` 9f5f6b5（Project Hub 4.126.95）。
-> 分支：`codex-sandbox-win32`（本機 worktree），程式碼 commit `b2608700`，commit 身分 `kf208016 <66252666+kf208016@users.noreply.github.com>`。
+> 分支：`codex-sandbox-win32`（本機 worktree），程式碼 commit `b2608700`（初版）＋真機驗證後的修正 commit（`:root`、`.git`="deny"、秘密檔 glob 拒讀；與本檔同一批），commit 身分 `kf208016 <66252666+kf208016@users.noreply.github.com>`。
+> 2026-11-03 已在真機（Codex 0.164.0、已做 `codex sandbox setup --elevated`）透過 `WorkspaceSandbox.run()` 實際跑 `codex sandbox`，結果見第 5.2 節；初版的 `":minimal"` 在 0.164.0 的 elevated 後端會被拒絕，已改為 `":root"`。
 > 文末附日文概要，可直接貼進 PR 說明。
 
 ## 1. 這個 PR 做什麼
 
 作者 4.126.95 的 `hub/lib/platform/win32.js` 第 121 行把 `commandSandbox` 固定為 `available: () => false`，所以 `hub/lib/workspace-sandbox.js` 在 Windows 一律以「Windowsでは未対応」拒絕 ChatGPT 子作業的 `hub_run_command`。
 
-這個 PR 只做一件事：在 Windows 平台層補上 `commandSandbox` 的 `available()／profile()／spawn()` 三個合約，用 **Codex CLI 自帶的 `codex sandbox` 子命令**當作 OS 邊界，讓 `WorkspaceSandbox.run()` 在 Windows 可以執行命令。行為規格對齊 Mac 的 `darwin.js`（`sandbox-exec` profile）：只有工作區根目錄可寫、`.git` 不可寫、額外列出的檔案可讀、無網路、命令經 POSIX shell 執行。
+這個 PR 只做一件事：在 Windows 平台層補上 `commandSandbox` 的 `available()／profile()／spawn()` 三個合約，用 **Codex CLI 自帶的 `codex sandbox` 子命令**當作 OS 邊界，讓 `WorkspaceSandbox.run()` 在 Windows 可以執行命令。行為規格對齊 Mac 的 `darwin.js`（`sandbox-exec` profile）：只有工作區根目錄可寫、`.git` 與憑證檔（`.env*`、`*.pem` 等）不可讀寫、額外列出的檔案可讀、無網路、命令經 POSIX shell 執行。
 
 不在這個 PR 裡：Claude／Grok 的隔離執行、瀏覽器登入、憑證 ACL、安裝程式、版本固定與專用副本（Issue #8 的 (b)(c)）、Windows 的 `hub/test/run.cjs` 執行器。
 
@@ -19,11 +20,11 @@
 - D: 分支（windows-browser-mvp，基底 v4.68.2）直接合併到 4.126.95 有 60 檔 330 段衝突，不可行。D: 的 Codex 隔離是為「原生橋接」設計的（app-server `command/exec`、Job supervisor、root pin、版本雜湊），和作者 4.126.x 的 `commandSandbox` 合約（spawn 一個 ChildProcess、串流 stdout／stderr、回傳 exit code）形狀不同。這裡只移植 D: 已在真機驗證過的那條通道：`codex sandbox -C <root> -P <profile> --include-managed-config -c … -- <程式>`（D: `hub/lib/provider-sandbox.js`，PROVIDER-RUNTIME.md 記載「官方 `codex sandbox` 在本機能轉送 stdin／stdout／stderr，退出碼 0；此版 `-P` 為必要參數」）。
 - 不搬 D: 的 Job supervisor（`managed-process.js`、C# job-runner）、root pin、`codex-versions.js` 雜湊白名單、`local-drives.js`：這些是 D: 原生橋接的安全層，作者的平台層已經有自己的 `killTree`（原生 snapshot＋所有權核對）與 `findExecutable`，先沿用作者的機制，把 D: 那些留給後續 PR 討論。
 
-## 3. 改了哪些檔（9 檔，+236／−15）
+## 3. 改了哪些檔（9 檔）
 
 | 檔案 | 改動 |
 | --- | --- |
-| `hub/lib/platform/win32-command-sandbox.js`（新，65 行） | Codex 沙箱 adapter：`create({fs, env, findExecutable, shellCandidates, spawn, execPath})` 回傳 `{available, profile, spawn, codexExecutable, shell}`。 |
+| `hub/lib/platform/win32-command-sandbox.js`（新，72 行） | Codex 沙箱 adapter：`create({fs, env, findExecutable, shellCandidates, spawn, execPath})` 回傳 `{available, profile, spawn, codexExecutable, shell}`。 |
 | `hub/lib/platform/win32.js` | `commandSandbox` 改為延遲載入上面的模組（第一次呼叫才 `require`，`supervisorFiles` 不變，detached supervisor 不會載到它）；`shellCandidates` 提到函式外層讓 adapter 共用。其餘不動。 |
 | `hub/lib/workspace-sandbox.js` | 新增 `kill(child)`：先 `platform.killTree(child,'SIGKILL')`，失敗時改 `child.kill('SIGKILL')`；`run()` 的逾時與 `close` 後清理、`stop()` 都走它。Windows 拒絕訊息改成「WindowsではCodex CLIの隔離実行（codex sandbox）とGit for Windowsが必要です。見つからないため、コマンドを実行しません」。 |
 | `hub/test/platform-win32-command-sandbox.test.js`（新，6 題） | 見第 6 節。 |
@@ -38,12 +39,19 @@
 
   ```
   sandbox -C <root> -P project-hub-command --include-managed-config
-    -c permissions.project-hub-command.filesystem={":minimal"="read","<root>"="write","<root>\.git"="read",<每個 readFile>="read"}
+    -c permissions.project-hub-command.filesystem={":root"="read","<root>"="write","<root>\.git"="deny",
+         "<root>\**\.git"="deny","<root>\**\.env*"="deny","<root>\**\.netrc"="deny","<root>\**\.npmrc"="deny","<root>\**\.pypirc"="deny",
+         "<root>\**\id_rsa*"="deny","<root>\**\id_ed25519*"="deny","<root>\**\id_ecdsa*"="deny","<root>\**\id_dsa*"="deny",
+         "<root>\**\*.pem"="deny","<root>\**\*.key"="deny","<root>\**\*.p12"="deny","<root>\**\*.pfx"="deny",
+         <每個 readFile>="read"}
     -c permissions.project-hub-command.network.enabled=false
     -c windows.sandbox="elevated"
   ```
 
-  在 `root` 底下的 readFile 會被濾掉（在可寫根裡再加 read 會變成唯讀 carve-out，反而限制寫入）。路徑用 `JSON.stringify` 當 TOML basic string（跳脫規則相容）。
+  - `":root"="read"`：Codex 0.164.0 的 elevated 後端只接受這個讀取基底（給 `":minimal"` 會回「elevated Windows sandbox requires effective `:root` read access」，真機實測）。意思是「讀取照沙箱帳號本身的 NTFS ACL」，不是「加開全部讀取」，範圍見第 4 節第 2 點。
+  - `.git`="deny"：真機實測同時擋讀與寫（`cat .git/HEAD`、`echo x > .git/w`、`ls .git` 都 Permission denied），對齊 Mac 的 `(deny file-read* file-write* (subpath root/.git))`；初版的 `"read"` 只擋寫。
+  - 13 條 `<root>\**\<樣式>`="deny"：對應 Mac profile 的兩條 regex（巢狀 `.git`、`.env*`、`.netrc`、`.npmrc`、`.pypirc`、`id_rsa*`／`id_ed25519*`／`id_ecdsa*`／`id_dsa*`、`*.pem`／`*.key`／`*.p12`／`*.pfx`）。Codex 在啟動時展開 glob 並對符合的檔案加拒讀 ACE；真機實測 `.env`、`sub/.env`、`.ENV`、`key.pem`、`sub/CERT.PEM`、`sub/id_rsa`、`sub/nested/.git/HEAD` 都讀不到（NTFS 不分大小寫），兩萬檔的工作區只多 0.2～0.4 秒。清單放在模組常數 `SECRET_GLOBS`。
+  - 在 `root` 底下的 readFile 會被濾掉（在可寫根裡再加 read 會變成唯讀 carve-out，反而限制寫入）。路徑用 `JSON.stringify` 當 TOML basic string（跳脫規則相容），glob 用反斜線分隔也可（真機實測）。
 - `spawn(command, root, profile, spawnProcess)`：驗 command 非空、profile 是上面 `profile()` 產出且 `root` 一致；再確認 codex 與 bash 都在，否則丟 `command_sandbox_unavailable`。實際呼叫：
 
   ```
@@ -60,18 +68,21 @@
 
 ## 4. 已知限制（請審閱者特別看）
 
-1. **需要先做一次 `codex sandbox setup --elevated`**（需系統管理員，一次性）。Codex 0.164.0 的 `windows.sandbox` 可接受 `elevated／unelevated／mxc`；唯讀 carve-out（`.git`="read"）與拒讀規則都要 elevated 後端，unelevated 會回「refusing to run unsandboxed」。沒做 setup 時，codex 會以非 0 結束並在 stderr 說明；Hub 在 spawn 前**無法**偵測 setup 狀態（不執行 codex 就查不到），所以 `available()` 只看檔案存在。結果是：命令「失敗」而不是「拒絕」，ChatGPT 會拿到 exit code 與 stderr。
-2. **秘密檔案的拒讀沒有對齊 Mac**。Mac profile 用 regex 拒絕 `.env*、.netrc、.npmrc、.pypirc、id_rsa*、*.pem／.key／.p12／.pfx` 的讀寫，也拒絕 `.git` 的讀。Codex 的 filesystem permission 是路徑式、無樣式比對；本 PR 只把 `.git` 設成唯讀（寫被擋、讀不擋），其他秘密檔沒有額外規則。Codex 0.164.0 有 `deny` 值（拒讀，需 elevated），可在真機驗證後補 `.git`="deny" 與已知秘密路徑；這裡沿用 D: 真機驗過的 `"read"`。ChatGPT 的檔案工具仍由 `resolveWorkspace` 的 `SECRET` 規則擋住。
-3. **讀取範圍比工作區大**：`":minimal"="read"` 是 Codex 的最小系統讀取集合；D: 的紀錄是「Read access is broader than the task directory」、「networkAccess=false 不是完整的網路邊界」。這和 Mac 允許讀 `/System、/usr、/bin、/sbin、/Library` 的精神一致，但不應宣稱比 Mac 更嚴。
-4. **逾時與停止**：`WorkspaceSandbox` 逾時會 `killTree(codex.exe)`；作者的 win32 `killTree` 只列舉同 SID 的子孫，沙箱內的行程跑在 CodexSandbox 專用帳號（不同 SID），不在列舉內。清理依賴 Codex 自己的 job／cleanup。本次沒有執行 provider CLI，這點**未在真機驗證**。
-5. **沒有版本下限檢查**。D: 在真機驗過 0.154.0 的 `codex sandbox -P`；0.164.0 的二進位字串確認有同樣的旗標與 `permissions.<profile>.filesystem`。更舊的 Codex 不認 `-P` 時會以非 0 結束，不會退回無沙箱執行。本次**沒有**用 Hub 實際啟動 `codex sandbox` 跑過這組 profile（限制：此工作階段不執行 provider CLI）。
-6. `hub/test/gpt-child.test.js` 的真 OS 題（「sandboxは子内だけを書ける…」）只在作者的 macOS 執行器下有意義；在 Windows 改動前後都因 fixture 原因（「GPT子の専用作業用コピーが必要です」）失敗，與本 PR 無關。
-7. `hub/test/run.cjs` 要求 macOS `sandbox-exec`，Windows 上無法用官方執行器；本次用 `node --test --test-force-exit <檔>` 逐檔跑。
-8. **Codex 的安裝版型只認兩種**：PATH 上直接的 `codex.exe`，或 npm 全域的 `codex.cmd`（旁邊有 `node_modules/@openai/codex`）。pnpm／bun／Vite+ 的全域版型、或 `.bat`／`.ps1` 殼，一律視為未安裝（fail closed），不會退回 cmd.exe。
+1. **需要先做一次 `codex sandbox setup --elevated`**（需系統管理員，一次性）。真機（Codex 0.164.0）實測：elevated 後端只接受 `":root"` 讀取基底；`unelevated` 後端做不到唯讀 carve-out 與拒讀（「Restricted read-only access requires the elevated Windows sandbox backend」），而且 Git Bash 在它的受限 token 下根本起不來（`CreateFileMapping … Win32 error 5`）。所以 0.164.0 只有「elevated＋`:root`」這一種可用組合。沒做 setup 時，codex 會以非 0 結束並在 stderr 說明（不會退回無沙箱執行）；Hub 在 spawn 前**無法**偵測 setup 狀態（不執行 codex 就查不到），`available()` 只看檔案存在。結果是：命令「失敗」而不是「拒絕」，ChatGPT 會拿到 exit code 與 stderr。
+2. **讀取範圍比 Mac 寬**。`":root"` 的意思是讀取照沙箱帳號（`CodexSandboxOffline`，屬於 `BUILTIN\Users`／`Authenticated Users`）本身的 NTFS ACL。真機實測：讀得到 `C:\Windows\win.ini`，列得出 `D:\`、`D:\HubTest`、`C:\Program Files`、`C:\Users`；讀不到使用者設定檔根目錄（`C:\Users\<user>`，Permission denied），也讀不到關掉繼承、只給使用者／SYSTEM／Administrators 的資料夾。因此像 `D:\` 這種根目錄預設 ACL 給 `Authenticated Users` 修改權的磁碟，上面其他專案的檔案沙箱**讀得到**（寫不到：elevated 後端用 write-restricted token，寫入要有明確的 `CodexSandboxUsers` ACE）。Mac 只開放 `/System、/usr、/bin、/sbin、/Library`。這個後端無法再收窄，PR 說明要照實寫。`network.enabled=false` 真機實測 `curl https://example.com`、`curl http://1.1.1.1` 都連不上（rc=7）。
+3. **秘密檔案：讀與覆寫已對齊 Mac，刪除沒有**。13 條 glob 拒讀真機實測有效（第 3.1 節）；`echo z > .env` 也被擋（Permission denied）。但 `rm key.pem` **成功**：刪除權來自目錄的 Modify ACE，Codex 的 `deny` 只加拒讀 ACE。Mac 的 `(deny file-write*)` 連 unlink 一起擋。另外 glob 在啟動時展開，命令執行中新建的秘密檔要到下一次執行才被拒讀。ChatGPT 的檔案工具仍由 `resolveWorkspace` 的 `SECRET` 規則擋住。
+4. **Codex 會改工作區的 NTFS ACL，而且不會還原**（真機實測，Codex 的設計）：工作區根目錄加 `CodexSandboxUsers:(OI)(CI)(M)` 並繼承到所有檔案；`.git` 與 glob 命中的檔案加 `CodexSandboxUsers:(DENY)(R)`（目錄再加可繼承的 deny）；每個 readFile 加 `CodexSandboxUsers:(RX)`；沙箱裡建立的檔案擁有者是 `CodexSandboxOffline`（使用者仍可透過繼承的 ACE 存取）。`CODEX_HOME` 底下 codex 會寫 `cap_sid` 與 `tmp\arg0-windows\<隨機>`（正常結束會清掉，被 kill 時留下）。PR 說明與 README 應讓使用者知道隔離執行會動工作區的 ACL。
+5. **逾時只殺得掉 codex.exe，沙箱裡的行程會活到自然結束**（真機實測）：`timeoutMs=3000` 跑 `sleep 120`，`killTree` 在逾時後約 1.7 秒終止 codex.exe，`run()` 解析為 `code: 1, signal: null`（不是 Mac 的 `SIGKILL`）；沙箱裡的 `bash.exe` 消失，但 `sleep.exe`（擁有者 `CodexSandboxOffline`）繼續跑到 120 秒自己結束。Hub 以一般使用者身分無權終止其他帳號的行程。可能的後續：在沙箱內用 coreutils `timeout` 包命令（需要把逾時秒數放進 `commandSandbox` 合約，由作者決定），或等 Codex 提供 job 清理旗標。
+6. **環境變數**：沙箱內 `env` 實測只有 PASSTHROUGH 與固定值，加上 libuv 在 Windows 自動補的 `HOMEDRIVE／HOMEPATH／USERNAME／USERDOMAIN／LOGONSERVER`（取自父行程）與 Codex 自己加的 `GIT_CONFIG_*`（工作區的 `safe.directory`）、`GIT_PAGER／PAGER／LESS`、PATH 前面兩個 codex 目錄。沒有 `HUB_*`、沒有 API key。Git Bash 把 `/tmp` 掛到 `TEMP`＝工作區，所以 `pwd`、`$HOME` 顯示成 `/tmp`（`pwd -W` 才是 Windows 路徑）；`rm -rf /tmp/*` 會清掉工作區，和 Mac `TMPDIR=root` 的性質相同。
+7. **延遲與並行**：每條命令約 1.7～2.1 秒（ACL 佈建），長時間閒置後第一次 13 秒；兩萬檔工作區加 glob 只多 0.2～0.4 秒；同一工作區 3 路並行、不同工作區 2 路並行都正常。
+8. **沒有版本下限檢查**。D: 在真機驗過 0.154.0 的 `codex sandbox -P` 搭 `":minimal"`；本 PR 以 0.164.0 真機驗證，`":root"` 在 0.154.0 上未測。更舊的 Codex 不認 `-P` 時會以非 0 結束，不會退回無沙箱執行。
+9. `hub/test/gpt-child.test.js` 的真 OS 題（「sandboxは子内だけを書ける…」）只在作者的 macOS 執行器下有意義；在 Windows 改動前後都因 fixture 原因（「GPT子の専用作業用コピーが必要です」）失敗，與本 PR 無關。
+10. `hub/test/run.cjs` 要求 macOS `sandbox-exec`，Windows 上無法用官方執行器；本次用 `node --test --test-force-exit <檔>` 逐檔跑。
+11. **Codex 的安裝版型只認兩種**：PATH 上直接的 `codex.exe`，或 npm 全域的 `codex.cmd`（旁邊有 `node_modules/@openai/codex`）。pnpm／bun／Vite+ 的全域版型、或 `.bat`／`.ps1` 殼，一律視為未安裝（fail closed），不會退回 cmd.exe。
 
 ## 5. 怎麼驗證（本次已做）
 
-環境：Windows 11 Pro 10.0.26200、Node v24.15.0、Git for Windows（`C:\Program Files\Git\bin\bash.exe`）、npm 全域 `@openai/codex` 0.164.0（只讀檔案位置與字串，未執行）。`TEMP／TMP` 指到 `D:\HubTest\tmp\codex_sandbox_pr\…`，不碰 4545／4546、真實 `~/.codex`、已安裝的 ProjectHub。
+環境：Windows 11 Pro 10.0.26200、Node v24.15.0、Git for Windows（`C:\Program Files\Git\bin\bash.exe`）、npm 全域 `@openai/codex` 0.164.0（已做 `codex sandbox setup --elevated`；第 5.2 節有實際執行）。`TEMP／TMP` 指到 `D:\HubTest\tmp\codex_sandbox_pr\…`，不碰 4545／4546、已安裝的 ProjectHub；真實 `~/.codex` 只被 codex 自己讀設定與寫 `cap_sid`、`tmp\arg0-windows`。
 
 ```
 cd hub
@@ -84,7 +95,7 @@ node --test --test-force-exit test/gpt-child.test.js
 node --test --test-force-exit test/chatgpt-retired.test.js
 ```
 
-| 測試檔 | 改動前（9f5f6b5） | 改動後（b2608700） | 說明 |
+| 測試檔 | 改動前（9f5f6b5） | 改動後（b2608700；真機修正後重跑前 6 檔數字相同） | 說明 |
 | --- | --- | --- | --- |
 | platform-win32-command-sandbox.test.js（新） | — | 6／6 通過 | 含真機 Git Bash 一題 |
 | platform-win32.test.js | 40／40 | 40／40 | |
@@ -96,27 +107,59 @@ node --test --test-force-exit test/chatgpt-retired.test.js
 
 全套逐檔比對（`D:\HubTest\tmp\codex_sandbox_pr\baseline-p\suite.csv` 對 `after-p\suite.csv`）只有 9 檔不同：1 檔是新測試（6／6）；`text-budget.test.js`（結束碼 124→1）與 `update-isolation-generation.test.js`（3／4→3／3）改動後較好；其餘 6 檔（`idea-erasure`、`idea-lifecycle`、`maintenance`、`queue-retreat`、`task-continue`、`task-history-auto`）兩邊結束碼都是 124（180 秒逾時被截斷），題數差異只是逾時前跑到哪裡。把其中看起來「變差」的 4 檔在兩棵副本樹各自**單獨**重跑（300 秒上限、不與其他檔搶 CPU）：`task-continue` 兩邊都是 20 題 16 過 4 失敗、`task-history-auto` 兩邊都是 25 題 21 過 4 失敗、`queue-retreat` 兩邊都是 27 題 12 過 15 失敗（仍逾時）、`idea-erasure` 兩邊都逾時而改動後反而多跑完 13 題。失敗原因都是同一個與本 PR 無關的訊息「Windows補助の確認を実行できません」。通過數 2425→2414 的差（−11）就是 `task-continue`（−14）與 `task-history-auto`（−20）這兩檔在平行跑時被截斷造成的，單獨重跑即消失。結論：沒有可歸因於本次改動的退步。Windows 上大量失敗是因為沒有作者的 macOS 執行器與 Mac 專屬原生功能，改動前就是如此。
 
-另外在 Git Bash 上實測：`bash.exe -c "cd 'D:\…\it'\''s here' && printf hello > local.txt; cat local.txt"` 搭配上面的最小環境可正確執行，`HOME` 落在工作區根目錄，路徑含單引號也正確（這就是 `chatgpt.js` 包命令的方式）。
+真機修正（`:root`、`.git`="deny"、glob）只改了 profile 常數與測試期望，上表前 6 檔重跑一次（log 在 `D:\HubTest\tmp\codex_sandbox_pr\after2\`）數字完全相同；全套沒有再跑第二次。
 
-### 5.1 送 PR 前建議 JAY 在真機補做（本次未做）
+另外在 Git Bash 上實測：`bash.exe -c "cd 'D:\…\it'\''s here' && printf hello > local.txt; cat local.txt"` 搭配上面的最小環境可正確執行，`HOME` 落在工作區根目錄，路徑含單引號也正確（這就是 `chatgpt.js` 包命令的方式）。這題改用 `pwd -W` 取 Windows 路徑來比對：當測試暫存目錄正好是 MSYS 的 `/tmp` 掛載點時，`$HOME` 會顯示成 `/tmp/…`，原本的字串比對在不改 `TEMP` 的機器上會誤判失敗。
 
-1. 已做過 `codex sandbox setup --elevated` 的機器上，啟動 Hub（開發版、非安裝版），建一個 ChatGPT 子作業，透過 `hub_run_command` 跑：
-   - `printf hello > local.txt; cat local.txt` → exit 0、輸出 hello、檔案在子作業工作區。
-   - 寫到父作業、本體、`.git` 底下 → exit 非 0、檔案沒變。
-   - `node -e 'require("net").createConnection({host:"127.0.0.1",port:1})…'` → EPERM 或連線失敗。
-2. 跑一個 `sleep 200` 讓 `WorkspaceSandbox` 逾時（預設 120 秒），確認 codex.exe 與沙箱內 bash 都消失。
+### 5.1 送 PR 前建議 JAY 在真機補做（本次未做的部分）
+
+1. 啟動 Hub（開發版、非安裝版），建一個 ChatGPT 子作業，透過 `hub_run_command` 實際走 HTTP 路由與 ChatGPT 工具呼叫跑一次（本次只直接呼叫 `WorkspaceSandbox.run()`，沒有經過 Hub 伺服器與 ChatGPT）。
+2. 在一台**沒有**做 `codex sandbox setup --elevated` 的機器上跑一次，記下 codex 非 0 結束時的 stderr 原文，放進 PR 說明。
 3. 在 Mac 上跑作者的 `node hub/test/run.cjs`，確認新測試檔在 macOS 下通過（6 題中 2 題標 Windows only 會 skip）。
+4. 若作者在意 0.154.0：用 0.154.0 的 codex.exe 跑第 5.2 節的基本命令，確認 `":root"` 也被接受。
+
+### 5.2 真機驗證（2026-11-03，已做）
+
+直接呼叫 `codex sandbox`（探測後端與語法）：
+
+| 組合 | 結果 |
+| --- | --- |
+| elevated＋`":minimal"="read"`（初版） | 失敗：「elevated Windows sandbox requires effective `:root` read access」；加 D: 的 `features.windows_sandbox_service=false`、`windows.allow_mxc=false` 也一樣 |
+| elevated＋`":root"="read"` | 成功，以 `CodexSandboxOffline` 執行 |
+| unelevated＋`":minimal"` | 失敗：「Restricted read-only access requires the elevated Windows sandbox backend」 |
+| unelevated＋`":root"` | bash.exe 起不來：`CreateFileMapping … Win32 error 5` |
+| `.git`="deny" | 讀、寫、列目錄都 Permission denied |
+| `<root>\**\.env*`、`*.pem`、`id_rsa*`、`**\.git`（正斜線或反斜線分隔） | 命中的檔案都 Permission denied；`.ENV`、`CERT.PEM` 也命中；巢狀 `.git` 也命中 |
+| readFile="read"（放在關掉繼承、沙箱原本讀不到的資料夾） | 無授權讀不到；授權後讀得到、寫不進（Permission denied）；檔案多一條 `CodexSandboxUsers:(RX)` |
+
+經 `hub/lib/workspace-sandbox.js` 的 `WorkspaceSandbox.run()`＋真實 win32 平台層（也就是 Hub 實際走的路徑，只差沒經過 HTTP 與 ChatGPT）：
+
+| 項目 | 命令 | 結果 |
+| --- | --- | --- |
+| Hub 形狀的命令 | `cd '<root>' && ls -la; pwd; pwd -W; whoami; git status` | exit 0；`whoami`＝`CodexSandboxOffline`；`pwd`＝`/tmp`、`pwd -W`＝工作區；`git status` 因 `.git` 拒讀而失敗（同 Mac） |
+| 寫入邊界 | 工作區內新檔、`.git\w`、`..\o.txt`、`C:\Users\Public\…`、`D:\…` | 工作區內 rc=0；其餘 Permission denied |
+| 秘密檔 | `.env`、`key.pem`、`.git\HEAD`、`sub\nested\.git\HEAD`、`sub\id_rsa`、`sub\CERT.PEM`、`.ENV` | 全部 Permission denied；`hello.txt` 正常；`echo z > .env` 被擋；`rm key.pem` 成功（第 4 節第 3 點） |
+| 網路 | `curl -m 5 https://example.com`、`curl http://1.1.1.1` | 都 rc=7（連不上） |
+| 環境 | `env` | 只有 PASSTHROUGH、固定值、libuv 補的使用者變數、Codex 加的 `GIT_CONFIG_*`／`PAGER`；無 `HUB_*`、無 key |
+| 輸出上限 | 200 KB base64 | `truncated: true`，stdout 截在 64 KB |
+| 結束碼與 stderr | `echo out; echo err >&2; exit 7` | `code: 7`，stdout／stderr 分開 |
+| 逾時 | `timeoutMs=3000` 跑 `sleep 120` | 4.7 秒後解析 `code: 1, signal: null`；codex.exe 與沙箱 bash 消失；`sleep.exe` 留到 120 秒自然結束（第 4 節第 5 點） |
+| 並行 | 同一工作區 3 路、不同工作區 2 路 | 都正常，各約 3 秒／2 秒 |
+| 延遲 | 新工作區連跑 3 次 | 1.85／1.67／1.78 秒 |
+| 兩萬檔工作區 | 無 glob 對 13 條 glob | 1.66 秒對 1.87～2.06 秒 |
+
+ACL 觀察（真機）：工作區根 `CodexSandboxUsers:(OI)(CI)(M)`；`.git` 與 glob 命中檔 `(DENY)(R)`；readFile `(RX)`；沙箱建立的檔案擁有者 `CodexSandboxOffline`；`D:\` 根目錄預設 ACL（`Authenticated Users:(M)`、`Users:(RX)` 可繼承）決定了沙箱讀得到 D: 上其他預設 ACL 的資料夾。
 
 ## 6. 新測試檔涵蓋
 
 `hub/test/platform-win32-command-sandbox.test.js`（全部用 fixture fs／env，不碰真實磁碟與原生呼叫；前 4 題在 macOS 也會跑）：
 
 1. 沒有 Codex／沒有 bash／`.cmd` 殼但沒有 vendored 執行檔／manifest 不是 `@openai/codex`／`.bat` 殼 → `available()` 為 false，`spawn()` 丟 `command_sandbox_unavailable`；兩者齊備 → true；hoisted 版型與 PATH 上直接的 `codex.exe` 都能解析。
-2. `profile()` 的完整 argv（含 TOML 字串逐字比對）、readFiles 去重與濾掉工作區內的路徑、凍結、各種壞路徑（相對、UNC、ADS、`..`、引號、換行、NUL、POSIX、非字串）都丟 `command_sandbox_path`。
+2. `profile()` 的完整 argv（含 TOML 字串逐字比對：`":root"`、`.git`="deny"、13 條 glob deny、readFile）、`SECRET_GLOBS` 凍結且內容固定、readFiles 去重與濾掉工作區內的路徑、凍結、各種壞路徑（相對、UNC、ADS、`..`、引號、換行、NUL、POSIX、非字串）都丟 `command_sandbox_path`。
 3. `spawn()`：檔案是 vendored codex.exe、argv 尾端是 `-- bash.exe -c <command>`、cwd／windowsHide／stdio／無 detached／無 shell、環境變數鍵集合逐一比對、`HOME／TEMP／TMP` 是工作區、PATH 三段、任何 `private` 值都沒漏進去；空命令、含 NUL、profile 與 root 不符、profile 不是物件 → 各自的錯誤碼。
 4. `WorkspaceSandbox` 在 `killTree` 丟錯時仍能：正常結束解析結果、逾時時 `child.kill('SIGKILL')` 收尾、`stop()` 不丟。
 5.（Windows only）用真實暫存目錄當工作區，整條 `WorkspaceSandbox → win32 adapter → spawn fixture` 走一遍。
-6.（Windows only，且需 Codex 與 bash 都在，否則 skip）不經 Codex，直接用 argv 尾端的 `bash.exe -c <command>` 與最小環境真跑一次。
+6.（Windows only，且需 Codex 與 bash 都在，否則 skip）不經 Codex，直接用 argv 尾端的 `bash.exe -c <command>` 與最小環境真跑一次；`HOME` 用 `pwd -W` 取 Windows 路徑比對，不受 MSYS `/tmp` 掛載點影響。
 
 ## 7. 日文概要（PR 本文用）
 
@@ -124,11 +167,11 @@ node --test --test-force-exit test/chatgpt-retired.test.js
 
 **概要**
 
-4.126.95 の `hub/lib/platform/win32.js` は `commandSandbox` を `available: () => false` に固定しており、`WorkspaceSandbox.run()` は Windows で常に「Windowsでは未対応」を返します。この PR は Windows プラットフォーム層に `commandSandbox` の `available()/profile()/spawn()` を実装し、OS 境界として Codex CLI 付属の `codex sandbox` サブコマンド（elevated 方式）を使います。`darwin.js` の `sandbox-exec` プロファイルと同じ方針で、作業フォルダだけ書込み可、`.git` は読み取り専用、指定ファイルは読み取り可、ネットワーク無効、コマンドは Git for Windows の `bash.exe -c` で実行します。Issue #8 の (a) の最小の一片で、Claude／Grok・ブラウザログイン・資格情報 ACL・インストーラ・バージョン固定は含みません。
+4.126.95 の `hub/lib/platform/win32.js` は `commandSandbox` を `available: () => false` に固定しており、`WorkspaceSandbox.run()` は Windows で常に「Windowsでは未対応」を返します。この PR は Windows プラットフォーム層に `commandSandbox` の `available()/profile()/spawn()` を実装し、OS 境界として Codex CLI 付属の `codex sandbox` サブコマンド（elevated 方式）を使います。`darwin.js` の `sandbox-exec` プロファイルと同じ方針で、作業フォルダだけ書込み可、`.git` と秘密ファイル（`.env*`、`*.pem` など）は読み書き不可、指定ファイルは読み取り可、ネットワーク無効、コマンドは Git for Windows の `bash.exe -c` で実行します。Windows 11 x64 の実機（Codex 0.164.0、`codex sandbox setup --elevated` 済み）で `WorkspaceSandbox.run()` から実際に動作確認しました。Issue #8 の (a) の最小の一片で、Claude／Grok・ブラウザログイン・資格情報 ACL・インストーラ・バージョン固定は含みません。
 
 **変更点**
 
-- `hub/lib/platform/win32-command-sandbox.js`（新規）：`findExecutable('codex')` で見つかった `codex.exe`、または npm の `codex.cmd` から vendored の `codex.exe` を解決（cmd.exe は経由しない）。プロファイルは固定の `-c permissions.project-hub-command.filesystem={…}`、`network.enabled=false`、`windows.sandbox="elevated"`。環境変数は最小限（Hub 設定・AI 資格情報は渡さない）、`HOME/TEMP/TMP` は作業フォルダ。
+- `hub/lib/platform/win32-command-sandbox.js`（新規）：`findExecutable('codex')` で見つかった `codex.exe`、または npm の `codex.cmd` から vendored の `codex.exe` を解決（cmd.exe は経由しない）。プロファイルは固定の `-c permissions.project-hub-command.filesystem={…}`（読み取り基底 `":root"`、作業フォルダ `write`、`.git` と秘密ファイルの glob は `deny`、指定ファイルは `read`）、`network.enabled=false`、`windows.sandbox="elevated"`。環境変数は最小限（Hub 設定・AI 資格情報は渡さない）、`HOME/TEMP/TMP` は作業フォルダ。
 - `hub/lib/platform/win32.js`：`commandSandbox` を初回利用時に読み込み（`supervisorFiles` は不変）。`shellCandidates` を共用化。
 - `hub/lib/workspace-sandbox.js`：Windows の `killTree` は終了済みの子を拒否するため、`close` 後と停止時は `killTree` 失敗時に `child.kill('SIGKILL')` へ退避（`chatgpt.js` の `run()` と同じ形）。Windows の拒否文言を前提条件の説明に変更。
 - テスト：`hub/test/platform-win32-command-sandbox.test.js`（6 件）を追加。`platform-win32.test.js` と `platform-preparation.test.js` の Windows 拒否テストはホストの PATH に依存しないよう fixture 化。
@@ -136,11 +179,13 @@ node --test --test-force-exit test/chatgpt-retired.test.js
 
 **既知の制限**
 
-- `codex sandbox setup --elevated` を一度実行済みであることが前提。未設定の場合 Codex は非 0 で終了し（unsandboxed では実行しない）、Hub は事前に検出できません。
-- Mac プロファイルの秘密ファイル拒否（`.env`、`*.pem` など）は Codex のパス単位の権限では表現できず、本 PR では `.git` の読み取り専用のみ。0.164.0 の `deny` は実機確認後に追加候補。
-- 読み取り範囲は `:minimal` で作業フォルダより広く、`network.enabled=false` は完全なネットワーク境界ではありません。
-- タイムアウト時の停止は直接の子（codex.exe）に対して行い、サンドボックス内プロセスの後始末は Codex 側に依存（実機未確認）。
+- `codex sandbox setup --elevated` を一度実行済みであることが前提。Codex 0.164.0 の elevated バックエンドは読み取り基底に `":root"` しか受け付けず（`":minimal"` は拒否）、unelevated では読み取り専用の切り出しも Git Bash の起動もできません。未設定の場合 Codex は非 0 で終了し（unsandboxed では実行しない）、Hub は事前に検出できません。
+- 読み取り範囲は Mac より広く、サンドボックス用アカウントの NTFS ACL に従います（ユーザープロファイル直下は読めませんが、`D:\` のように既定 ACL が `Authenticated Users` に権限を与えるドライブ上の他フォルダは読めます）。`network.enabled=false` は実機で `curl` が接続できないことを確認済み。
+- 秘密ファイルは読み取りと上書きを拒否しますが、削除（`rm`）はフォルダの Modify 権限で通ります。glob は起動時に展開されるため、実行中に作られたファイルは次回から対象になります。
+- Codex はプロファイルを NTFS ACL の変更で実現し、実行後も元に戻しません（作業フォルダに `CodexSandboxUsers` の Modify、`.git` と秘密ファイルに deny、指定ファイルに RX）。サンドボックス内で作られたファイルの所有者は `CodexSandboxOffline` です。
+- タイムアウト時に Hub が止められるのは直接の子（codex.exe）だけで、サンドボックス内の子プロセス（例：`sleep`）は自然終了まで残ります（実機確認済み）。`run()` の結果は `code: 1, signal: null` になります。
+- 1 コマンドあたり約 1.7～2.1 秒のオーバーヘッド（ACL 設定）があります。
 
 **確認**
 
-Windows 11 x64 / Node 24 で `platform-win32.test.js` 40/40、新規 6/6、`platform.test.js`・`platform-preparation.test.js`・`gpt-child.test.js`・`chatgpt-retired.test.js` は変更前後で同じ結果（失敗は Mac 専用または Windows の symlink 権限によるもの）。`hub/test` 全体の変更前後の件数は本文の表を参照。実機での Codex 実行（setup 済み環境での書込み・ネットワーク・タイムアウト確認）は PR 前に実施予定。
+Windows 11 x64 / Node 24 で `platform-win32.test.js` 40/40、新規 6/6、`platform.test.js`・`platform-preparation.test.js`・`gpt-child.test.js`・`chatgpt-retired.test.js` は変更前後で同じ結果（失敗は Mac 専用または Windows の symlink 権限によるもの）。`hub/test` 全体の変更前後の件数は本文の表を参照。実機（Codex 0.164.0、setup 済み）では `WorkspaceSandbox.run()` 経由で、作業フォルダ内の書込み・外部への書込み拒否・`.git` と秘密ファイルの拒否・ネットワーク遮断・64 KB の出力上限・終了コード・タイムアウト・並列実行を確認しました（本文 5.2 節）。Hub の HTTP 経路と ChatGPT からの呼び出しを通した確認は PR 前に実施予定。

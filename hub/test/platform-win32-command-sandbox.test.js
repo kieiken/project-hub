@@ -9,7 +9,7 @@ const { spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { create } = require('../lib/platform/win32');
-const { PROFILE, PASSTHROUGH } = require('../lib/platform/win32-command-sandbox');
+const { PROFILE, PASSTHROUGH, SECRET_GLOBS } = require('../lib/platform/win32-command-sandbox');
 const { WorkspaceSandbox } = require('../lib/workspace-sandbox');
 const NPM = 'C:\\Users\\fixture\\AppData\\Roaming\\npm', SHIM = NPM + '\\codex.cmd', PACKAGE = path.win32.join(NPM, 'node_modules', '@openai', 'codex');
 const MANIFEST = path.win32.join(PACKAGE, 'package.json'), BASH = 'C:\\Program Files\\Git\\bin\\bash.exe', ROOT = 'C:\\Users\\fixture\\Work\\P\\child';
@@ -52,14 +52,15 @@ test('Windows command isolation needs the vendored Codex CLI and Git for Windows
   assert.equal(adapter(new Set(['C:\\Tools\\codex.exe', BASH])).codexExecutable(), 'C:\\Tools\\codex.exe', 'native codex.exe on PATH is used as found');
 });
 
-test('profile grants one writable workspace, a read-only .git, outside read files and no network', () => {
+test('profile grants one writable workspace, denies .git and credential files, grants outside read files and no network', () => {
   const p = installed();
   const profile = p.profile(ROOT + '\\', ['C:\\Users\\fixture\\read.txt', ROOT + '\\inside.txt', ROOT, 'C:\\Users\\fixture\\read.txt']);
   assert.equal(profile.root, ROOT); assert.deepEqual([...profile.readFiles], ['C:\\Users\\fixture\\read.txt']);
   assert.deepEqual([...profile.args], ['sandbox', '-C', ROOT, '-P', PROFILE, '--include-managed-config',
-    '-c', `permissions.${PROFILE}.filesystem={":minimal"="read","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child"="write","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\.git"="read","C:\\\\Users\\\\fixture\\\\read.txt"="read"}`,
+    '-c', `permissions.${PROFILE}.filesystem={":root"="read","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child"="write","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\.git"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\.git"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\.env*"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\.netrc"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\.npmrc"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\.pypirc"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\id_rsa*"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\id_ed25519*"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\id_ecdsa*"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\id_dsa*"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\*.pem"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\*.key"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\*.p12"="deny","C:\\\\Users\\\\fixture\\\\Work\\\\P\\\\child\\\\**\\\\*.pfx"="deny","C:\\\\Users\\\\fixture\\\\read.txt"="read"}`,
     '-c', `permissions.${PROFILE}.network.enabled=false`, '-c', 'windows.sandbox="elevated"']);
-  assert.ok(Object.isFrozen(profile) && Object.isFrozen(profile.args) && Object.isFrozen(profile.readFiles));
+  assert.ok(Object.isFrozen(profile) && Object.isFrozen(profile.args) && Object.isFrozen(profile.readFiles) && Object.isFrozen(SECRET_GLOBS));
+  assert.deepEqual([...SECRET_GLOBS], ['.git', '.env*', '.netrc', '.npmrc', '.pypirc', 'id_rsa*', 'id_ed25519*', 'id_ecdsa*', 'id_dsa*', '*.pem', '*.key', '*.p12', '*.pfx']);
   assert.deepEqual([...p.profile(ROOT).args], [...p.profile(ROOT, []).args]);
   for (const root of ['', 'relative', '\\\\server\\share\\work', 'C:\\work:stream', 'C:\\work\\..\\other', 'C:\\work"', 'C:\\work\nx', 'C:\\work\0', '/Users/work', 42, null]) {
     assert.throws(() => p.profile(root, []), { code: 'command_sandbox_path' }, JSON.stringify(root));
@@ -129,13 +130,13 @@ test('Git for Windows runs the ChatGPT command wrapper with the sandbox shell en
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-win32-shell-')), calls = [];
   try {
     const cwd = path.join(root, "it's here"); fs.mkdirSync(cwd);
-    const command = 'cd ' + "'" + cwd.replaceAll("'", "'\\''") + "'" + ' && printf hello > local.txt; cat local.txt; printf "%s" "$HOME" > "$HOME/home.txt"';
+    const command = 'cd ' + "'" + cwd.replaceAll("'", "'\\''") + "'" + ' && printf hello > local.txt; cat local.txt; (cd "$HOME" && pwd -W) > "$HOME/home.txt"';
     p.spawn(command, root, p.profile(root, []), (file, args, options) => { calls.push({ file, args, options }); return fakeChild(); });
     const [, bash, flag, tail] = calls[0].args.slice(-4);
     assert.equal(flag, '-c'); assert.equal(tail, command); assert.match(bash, /\\bash\.exe$/);
     const result = spawnSync(bash, [flag, tail], { cwd: calls[0].options.cwd, env: calls[0].options.env, encoding: 'utf8', timeout: 20000, windowsHide: true });
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, 'hello');
     assert.equal(fs.readFileSync(path.join(cwd, 'local.txt'), 'utf8'), 'hello');
-    assert.equal(fs.readFileSync(path.join(root, 'home.txt'), 'utf8').replace(/\//g, '\\').toLowerCase(), ('\\' + root.replace(/^([a-z]):/i, '$1')).toLowerCase());
+    assert.equal(fs.readFileSync(path.join(root, 'home.txt'), 'utf8').trim().replace(/\//g, '\\').toLowerCase(), root.toLowerCase());
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

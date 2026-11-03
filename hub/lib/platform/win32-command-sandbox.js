@@ -2,13 +2,19 @@
 // Windows command isolation through the Codex CLI sandbox (`codex sandbox`).
 // Hub supplies the workspace root, extra read grants and the POSIX command;
 // Codex supplies the OS boundary: a dedicated sandbox account, writes limited
-// to the workspace root, a read-only .git and no network. This adapter never
-// decides permission policy, never runs a command outside the sandbox and
-// never executes Codex to learn its version. A missing or unsupported Codex
-// fails closed: no spawn, or a non-zero exit from Codex itself.
+// to the workspace root, no network, and no access to .git or credential
+// files, as in the Mac profile. Other reads follow the sandbox account's own
+// ACLs: the elevated backend accepts no narrower read base than ":root".
+// This adapter never decides permission policy beyond that profile, never
+// runs a command outside the sandbox and never executes Codex to learn its
+// version. A missing or unsupported Codex fails closed: no spawn, or a
+// non-zero exit from Codex itself.
 const path = require('node:path').win32;
 const PROFILE = 'project-hub-command';
 const TARGET = 'x86_64-pc-windows-msvc';
+// Kept out of every sandboxed command, as in the Mac profile: nested
+// repositories and credential files anywhere under the workspace.
+const SECRET_GLOBS = Object.freeze(['.git', '.env*', '.netrc', '.npmrc', '.pypirc', 'id_rsa*', 'id_ed25519*', 'id_ecdsa*', 'id_dsa*', '*.pem', '*.key', '*.p12', '*.pfx']);
 // Windows system locations plus the Codex home selection. Hub settings,
 // account variables and AI credentials never reach the sandboxed shell.
 const PASSTHROUGH = Object.freeze(['SystemRoot', 'SystemDrive', 'windir', 'ComSpec', 'PATHEXT', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
@@ -45,7 +51,8 @@ function create({ fs, env, findExecutable, shellCandidates, spawn = require('nod
     // A grant inside the writable root would become a read-only carve-out.
     const reads = [...new Set(readFiles.map(file => local(file, '読み取り許可')))].filter(file => !inside(workspace, file));
     const quote = JSON.stringify; // JSON escapes are valid TOML basic-string escapes
-    const filesystem = ['":minimal"="read"', quote(workspace) + '="write"', quote(path.join(workspace, '.git')) + '="read"', ...reads.map(file => quote(file) + '="read"')];
+    const filesystem = ['":root"="read"', quote(workspace) + '="write"', quote(path.join(workspace, '.git')) + '="deny"',
+      ...SECRET_GLOBS.map(name => quote(path.join(workspace, '**', name)) + '="deny"'), ...reads.map(file => quote(file) + '="read"')];
     return Object.freeze({ root: workspace, readFiles: Object.freeze(reads), args: Object.freeze(['sandbox', '-C', workspace, '-P', PROFILE, '--include-managed-config',
       '-c', `permissions.${PROFILE}.filesystem={${filesystem.join(',')}}`, '-c', `permissions.${PROFILE}.network.enabled=false`, '-c', 'windows.sandbox="elevated"']) });
   }
@@ -62,4 +69,4 @@ function create({ fs, env, findExecutable, shellCandidates, spawn = require('nod
   }
   return Object.freeze({ available, profile, spawn: spawnSandboxed, codexExecutable, shell });
 }
-module.exports = { create, PROFILE, PASSTHROUGH };
+module.exports = { create, PROFILE, PASSTHROUGH, SECRET_GLOBS };

@@ -53,7 +53,7 @@ bash hub/setup.sh
 
 Windows 11 x64 向けに、ブラウザで開く方法と、WebView2 を使う未署名の専用窓を用意しています。準備と起動の手順は [Windows 専用窓の案内](hub/app/windows/README.md) を読んでください。準備済みのフォルダでは `hub/start-window.cmd` で専用窓、`hub/start.cmd` でブラウザ版を開きます。普通の権限で使い、管理者として起動しないでください。Mac 用の `setup.sh` は使いません。
 
-Windows 11 x64 向けの正式版を [リリースページ](https://github.com/kieiken/project-hub/releases) で配布しています。発行者の署名がないため、初回に Windows の警告が出る場合があります。アプリ内の自動更新は、アプリ内の処理だけを入れ替えます。Mac だけで使える機能（PDF の読み取りなど）もあります。隔離実行は、Windows では Codex CLI の sandbox（`codex sandbox setup --elevated` を済ませたもの）と Git for Windows がある場合だけ使えます。無い場合はコマンドを実行しません。
+Windows 11 x64 向けの正式版を [リリースページ](https://github.com/kieiken/project-hub/releases) で配布しています。発行者の署名がないため、初回に Windows の警告が出る場合があります。アプリ内の自動更新は、アプリ内の処理だけを入れ替えます。Mac だけで使える機能（PDF の読み取りなど）もあります。隔離実行は、Windows では Codex CLI の sandbox（`codex sandbox setup --elevated` を済ませたもの）と Git for Windows がある場合だけ使えます。無い場合はコマンドを実行しません。隔離実行は Codex の仕組みにより、対象フォルダの NTFS アクセス権（ACL）にサンドボックス用アカウントの項目を追加し、実行後も残します。
 
 保存先は固定のローカル NTFS です。ファイルの書き込み確定と同じドライブ内の置き換えを使うため、管理者権限は不要です。ただし、ファイル名の変更や削除の直後に停電した時の確実さは、ドライブ全体の書き込み確定を使う以前の方式より弱くなる可能性があります。
 
