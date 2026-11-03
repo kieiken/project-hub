@@ -8,7 +8,7 @@ Windows 11 x64 / Node.js 22以上 / 標準位置のGit for Windows / WebView2 Ev
 
 Windowsの保存は、固定のローカルNTFSと再解析点のない保存先を確認し、ファイルをFlushFileBuffersで確定してからMoveFileExW(REPLACE_EXISTING|WRITE_THROUGH)で同じボリューム内の名前変更を行います。従来のボリューム全体への管理者用flushは使いません。共通のsyncDirectory/withDirectorySyncのWindows実装は保存先の同一性検査であり、ディレクトリ内容の永続化を保証しません。ファイル名の変更・リンク・削除の直後の停電に対する確実さは、従来より弱くなり得ます。本人が2026-10-19に承認したWindows限定の境界です。Mac/Linuxは従来どおりです。失敗は成功に読み替えません。
 
-内部移動は起動した127.0.0.1の同じ番号だけです。利用者が開く外部HTTP/HTTPSは通常のブラウザへ渡します。外部フレーム・外部リソース・権限要求・ダウンロード・ホストオブジェクト・WebMessage・開発者ツールは拒否/無効です。ファイル入力と貼り付けは表示部品の標準機能です。Mac専用の操作は移植しません。利用権保管は既存のCredential Manager/DPAPI・SQLite実装を保持し、本番の購入受付は準備中です。隔離実行のWindows未対応は既存のままです。自動更新の実装候補と未確認範囲は後述します。
+内部移動は起動した127.0.0.1の同じ番号だけです。利用者が開く外部HTTP/HTTPSは通常のブラウザへ渡します。外部フレーム・外部リソース・権限要求・ダウンロード・ホストオブジェクト・WebMessage・開発者ツールは拒否/無効です。ファイル入力と貼り付けは表示部品の標準機能です。Mac専用の操作は移植しません。利用権保管は既存のCredential Manager/DPAPI・SQLite実装を保持し、本番の購入受付は準備中です。隔離実行はCodex CLIのsandbox（`codex sandbox`、elevated方式の初期設定済み）とGit for Windowsのbash.exeを使います。無い場合は従来どおりコマンドを拒否します。自動更新の実装候補と未確認範囲は後述します。
 
 SDKの3 DLLは公式NuGetの固定版。`vendor/webview2/1.0.4258.31/manifest.json`に出自とSHA256、同じ場所に許諾原文があります。Runtimeは同梱しません。専用窓と表示部品のキャッシュは現在の利用者だけのACLにします。秘密や本体データの削除は行いません。
 

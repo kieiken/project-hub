@@ -109,16 +109,23 @@ function create(options = {}) {
     return path.normalize(value);
   }
   const trashDir = (home = os.homedir()) => path.join(home, '.ProjectHubTrash');
+  // Existing command callers use POSIX -lc. Use Git Bash, never WSL or cmd
+  // with incompatible switches. Git for Windows is an explicit prerequisite.
+  const shellCandidates = () => [path.join(env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe')];
+  // Command isolation runs through the Codex CLI sandbox. It loads on first
+  // use: the detached supervisor copies supervisorFiles only and never runs it.
+  let sandbox;
+  const box = () => sandbox || (sandbox = require('./win32-command-sandbox').create({ fs: io, env, findExecutable, shellCandidates, spawn: options.spawn, execPath: options.execPath }));
+  const commandSandbox = Object.freeze({ available: () => box().available(), profile: (root, readFiles) => box().profile(root, readFiles),
+    spawn: (command, root, profile, spawnProcess) => box().spawn(command, root, profile, spawnProcess) });
   return { ...base, name: 'win32', supervisorFiles: Object.freeze(['darwin.js', 'persistence.js', 'win32.js', 'win32-native.js', 'cache-guard.js', 'cache-guard-worker.js', 'file-io.js']),
     openTerminal: async () => unavailable(), focusTerminal: async () => unavailable(),
     openPath: (p, dry) => desktop('open', p, dry), revealPath: (p, dry) => desktop('reveal', p, dry), openUrl: (url, dry) => desktop('url', url, dry), pickFolder,
     processSnapshot, processOwner, currentProcessOwner, processBirth, listProcesses: async () => processSnapshot(), processCwd: async () => new Map(), killTree,
     isExternalTerminal: () => false, findExecutable, fixPtyHelper() {}, persistence,
-    // Existing command callers use POSIX -lc. Use Git Bash, never WSL or cmd
-    // with incompatible switches. Git for Windows is an explicit prerequisite.
-    shellCandidates: () => [path.join(env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe')],
+    shellCandidates,
     trashDir, trashRootFor: (source, configured) => path.resolve(configured || env.HUB_TRASH || trashDir()),
-    commandSandbox: { available: () => false, profile: unavailable, spawn: unavailable },
+    commandSandbox,
     secretStore, machineHint, documentsDirectory,
     // Read-only path/NTFS identity validation, NOT a directory durability API.
     // LicenseStore obtains durability from SQLite WAL + synchronous FULL.
