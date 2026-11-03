@@ -102,6 +102,12 @@ function create(options = {}) {
     if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value)) throw Error('machine_hint_unavailable');
     return value;
   }
+  function documentsDirectory() {
+    let value;
+    try { value = native.call('documents'); } catch { throw Error('documents_directory_unavailable'); }
+    if (typeof value !== 'string' || !path.isAbsolute(value) || !/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))/i.test(value) || /[\0\r\n]/.test(value)) throw Error('documents_directory_unavailable');
+    return path.normalize(value);
+  }
   const trashDir = (home = os.homedir()) => path.join(home, '.ProjectHubTrash');
   return { ...base, name: 'win32', supervisorFiles: Object.freeze(['darwin.js', 'persistence.js', 'win32.js', 'win32-native.js', 'cache-guard.js', 'cache-guard-worker.js', 'file-io.js']),
     openTerminal: async () => unavailable(), focusTerminal: async () => unavailable(),
@@ -113,7 +119,7 @@ function create(options = {}) {
     shellCandidates: () => [path.join(env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe')],
     trashDir, trashRootFor: (source, configured) => path.resolve(configured || env.HUB_TRASH || trashDir()),
     commandSandbox: { available: () => false, profile: unavailable, spawn: unavailable },
-    secretStore, machineHint,
+    secretStore, machineHint, documentsDirectory,
     // Read-only path/NTFS identity validation, NOT a directory durability API.
     // LicenseStore obtains durability from SQLite WAL + synchronous FULL.
     licenseDirectory: (dir, expected) => native.call('license-directory', { path: dir, expected }),

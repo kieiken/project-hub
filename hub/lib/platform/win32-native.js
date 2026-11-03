@@ -290,6 +290,7 @@ public static class HubNativeProgram {
       id=(string)r["id"]; if(String.IsNullOrEmpty(id)) throw new Exception("request_id_missing");
       object value;
       switch((string)r["action"]) {
+        case "documents": value=Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments,Environment.SpecialFolderOption.DoNotVerify); break;
         case "snapshot": value=HubWindows.Snapshot(); break;
         case "stop":
           var row=json.ConvertToType<HubWindows.Row>(r["row"]);

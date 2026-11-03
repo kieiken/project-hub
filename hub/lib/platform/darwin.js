@@ -300,6 +300,23 @@ function pickFolder(prompt, onSelect) {
   // Legacy HTTP selection returns before the dialog closes.
   return onSelect ? select(onSelect) : new Promise(select);
 }
+// Resolve the user-domain location through the OS, including relocated homes.
+// Looking up the URL does not create Documents or request access to its contents.
+const DOCUMENTS_SCRIPT = `ObjC.import('Foundation');
+var urls = $.NSFileManager.defaultManager.URLsForDirectoryInDomains($.NSDocumentDirectory, $.NSUserDomainMask);
+if (Number(urls.count) !== 1) throw new Error('documents_directory_unavailable');
+JSON.stringify(ObjC.unwrap(urls.objectAtIndex(0).path));`;
+function documentsDirectory() {
+  macOnly();
+  let value;
+  try {
+    value = JSON.parse(String(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', DOCUMENTS_SCRIPT], {
+      encoding: 'utf8', timeout: TIMEOUT, maxBuffer: 65536, windowsHide: true, shell: false,
+    })).trim());
+  } catch { throw Error('documents_directory_unavailable'); }
+  if (typeof value !== 'string' || !path.posix.isAbsolute(value) || value.startsWith('//') || /[\0\r\n]/.test(value)) throw Error('documents_directory_unavailable');
+  return path.posix.normalize(value);
+}
 const tailscaleCandidates = () => ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale', '/usr/local/bin/tailscale'];
 const commandSandbox = {
   available: () => name === 'darwin' && fs.existsSync('/usr/bin/sandbox-exec'),
@@ -345,7 +362,7 @@ const appUpdater = {
   copyApp(from, to, run) { macOnly(); return run('/usr/bin/ditto', [from, to]); },
   detachDmg(mount, extra, run) { macOnly(); return run('/usr/bin/hdiutil', ['detach', mount, ...extra]); },
 };
-return { name, openTerminal, focusTerminal, openPath, revealPath, openUrl, pickFolder,
+return { name, openTerminal, focusTerminal, openPath, revealPath, openUrl, pickFolder, documentsDirectory,
   listProcesses, processCwd, processSnapshot, processOwner, currentProcessOwner, processBirth, killTree, isExternalTerminal,
   supervisorFiles: Object.freeze(['darwin.js', 'persistence.js']),
   persistence: require('./persistence').create(name, fs),

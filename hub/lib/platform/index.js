@@ -8,6 +8,7 @@
  * @property {function(string, boolean=, object=): Promise<object>} revealPath
  * @property {function(string, boolean=): Promise<object>} openUrl
  * @property {function(string=, Function=): (Promise<string>|object)} pickFolder Empty on cancellation; callback preserves HTTP completion timing.
+ * @property {function(): string} documentsDirectory Current user's OS Documents path; lookup only, no creation or HOME-based fallback.
  * @property {function(Function=): Promise<Array<object>>} listProcesses
  * @property {function(number[], object=): Promise<Map<number,string>>} processCwd
  * @property {function(Function=): Array<object>} processSnapshot Strong ownership identity.

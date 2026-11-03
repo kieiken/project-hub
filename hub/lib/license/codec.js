@@ -28,6 +28,7 @@ function signEnvelope(payload, privateKey, kid) {
   return { kid, payload: b.toString('base64url'), sig: c.sign(null, b, privateKey).toString('base64url') };
 }
 function validateProof(p) {
+  if (p?.trialCampaign !== undefined && (p.kind !== 'trial' || !/^[a-z0-9-]{1,80}$/.test(p.trialCampaign))) throw Error('format');
   if (!p || p.v !== 1 || p.typ === 'time' || typeof p.ent !== 'string' || !p.ent || !/^[A-Za-z0-9_-]{43}$/.test(p.dev) ||
       !['trial', 'course_trial', 'course_benefit', 'beta', 'purchase'].includes(p.kind) ||
       !Array.isArray(p.features) || !p.features.length || p.features.some(f => !PAID.includes(f)) || new Set(p.features).size !== p.features.length ||

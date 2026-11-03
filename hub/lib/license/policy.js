@@ -7,6 +7,7 @@ const policy = Object.freeze({
   SERIES_PRODUCT,
   licenseEnforcement: true,
   endpoint: 'https://project-hub-license.kieiyellow.workers.dev',
+  trialCampaign: 'returning-users-20261103',
   trialDays: 30, // Owner selected 30 days. Set the issuer's TRIAL_DAYS to 30 before distribution.
   // Release candidate only: enable the live issuer separately before publishing this build.
   // The stable issuer entry keeps changeable Stripe Links outside the distributed App.

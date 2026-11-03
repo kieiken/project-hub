@@ -174,9 +174,9 @@ class License {
     if (!response.ok) {
       let value; try { value = (await response.json())?.code; } catch {}
       const code = issuerHttpCodes.has(value) ? value : 'issuer_unavailable';
-      const retryAt = code === 'trial_daily_limited' && response.status === 429
-        ? this.wall() + Math.min(86400, Math.max(60, Number(response.headers.get('Retry-After')) || 86400)) : 0;
-      throw Object.assign(Error(activationError({ code }).error), { code, retryAt });
+      const retryAt = response.status === 429
+        ? this.wall() + Math.min(86400, Math.max(60, Number(response.headers.get('Retry-After')) || (code === 'trial_daily_limited' ? 86400 : 60))) : 0;
+      throw Object.assign(Error(activationError({ code }).error), { code, retryAt, status: response.status });
     }
     try { return await response.json(); }
     catch { throw Object.assign(Error(issuerMessages.issuer_response), { code: 'issuer_response' }); }
@@ -257,11 +257,20 @@ class License {
     try {
       let proofs = this.proofs.map(e => { try { return validateProof(verifyEnvelope(e, this.config.trustedKeys, 'proof')); } catch { return null; } })
         .filter(p => p && p.dev === this.identity?.dev && scopeMatches(p.scope, this.config.build));
-      if (!proofs.length && !this.trialUsed) {
-        this.requireSupported();
-        const hint = this.machineHint();
-        const r = await this.signedRequest('trial', { machineHint: hint });
-        const p = this.acceptProof(r.proof); proofs = [p];
+      const campaign = this.config.trialCampaign;
+      const purchased = proofs.some(p => p.kind === 'purchase');
+      const needsCampaign = campaign && !purchased && !proofs.some(p => p.kind === 'trial' && p.trialCampaign === campaign);
+      if ((!proofs.length && !this.trialUsed) || needsCampaign) {
+        try {
+          this.requireSupported();
+          const hint = this.machineHint();
+          const r = await this.signedRequest('trial', { machineHint: hint });
+          const p = this.acceptProof(r.proof); proofs = [...proofs.filter(old => old.ent !== p.ent), p];
+        } catch (e) {
+          // Optional campaign failure must not prevent refreshing existing rights.
+          failed = true; retryAt = e.retryAt || 0;
+          if (e.code === 'trial_used') this.trialUsed = true;
+        }
       }
       if (!proofs.length) return;
       // Network failure does not tick or alter saved state.
@@ -292,7 +301,7 @@ class License {
     void this.prepare();
     this.timer = setInterval(() => {
       try { if (this.proofs.length) this.status(); } catch {}
-      if (this.wall() - this.lastOnline >= 6 * 3600) void this.prepare();
+      if (this.retryAfter || this.wall() - this.lastOnline >= 6 * 3600) void this.prepare();
     }, 60000); this.timer.unref();
   }
   stop() { clearInterval(this.timer); this.timer = null; this.stopResume?.(); this.stopResume = null; }

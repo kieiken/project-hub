@@ -6,6 +6,8 @@ function once(s,a,b){assert.equal(s.split(a).length,2,'release_source_boundary_c
 function common(s){return s.replaceAll('../staging-app/runtime.cjs','./core.cjs').replaceAll('../staging-app/protocol.cjs','./protocol.cjs').replaceAll('purchase-test-app/','release-app/').replaceAll('purchase-test-manifest.json','release-manifest.json').replaceAll('public-purchase-test','public-release').replaceAll('TrialUpdate','ReleaseUpdate').replaceAll('purchase-runtime-v1','release-runtime-v1').replaceAll('試験登録','利用コードの登録').replaceAll('試験用の発行先','利用権の発行先').replaceAll('購入試験版は作業','Project Hubは作業').replaceAll('購入試験版を起動','Project Hubを起動');}
 function runtime(s){
   s=common(s);
+  s=once(s,'const workspace=new Workspace({root:configured.root,home:configured.home,app:configured.base});',`const workspace=new Workspace({root:configured.root,home:configured.home,app:configured.base,
+    documentsDirectory:()=>require('../lib/platform').documentsDirectory()});`);
   s=once(s,"  Object.assign(process.env, launch);",`  // Keep owner capabilities beneath the already verified management root.
   // AppData ancestors may grant replacement rights to other Windows accounts.
   if (process.platform === 'win32') process.env.HUB_AUTH_DIR = path.join(root, '_hub', 'run');

@@ -37,7 +37,7 @@
 
 ## 更新と復旧
 
-Macの新しい画面部品に対応する安定版更新情報は project-hub-runtime-update-mac-shell2.json、Windowsは project-hub-runtime-update-windows.json です。旧Mac用 project-hub-runtime-update.json には新しいruntimeを配信しません。旧方式の配信先や購入試験版の配信先とは別です。署名と公開が揃うまでは取得に失敗し、現在の版を保持します。
+Macの新しい画面部品に対応する安定版更新情報は project-hub-runtime-update-mac-shell3.json、Windowsは project-hub-runtime-update-windows.json です。旧Mac用 project-hub-runtime-update.json および94の project-hub-runtime-update-mac-shell2.json には新しいruntimeを配信しません。旧方式の配信先や購入試験版の配信先とは別です。署名と公開が揃うまでは取得に失敗し、現在の版を保持します。
 
 新版を適用した後は保存・処理の終了を待ち、同じアプリを閉じて開き直します。未保存入力の確認では、取り消すと更新せず下書きを保持します。新版の健康確認ができなければ前の版へ戻します。一般データ・購入情報を更新ファイルで置き換えません。
 
