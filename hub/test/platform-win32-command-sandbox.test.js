@@ -9,10 +9,10 @@ const { spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { create } = require('../lib/platform/win32');
-const { PROFILE, PASSTHROUGH, SECRET_GLOBS } = require('../lib/platform/win32-command-sandbox');
+const { limitScript, PROFILE, PASSTHROUGH, SECRET_GLOBS } = require('../lib/platform/win32-command-sandbox');
 const { WorkspaceSandbox } = require('../lib/workspace-sandbox');
 const NPM = 'C:\\Users\\fixture\\AppData\\Roaming\\npm', SHIM = NPM + '\\codex.cmd', PACKAGE = path.win32.join(NPM, 'node_modules', '@openai', 'codex');
-const MANIFEST = path.win32.join(PACKAGE, 'package.json'), BASH = 'C:\\Program Files\\Git\\bin\\bash.exe', ROOT = 'C:\\Users\\fixture\\Work\\P\\child';
+const MANIFEST = path.win32.join(PACKAGE, 'package.json'), BASH = 'C:\\Program Files\\Git\\bin\\bash.exe', TIMEOUT = 'C:\\Program Files\\Git\\usr\\bin\\timeout.exe', ROOT = 'C:\\Users\\fixture\\Work\\P\\child';
 const CODEX = path.win32.join(PACKAGE, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
 const HOISTED = path.win32.join(NPM, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
 const ENV = { PATH: 'C:\\Tools;' + NPM, PATHEXT: '.COM;.EXE;.BAT;.CMD', ProgramFiles: 'C:\\Program Files', SystemRoot: 'C:\\Windows', SystemDrive: 'C:', USERPROFILE: 'C:\\Users\\fixture',
@@ -27,7 +27,7 @@ function adapter(files, text = {}) {
   assert.equal(platform.commandSandbox.available(), box.available());
   return box;
 }
-const installed = (manifest = '{"name":"@openai/codex","version":"0.164.0"}') => adapter(new Set([SHIM, CODEX, BASH]), { [MANIFEST]: manifest });
+const installed = (manifest = '{"name":"@openai/codex","version":"0.164.0"}') => adapter(new Set([SHIM, CODEX, BASH, TIMEOUT]), { [MANIFEST]: manifest });
 function fakeChild() {
   const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null; child.signalCode = null; child.pid = 4242; child.kills = [];
   child.kill = signal => { child.kills.push(signal); if (child.exitCode === null) { child.exitCode = null; child.signalCode = signal; setImmediate(() => child.emit('close', null, signal)); } return child.signalCode === signal && child.kills.length === 1; };
@@ -41,13 +41,16 @@ test('Windows command isolation needs the vendored Codex CLI and Git for Windows
   const profile = none.profile(ROOT, []);
   assert.throws(() => none.spawn('fixture', ROOT, profile, () => assert.fail('spawned')), e => e.code === 'command_sandbox_unavailable' && /Codex CLI/.test(e.message) && /Git for Windows/.test(e.message));
   assert.equal(adapter(new Set([BASH])).available(), false);
-  assert.equal(adapter(new Set([SHIM, CODEX]), { [MANIFEST]: '{"name":"@openai/codex"}' }).available(), false, 'bash missing');
-  assert.equal(adapter(new Set([SHIM, BASH]), { [MANIFEST]: '{"name":"@openai/codex"}' }).available(), false, 'shim without the native binary');
-  assert.equal(adapter(new Set([SHIM, CODEX, BASH]), { [MANIFEST]: '{"name":"other"}' }).available(), false, 'foreign codex.cmd');
-  assert.equal(adapter(new Set([SHIM, CODEX, BASH])).available(), false, 'unreadable manifest');
-  assert.equal(adapter(new Set([NPM + '\\codex.bat', CODEX, BASH])).available(), false, 'batch shim is never expanded');
+  assert.equal(adapter(new Set([SHIM, CODEX, TIMEOUT]), { [MANIFEST]: '{"name":"@openai/codex"}' }).available(), false, 'bash missing');
+  assert.equal(adapter(new Set([SHIM, CODEX, BASH]), { [MANIFEST]: '{"name":"@openai/codex"}' }).available(), false, 'coreutils timeout missing');
+  assert.equal(adapter(new Set([SHIM, BASH, TIMEOUT]), { [MANIFEST]: '{"name":"@openai/codex"}' }).available(), false, 'shim without the native binary');
+  assert.equal(adapter(new Set([SHIM, CODEX, BASH, TIMEOUT]), { [MANIFEST]: '{"name":"other"}' }).available(), false, 'foreign codex.cmd');
+  assert.equal(adapter(new Set([SHIM, CODEX, BASH, TIMEOUT])).available(), false, 'unreadable manifest');
+  assert.equal(adapter(new Set([NPM + '\\codex.bat', CODEX, BASH, TIMEOUT])).available(), false, 'batch shim is never expanded');
   assert.equal(installed().available(), true);
-  assert.equal(installed().codexExecutable(), CODEX); assert.equal(installed().shell(), BASH);
+  assert.equal(installed().codexExecutable(), CODEX); assert.equal(installed().shell(), BASH); assert.equal(installed().timeoutExecutable(), TIMEOUT);
+  const sibling = require('../lib/platform/win32-command-sandbox').create({ fs: { statSync: file => ['C:\\Tools\\codex.exe', 'C:\\Tools\\bash.exe', 'C:\\Tools\\timeout.exe'].includes(file) ? { isFile: () => true } : missing() }, env: ENV, findExecutable: () => 'C:\\Tools\\codex.exe', shellCandidates: () => ['C:\\Tools\\bash.exe'] });
+  assert.equal(sibling.timeoutExecutable(), 'C:\\Tools\\timeout.exe', 'timeout.exe beside the shell');
   assert.equal(adapter(new Set([SHIM, HOISTED, BASH]), { [MANIFEST]: '{"name":"@openai/codex"}' }).codexExecutable(), HOISTED, 'hoisted platform package');
   assert.equal(adapter(new Set(['C:\\Tools\\codex.exe', BASH])).codexExecutable(), 'C:\\Tools\\codex.exe', 'native codex.exe on PATH is used as found');
 });
@@ -68,7 +71,7 @@ test('profile grants one writable workspace, denies .git and credential files, g
   assert.throws(() => p.profile(ROOT, ['relative.txt']), { code: 'command_sandbox_path' }); assert.throws(() => p.profile(ROOT, 'C:\\read.txt'), { code: 'command_sandbox_path' });
 });
 
-test('spawn starts the vendored codex.exe with a fixed argv, the workspace as home and a minimal environment', () => {
+test('spawn starts the vendored codex.exe with a fixed argv, the time limit inside the sandbox, the workspace as home and a minimal environment', () => {
   const p = installed(), calls = [], command = "cd 'C:\\Users\\fixture\\Work\\P\\child' && printf hello > local.txt; cat local.txt";
   const profile = p.profile(ROOT, []);
   const child = p.spawn(command, ROOT, profile, (file, args, options) => { calls.push({ file, args, options }); return 'child'; });
@@ -80,7 +83,12 @@ test('spawn starts the vendored codex.exe with a fixed argv, the workspace as ho
   assert.equal(options.env.HOME, ROOT); assert.equal(options.env.TEMP, ROOT); assert.equal(options.env.TMP, ROOT); assert.equal(options.env.CODEX_HOME, ENV.CODEX_HOME);
   assert.deepEqual(options.env.PATH.split(';'), ['C:\\Windows\\System32', 'C:\\Program Files\\Git\\bin', path.dirname(process.execPath)]);
   assert.equal(JSON.stringify(calls).includes('private'), false); assert.ok(PASSTHROUGH.every(key => !/^HUB_|KEY$|TOKEN$/i.test(key)));
-  const direct = adapter(new Set(['C:\\Tools\\codex.exe', BASH])), used = [];
+  // Hub's time limit, rounded up to whole seconds, is applied inside the shell by coreutils timeout, the command passed verbatim as $0; no limit, no wrapper.
+  assert.equal(limitScript(120000), 'exec /usr/bin/timeout --kill-after=2 120s /usr/bin/bash -c "$0"'); assert.equal(limitScript(50), 'exec /usr/bin/timeout --kill-after=2 1s /usr/bin/bash -c "$0"');
+  const limited = [];
+  for (const options of [{ timeoutMs: 120000 }, { timeoutMs: 50 }, { timeoutMs: 0 }, { timeoutMs: 'soon' }, undefined]) p.spawn(command, ROOT, profile, (file, args) => { limited.push(args.slice(profile.args.length)); return 'child'; }, options);
+  assert.deepEqual(limited, [['--', BASH, '-c', limitScript(120000), command], ['--', BASH, '-c', limitScript(50), command], ['--', BASH, '-c', command], ['--', BASH, '-c', command], ['--', BASH, '-c', command]]);
+  const direct = adapter(new Set(['C:\\Tools\\codex.exe', BASH, TIMEOUT])), used = [];
   direct.spawn('fixture', ROOT, direct.profile(ROOT, []), file => { used.push(file); return 'child'; }); assert.deepEqual(used, ['C:\\Tools\\codex.exe']);
   // Empty commands and profiles for another workspace never reach Codex.
   const never = () => assert.fail('spawned');
@@ -112,12 +120,12 @@ test('WorkspaceSandbox on Windows runs through the Codex adapter with the real w
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-win32-box-')), calls = [];
   try {
     fs.writeFileSync(path.join(root, 'note.txt'), 'fixture');
-    const platform = { ...create({ native: { call() { assert.fail('native side effect'); } }, fs: { statSync: file => [SHIM, CODEX, BASH].includes(file) ? { isFile: () => true } : missing(), readFileSync: file => file === MANIFEST ? '{"name":"@openai/codex"}' : missing() }, env: ENV }), killTree: () => { throw Error('exited'); } };
+    const platform = { ...create({ native: { call() { assert.fail('native side effect'); } }, fs: { statSync: file => [SHIM, CODEX, BASH, TIMEOUT].includes(file) ? { isFile: () => true } : missing(), readFileSync: file => file === MANIFEST ? '{"name":"@openai/codex"}' : missing() }, env: ENV }), killTree: () => { throw Error('exited'); } };
     const child = fakeChild();
-    const box = new WorkspaceSandbox({ readFiles: [] }, { platform, workspace: () => root, spawn: (file, args, options) => { calls.push({ file, args, options }); return child; } });
+    const box = new WorkspaceSandbox({ readFiles: [] }, { platform, workspace: () => root, spawn: (file, args, options) => { calls.push({ file, args, options }); return child; }, timeoutMs: 45000 });
     const done = box.run('printf hello'); child.finish(0, 'hello');
     assert.deepEqual(await done, { code: 0, signal: null, stdout: 'hello', stderr: '', truncated: false });
-    assert.equal(calls[0].file, CODEX); assert.deepEqual(calls[0].args.slice(-4), ['--', BASH, '-c', 'printf hello']);
+    assert.equal(calls[0].file, CODEX); assert.deepEqual(calls[0].args.slice(-5), ['--', BASH, '-c', limitScript(45000), 'printf hello']);
     assert.deepEqual(calls[0].args.slice(0, 3), ['sandbox', '-C', root]); assert.equal(calls[0].options.cwd, root); assert.equal(calls[0].options.env.HOME, root);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -131,12 +139,34 @@ test('Git for Windows runs the ChatGPT command wrapper with the sandbox shell en
   try {
     const cwd = path.join(root, "it's here"); fs.mkdirSync(cwd);
     const command = 'cd ' + "'" + cwd.replaceAll("'", "'\\''") + "'" + ' && printf hello > local.txt; cat local.txt; (cd "$HOME" && pwd -W) > "$HOME/home.txt"';
-    p.spawn(command, root, p.profile(root, []), (file, args, options) => { calls.push({ file, args, options }); return fakeChild(); });
-    const [, bash, flag, tail] = calls[0].args.slice(-4);
-    assert.equal(flag, '-c'); assert.equal(tail, command); assert.match(bash, /\\bash\.exe$/);
-    const result = spawnSync(bash, [flag, tail], { cwd: calls[0].options.cwd, env: calls[0].options.env, encoding: 'utf8', timeout: 20000, windowsHide: true });
+    p.spawn(command, root, p.profile(root, []), (file, args, options) => { calls.push({ file, args, options }); return fakeChild(); }, { timeoutMs: 20000 });
+    const [, bash, flag, script, tail] = calls[0].args.slice(-5);
+    assert.equal(flag, '-c'); assert.equal(script, limitScript(20000)); assert.equal(tail, command); assert.match(bash, /\\bash\.exe$/);
+    const result = spawnSync(bash, [flag, script, tail], { cwd: calls[0].options.cwd, env: calls[0].options.env, encoding: 'utf8', timeout: 20000, windowsHide: true });
     assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, 'hello');
     assert.equal(fs.readFileSync(path.join(cwd, 'local.txt'), 'utf8'), 'hello');
     assert.equal(fs.readFileSync(path.join(root, 'home.txt'), 'utf8').trim().replace(/\//g, '\\').toLowerCase(), root.toLowerCase());
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+// Real Git for Windows, no Codex: at the limit the whole process group of the
+// command ends, including a Git Bash child, a native Node child and a shell
+// ignoring TERM, which would otherwise outlive Hub's termination of codex.exe.
+test('the time limit inside the sandbox ends the command with its process group', { skip: process.platform !== 'win32' && 'Windows only' }, t => {
+  const p = require('../lib/platform').forPlatform('win32').commandSandbox;
+  if (!p.available()) return t.skip('Codex CLI と Git for Windows が揃っていないため、この実機確認は未実施');
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-win32-limit-'));
+  try {
+    for (const command of ['echo started; sleep 30 & node -e "setTimeout(() => {}, 30000)" & wait; echo finished', 'echo started; trap "" TERM; sleep 30; echo finished']) {
+      const calls = [];
+      p.spawn(command, root, p.profile(root, []), (file, args, options) => { calls.push({ file, args, options }); return fakeChild(); }, { timeoutMs: 1000 });
+      const [bash, ...tail] = calls[0].args.slice(-4);
+      assert.deepEqual(tail, ['-c', limitScript(1000), command]);
+      const started = Date.now();
+      // spawnSync returns only once every holder of the output pipes has exited.
+      const result = spawnSync(bash, tail, { cwd: calls[0].options.cwd, env: calls[0].options.env, encoding: 'utf8', timeout: 15000, windowsHide: true });
+      assert.equal(result.error, undefined, 'a sandboxed child outlived the limit: ' + command); assert.ok(Date.now() - started < 10000, 'ended at the limit, not at the sleep');
+      assert.notEqual(result.status, 0); assert.equal(result.stdout.trim(), 'started');
+    }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -34,7 +34,8 @@ class WorkspaceSandbox {
     // Reject linked/hardlinked workspace contents before granting recursive writes.
     const check = dir => { for (const d of fs.readdirSync(dir, { withFileTypes: true })) { if (d.name.toLowerCase() === '.git') continue; const f = path.join(dir, d.name), st = fs.lstatSync(f); if (st.isSymbolicLink()) { if (!inside(fs.realpathSync(f), root)) throw new this.Error('command_link_not_allowed'); continue; } if (st.isFile() && st.nlink > 1) throw new this.Error('command_link_not_allowed'); if (st.isDirectory()) check(f); } }; check(root);
     return new Promise((resolve, reject) => {
-      const child = this.platform.commandSandbox.spawn(command, root, this.profile(), this.spawn);
+      // The time limit travels with the spawn so a platform can enforce it inside the sandbox too.
+      const child = this.platform.commandSandbox.spawn(command, root, this.profile(), this.spawn, { timeoutMs: this.timeoutMs });
       this.children.add(child); const out = { stdout: '', stderr: '' }; let bytes = 0, truncated = false;
       const kill = () => this.kill(child);
       const timer = setTimeout(kill, this.timeoutMs);

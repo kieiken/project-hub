@@ -20,6 +20,10 @@ const SECRET_GLOBS = Object.freeze(['.git', '.env*', '.netrc', '.npmrc', '.pypir
 const PASSTHROUGH = Object.freeze(['SystemRoot', 'SystemDrive', 'windir', 'ComSpec', 'PATHEXT', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA',
   'ProgramFiles', 'ProgramFiles(x86)', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'CODEX_HOME']);
 const inside = (root, file) => file === root || file.startsWith(root + path.sep);
+// The time limit applied inside the sandbox shell. The command arrives
+// verbatim as $0, so no quoting of it takes place. Whole seconds, rounded
+// up; TERM at the limit, KILL two seconds later.
+const limitScript = timeoutMs => `exec /usr/bin/timeout --kill-after=2 ${Math.ceil(timeoutMs / 1000)}s /usr/bin/bash -c "$0"`;
 function create({ fs, env, findExecutable, shellCandidates, spawn = require('node:child_process').spawn, execPath = process.execPath }) {
   const fail = (message, code) => Object.assign(Error(message), { code, platform: 'win32' });
   const isFile = file => { try { return fs.statSync(file).isFile(); } catch { return false; } };
@@ -42,7 +46,9 @@ function create({ fs, env, findExecutable, shellCandidates, spawn = require('nod
     return [pkg, prefix].map(dir => path.join(dir, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', TARGET, 'bin', 'codex.exe')).find(isFile) || null;
   }
   const shell = () => shellCandidates().find(isFile) || null;
-  const available = () => Boolean(codexExecutable() && shell());
+  // coreutils timeout(1) ships with Git for Windows beside the real bash.
+  const timeoutExecutable = () => { const bash = shell(); return bash && ['timeout.exe', path.join('..', 'usr', 'bin', 'timeout.exe')].map(file => path.join(path.dirname(bash), file)).find(isFile) || null; };
+  const available = () => Boolean(codexExecutable() && shell() && timeoutExecutable());
   // The kernel image path is what killTree compares; spawn the canonical file.
   const realpath = file => { try { return typeof fs.realpathSync?.native === 'function' ? fs.realpathSync.native(file) : file; } catch { return file; } };
   function profile(root, readFiles = []) {
@@ -56,17 +62,24 @@ function create({ fs, env, findExecutable, shellCandidates, spawn = require('nod
     return Object.freeze({ root: workspace, readFiles: Object.freeze(reads), args: Object.freeze(['sandbox', '-C', workspace, '-P', PROFILE, '--include-managed-config',
       '-c', `permissions.${PROFILE}.filesystem={${filesystem.join(',')}}`, '-c', `permissions.${PROFILE}.network.enabled=false`, '-c', 'windows.sandbox="elevated"']) });
   }
-  function spawnSandboxed(command, root, profile, spawnProcess = spawn) {
+  // Hub ends codex.exe at its time limit but cannot end processes of the
+  // sandbox account, so the same limit also runs inside the sandbox. Git's
+  // bin\bash.exe launcher sets up the Git environment (MSYSTEM, git on PATH)
+  // but starts the MSYS bash outside any process group of its parent, so the
+  // shell applies the limit itself: coreutils timeout(1) puts the command
+  // into a process group of its own and ends all of it at the limit.
+  function spawnSandboxed(command, root, profile, spawnProcess = spawn, { timeoutMs } = {}) {
     const workspace = local(root, '対象フォルダ');
     if (typeof command !== 'string' || !command || command.includes('\0')) throw fail('Windowsの隔離実行のコマンドを確認できません', 'command_sandbox_command');
     if (!profile || !Array.isArray(profile.args) || profile.root !== workspace) throw fail('Windowsの隔離実行の設定が対象フォルダと一致しません', 'command_sandbox_profile');
-    const codex = codexExecutable(), bash = shell();
-    if (!codex || !bash) throw fail('WindowsではCodex CLIの隔離実行（codex sandbox）とGit for Windowsが必要です。見つからないため、コマンドを実行しません', 'command_sandbox_unavailable');
+    const codex = codexExecutable(), bash = shell(), timeout = timeoutExecutable();
+    if (!codex || !bash || !timeout) throw fail('WindowsではCodex CLIの隔離実行（codex sandbox）とGit for Windowsが必要です。見つからないため、コマンドを実行しません', 'command_sandbox_unavailable');
+    const script = Number.isFinite(timeoutMs) && timeoutMs > 0 ? [limitScript(timeoutMs), command] : [command];
     const passthrough = Object.fromEntries(PASSTHROUGH.filter(key => typeof env[key] === 'string' && env[key]).map(key => [key, env[key]]));
     // Git Bash adds its own /usr/bin and /mingw64/bin; the workspace is HOME and TEMP, as on Mac.
     const runtime = { PATH: [path.join(env.SystemRoot || 'C:\\Windows', 'System32'), path.dirname(bash), path.dirname(execPath)].join(';'), HOME: workspace, TEMP: workspace, TMP: workspace, LANG: 'en_US.UTF-8' };
-    return spawnProcess(realpath(codex), [...profile.args, '--', bash, '-c', command], { cwd: workspace, env: { ...passthrough, ...runtime }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    return spawnProcess(realpath(codex), [...profile.args, '--', bash, '-c', ...script], { cwd: workspace, env: { ...passthrough, ...runtime }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   }
-  return Object.freeze({ available, profile, spawn: spawnSandboxed, codexExecutable, shell });
+  return Object.freeze({ available, profile, spawn: spawnSandboxed, codexExecutable, shell, timeoutExecutable });
 }
-module.exports = { create, PROFILE, PASSTHROUGH, SECRET_GLOBS };
+module.exports = { create, limitScript, PROFILE, PASSTHROUGH, SECRET_GLOBS };
