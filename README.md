@@ -1,8 +1,10 @@
 # Project Hub
 
-[繁體中文版](README.zh-TW.md) — `HUB_LANG=zh-TW`（未設定は日本語）。
+日本語 | [English](README.en.md) | [繁體中文](README.zh-TW.md)
 
-**Project Hub は Mac・Windows とも正式版です。** 現在の配布版は [Mac 4.126.41](https://github.com/kieiken/project-hub/releases/tag/v4.126.41) と [Windows 4.125.2](https://github.com/kieiken/project-hub/releases/tag/v4.125.2) です。使ってみた感想、不具合の報告、Pull Request を歓迎します。送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
+紹介ページ：<https://k-onedot.com/ai/project-hub/>
+
+**Project Hub は Mac・Windows とも正式版です。** 現在の公開版は Mac・Windows とも [最新版 4.126.95](https://github.com/kieiken/project-hub/releases/latest) です。使ってみた感想、不具合の報告、Pull Request を歓迎します。送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
 
 プロジェクトと作業を一覧にして、画面の中で Claude Code / Codex を動かす管理ソフトです。1人で使う Mac、または Windows 11 x64 で使います。待ち受けるのは `127.0.0.1` だけで、利用者の認証はありません。Web サービスや共有サーバーとしては使えません。
 
@@ -10,21 +12,31 @@
 
 ソース版：4.126.95（公開済みの配布版は上記のとおりです）。
 
+## しくみ
+
+依頼が Hub と AI を通り、取り込みと公開を人が決めるまでの全体像です。開発中のソース（2026年11月時点）をもとに簡略化した図で、すべての機能を示すものではありません。配布版とは一部異なる場合があります。
+
+[![Project Hub のしくみの図](docs/project-hub/structure-map-v2-reader-ja.png)](docs/project-hub/structure-map-v2-reader-ja.png)
+
+画像を押すと原寸で開きます。
+
 ## 画面の例
 
-以下は v4.126.41 の画面です。プロジェクト・作業・会話の内容は、説明のために用意した架空のものです（実際の利用者のデータは含みません）。
+以下は開発版 v4.126.85 の画面です。内容はすべて説明用の架空のものです（実際の利用者のデータは含みません）。配布版とは一部表示が異なる場合があります。
 
 ### 作業の会話画面
 
-架空のプロジェクト「カフェ開業準備」で、AI がまとめた価格表を会話の中で確認し、次の指示を書いているところです。上部には、今のフェーズと手順の残りが表示されます。
+架空の青空カフェの作業一覧と、AI が作ったメニュー価格の案を確認しているところです。
 
-![作業の会話画面（v4.126.41、架空のデータ）](docs/screenshots/conversation.png)
+[![作業の会話画面（開発版 v4.126.85、架空のデータ）](docs/screenshots/conversation-v4.126.85-usage.png)](docs/screenshots/conversation-v4.126.85-usage.png)
 
-### 会話の検索
+### 次の指示を並べる
 
-すべてのプロジェクトとフリートークの会話から言葉で探し、見つかった発言と前後の会話を開けます。
+架空のカフェの SNS 投稿を準備しながら、文章の調整・画像案・一覧表の順に次の指示を並べているところです。
 
-![会話の検索結果（v4.126.41、架空のデータ）](docs/screenshots/search.png)
+[![次の指示を並べた画面（開発版 v4.126.85、架空のデータ）](docs/screenshots/queued-instructions-v4.126.85-usage.png)](docs/screenshots/queued-instructions-v4.126.85-usage.png)
+
+すべてのプロジェクトとフリートークの会話から言葉で探し、見つかった発言と前後の会話を開くこともできます。
 
 ## 前提
 

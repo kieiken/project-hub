@@ -1,28 +1,40 @@
 # Project Hub
 
-[日本語](README.md) | 繁體中文
+[日本語](README.md) | [English](README.en.md) | 繁體中文
 
-**Project Hub 的 Mac 與 Windows 版皆為正式版。** 目前的發行版為 [Mac 4.126.41](https://github.com/kieiken/project-hub/releases/tag/v4.126.41) 與 [Windows 4.125.2](https://github.com/kieiken/project-hub/releases/tag/v4.125.2)。歡迎分享使用心得、回報問題或提交 Pull Request；參與方式見 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
+介紹頁：<https://k-onedot.com/ai/project-hub/tw/>
+
+**Project Hub 的 Mac 與 Windows 版皆為正式版。** 目前 Mac 與 Windows 的公開版皆為[最新版 4.126.95](https://github.com/kieiken/project-hub/releases/latest)。歡迎分享使用心得、回報問題或提交 Pull Request；參與方式見 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
 
 Project Hub 將專案與任務集中管理，並在同一個畫面中執行 Claude Code / Codex。主要供單一使用者在自己的 Mac 或 Windows 11 x64 上使用。服務只監聽 `127.0.0.1`；本機操作沒有使用者登入驗證。可自行啟用 Tailscale 與通關密語，從自己的 iPhone 遠端操作，但不適合作為公開網站或多人共用伺服器。
 
 使用前請閱讀 [hub/README.zh-TW.md](hub/README.zh-TW.md) 的「使用前須知」。
 
+## 運作方式
+
+需求經過 Hub 交給 AI，最後由人決定取入與公開，這張圖呈現整體關係。本圖依 2026 年 11 月的開發中原始碼簡化繪製，並未呈現所有功能，部分內容可能與發行版不同。
+
+[![Project Hub 運作方式圖](docs/project-hub/structure-map-v2-reader-zh-TW.png)](docs/project-hub/structure-map-v2-reader-zh-TW.png)
+
+點選圖片可檢視原始大小。
+
 ## 畫面範例
 
-以下是 v4.126.41 的畫面。專案、任務與對話內容都是為了說明而準備的虛構資料（不含實際使用者的資料）。畫面為日文版本。
+以下是開發版 v4.126.85 的畫面。內容皆為說明用的虛構資料（不含實際使用者的資料）。畫面為日文版本，部分顯示可能與發行版不同。
 
 ### 任務的對話畫面
 
-在虛構的專案「咖啡店開業準備」中，於對話裡確認 AI 整理的價格表，並輸入下一個指示。畫面上方會顯示目前的階段與剩下的步驟。
+查看虛構咖啡店的作業清單，以及 AI 製作的菜單價格草案。
 
-![任務的對話畫面（v4.126.41，虛構資料）](docs/screenshots/conversation.png)
+[![任務的對話畫面（開發版 v4.126.85，虛構資料）](docs/screenshots/conversation-v4.126.85-usage.png)](docs/screenshots/conversation-v4.126.85-usage.png)
 
-### 對話搜尋
+### 排好下一步指示
 
-可從所有專案與自由對話中以關鍵字搜尋，並打開找到的發言與前後的對話。
+準備虛構咖啡店的社群貼文，並依序排好調整文字、圖片方案、製作表格等下一步指示。
 
-![對話搜尋結果（v4.126.41，虛構資料）](docs/screenshots/search.png)
+[![排好下一步指示的畫面（開發版 v4.126.85，虛構資料）](docs/screenshots/queued-instructions-v4.126.85-usage.png)](docs/screenshots/queued-instructions-v4.126.85-usage.png)
+
+也可從所有專案與自由對話中以關鍵字搜尋，並打開找到的發言與前後的對話。
 
 ## 必要條件
 
@@ -83,7 +95,7 @@ HUB_SKIP_NPM=1 npm --prefix hub test
 這個資料夾是只包含 Project Hub、沒有原始 Git 歷史的公開版本。在 Git 工作目錄執行 `node scripts/export-public.js`，可以從已提交的檔案重新匯出到 `public-release/ProjectHub`。需要固定產品程式碼版本時使用 `--ref <commit>`；需要從另一個提交取得公開文件時使用 `--public-ref <commit>`。
 
 - 不包含真實工作紀錄（例如 `.ai/` 中的對話與交接）；僅保留範本與虛構台帳所需的 `.ai/` 檔案。
-- 公開版 [變更紀錄](hub/CHANGELOG.zh-TW.md) 從 4.20.0 開始。更早的紀錄涉及過去資料，因此未納入公開版本。繁中版保留公開版的完整歷史。
+- 公開版 [變更紀錄（日文）](hub/CHANGELOG.md) 從 4.20.0 開始。更早的紀錄涉及過去資料，因此未納入公開版本。
 
 ## 參考來源
 
