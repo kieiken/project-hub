@@ -105,9 +105,11 @@ test('failed post-check, changed binding and callback failures remain unconfirme
 });
 
 test('unsupported Windows features stop explicitly without launching Mac primitives or reducing license enforcement', async () => {
-  const p = create({ native: { call() { assert.fail('native side effect'); } } });
+  // Nothing on the fixture PATH: command isolation needs Codex CLI and Git for Windows.
+  const p = create({ native: { call() { assert.fail('native side effect'); } }, fs: { statSync: missing }, env: {} });
   await assert.rejects(p.openTerminal('command'), /Windowsでは未対応/); await assert.rejects(p.focusTerminal(42), /Windowsでは未対応/);
-  assert.equal(p.commandSandbox.available(), false); assert.throws(() => p.commandSandbox.spawn(), /Windowsでは未対応/);
+  assert.equal(p.commandSandbox.available(), false);
+  assert.throws(() => p.commandSandbox.spawn('fixture', 'C:\\work', p.commandSandbox.profile('C:\\work', []), () => assert.fail('spawned')), e => e.code === 'command_sandbox_unavailable' && /Codex CLI/.test(e.message));
   assert.throws(() => p.secretStore().get('account'), /secret_store_unavailable/);
   assert.equal(p.appUpdater.sourceSupported(), false); assert.equal(p.appUpdater.packagedSupported('x64'), false);
   assert.equal(p.trashDir('C:\\Users\\test'), 'C:\\Users\\test\\.ProjectHubTrash');

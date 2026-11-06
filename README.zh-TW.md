@@ -62,7 +62,7 @@ HUB_LANG=zh-TW HUB_APP_DIR=/Applications HUB_ROOT="/Volumes/External/AI-Workspac
 
 ### Windows
 
-Windows 11 x64 的正式版在 [發行頁面](https://github.com/kieiken/project-hub/releases) 提供。使用 WebView2 專用視窗，準備與啟動步驟見 [Windows 專用視窗說明](hub/app/windows/README.md)。請以一般權限使用，不要以系統管理員身分啟動。由於沒有發行者簽章，第一次啟動時 Windows 可能顯示警告。App 內的自動更新只會替換 App 內的處理程式。僅限 Mac 的隔離執行等功能，在 Windows 上無法使用。
+Windows 11 x64 的正式版在 [發行頁面](https://github.com/kieiken/project-hub/releases) 提供。使用 WebView2 專用視窗，準備與啟動步驟見 [Windows 專用視窗說明](hub/app/windows/README.md)。請以一般權限使用，不要以系統管理員身分啟動。由於沒有發行者簽章，第一次啟動時 Windows 可能顯示警告。App 內的自動更新只會替換 App 內的處理程式。部分功能（例如 PDF 讀取）僅限 Mac。隔離執行在 Windows 上需要 Codex CLI 的 sandbox（已完成 `codex sandbox setup --elevated`）與 Git for Windows，缺少時不會執行命令。隔離執行會依 Codex 的機制在目標資料夾的 NTFS 存取權（ACL）加入沙箱帳號的項目，執行後不會移除。
 
 ## 每日自動更新
 
