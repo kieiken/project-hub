@@ -114,6 +114,14 @@ test('release update inspection accepts Windows native DOS modes and retains exa
   assert.throws(()=>f.inspect(f.folder,m,f.verify),/tree-hash/);
   assert.throws(()=>f.inspect(f.folder,f.save(),f.verify));
 });
+test('generated release runtime accepts inventoried Windows setup and still rejects an uninventoried command',t=>{
+  const f=updateModeFixture(t),name='SETUP-WINDOWS.cmd',file=path.join(f.folder,name),bytes=fs.readFileSync(path.join(repo,'hub/app/windows/SETUP-WINDOWS.cmd'));
+  fs.writeFileSync(file,bytes);fs.chmodSync(file,0o644);
+  f.record.files.push({path:name,bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),mode:0o644});
+  assert.doesNotThrow(()=>f.inspect(f.folder,f.save(),f.verify));
+  fs.writeFileSync(path.join(f.folder,'UNLISTED.cmd'),'retain');
+  assert.throws(()=>f.verify(f.folder,'win32'));
+});
 test('release update native mode exception excludes Mac, other paths and other permission values',t=>{
   for(const [platform,name,mode] of [
     ['darwin','window/ProjectHub.exe',0o666],['win32','hub/server.js',0o666],

@@ -12,7 +12,7 @@ Before you use it, read "使う前に知っておくこと" (what to know before
 
 The app's display is in Japanese. English and Traditional Chinese language packs are available from the release page, and some screens stay in Japanese. Most detailed documents in this repository are in Japanese.
 
-Source version in this repository: 4.126.98 (released versions are listed above).
+Source version in this repository: 4.126.99 (released versions are listed above).
 
 ## How it works
 

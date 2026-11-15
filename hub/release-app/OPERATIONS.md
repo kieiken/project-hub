@@ -15,7 +15,8 @@ Macのローカル封印はad-hocであり、発行者署名・公証ではな�
 2. MAKE-WINDOWS-APP.cmdを通常のダブルクリックで一度実行する。既存アプリ/一般データ/試験購入管理領域は使わず、Hubも起動しない。全候補inventoryと固定ソース/SDK/アイコンを検査して別フォルダへEXEを作り、入力/出力SHAをpreparation.jsonへ保存する。明示 --unsigned の最終組立が全入力・SDK・receipt・リンク/余剰・ファイル権限を再検査し、別の末尾 -publisher-free フォルダへ全件複製する。購入/更新の署名検査は省かない。
 3. 成功すると元フォルダの隣に -native-prepared（作成原物）、-publisher-free（完成候補）、-completion.json（結果）が残る。元候補は不変。既存の出力があれば再実行を拒否する。失敗時は途中出力と表示を保持し、原因を直すまで押し直さない。未作成/失敗を完成扱いしない。実行内容は prepare-windows.cjs → finalize-windows.cjs --unsigned。署名失敗からの格下げや環境変数の切替はない。
 4. 返却照合は元候補manifest SHA/source、同梱固定ソース/SDK/アイコン、preparation.json、完成候補の全inventory/種類/リンク/余剰を照合する。実行ファイル4点以外は元のbytes/SHAとlogical modeが一致、起動ソースは空のpublisherThumbprintのまま、publisherSigned=false/distribution=publisher-free/windowsNativePrepared=true。Windowsのstat/chmodは読取専用属性のみを表すため、POSIX実行bitをNTFSのACLと呼ばず区別する。返却ZIPの展開後の種類/SHA、logical modeとWindows read-only属性の対応も記録する。verify-windows-return.cjsで検証する（後述の作成物だけ、実データは含めない）。
-5. 独立確認後の案内で、完成候補だけを固定した場所からSTART-WINDOWS.cmdで起動する。実Windowsの作成/起動は本人結果の受領まで未済。SmartScreenの個別許可が表示されない/Smart App Controlや組織制限で拒否なら止める。保護全体を無効にしない。正式コードの再購入・試験コードの入力は不要。
+5. 独立確認後の完成候補でSETUP-WINDOWS.cmdを通常権限で一度実行する。完成フォルダ全体とmanifestの一致を確認して通常ユーザー用固定場所へ配置し、アイコン・作業フォルダ付きのSTART-WINDOWS.cmdをユーザー用スタートメニューへ登録する。既存データと旧アプリは保持し、異なる内容の同版配置は上書きしない。旧版の正規起動項目の切り替えは本人が画面で確認する。必要環境不足は表示して停止し、自動導入や昇格はしない。
+6. 実Windowsで「すべてのアプリ」のProject Hubから起動→版・実行元・新規サーバーを確認→通常終了と子プロセス/待受停止→同じ項目から開き直しを確認する。検索結果も同じ登録項目を指すことを確認する。完了画面やショートカットの存在、Mac上の生成・検査だけを実機合格としない。初回登録がない端末を使えなければ、新規登録の実機確認は未確認として残す。SmartScreenの個別許可が表示されない/Smart App Controlや組織制限で拒否なら止める。保護全体を無効にしない。正式コードの再購入・試験コードの入力は不要。
 
 将来の署名付き経路も保持する。本人が別途許可した証明書で作成EXEを署名後、--unsignedを使わずfinalize-windows.cjs --thumbprint 大文字40桁を指定する。この場合は署名Valid/指紋一致を入力/出力で検査する。署名不正を証明書なし完成品に変更しない。元の作成receiptは署名によるEXEの変更だけを許し、SDK/入力の変更は許さない。
 

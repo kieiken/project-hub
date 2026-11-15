@@ -37,12 +37,13 @@ function build(source,destination,platform,version='4.125.2'){
   put('hub/release-app/legacy-license.cjs',blob('hub/release-app/legacy-license.cjs'));
   put('hub/release-app/license-hold.cjs',blob('hub/release-app/license-hold.cjs'));
   put('hub/release-app/mac-bootstrap.cjs',blob('hub/release-app/mac-bootstrap.cjs'));
-  if(platform==='win32') {for(const name of ['windows-window','prepare-windows','finalize-windows','finish-unsigned-windows','verify-windows-return'])put('hub/release-app/'+name+'.cjs',blob('hub/release-app/'+name+'.cjs'));manifest.windowsNativePrepared=false;}
+  if(platform==='win32') {for(const name of ['windows-window','prepare-windows','finalize-windows','finish-unsigned-windows','verify-windows-return','install-windows'])put('hub/release-app/'+name+'.cjs',blob('hub/release-app/'+name+'.cjs'));manifest.windowsNativePrepared=false;}
   for(const row of shared.dependencyFiles(platform))put(row.path,row.bytes,/(?:spawn-helper|winpty-agent\.exe|OpenConsole\.exe)$/.test(row.path)?0o755:0o644);
   put('README.md',blob('hub/release-app/README.md').toString().replace(/^# Project Hub 正式配布候補 \d+\.\d+\.\d+/, '# Project Hub 正式配布候補 '+version));
   put('docs/project-hub/RELEASE-OPERATIONS.md',blob('hub/release-app/OPERATIONS.md'));
   if(platform==='win32')put('MAKE-WINDOWS-APP.cmd','@echo off\r\nset NODE_OPTIONS=\r\nset NODE_PATH=\r\ncd /d "%~dp0"\r\nnode hub\\release-app\\finish-unsigned-windows.cjs --base "%CD%"\r\npause\r\n');
   if(platform==='win32')put('START-WINDOWS.cmd','@echo off\r\nset NODE_OPTIONS=\r\nset NODE_PATH=\r\ncd /d "%~dp0"\r\nnode hub\\release-app\\launch.cjs\r\nif errorlevel 1 pause\r\n');
+  if(platform==='win32')put('SETUP-WINDOWS.cmd',blob('hub/app/windows/SETUP-WINDOWS.cmd').toString().replace(/\r?\n/g,'\r\n'));
   if(app){
     shared.macIcon(app,path.join(base,'hub/public/icon.png'));
     const window=shared.windowSource(blob('hub/staging-app/Window.swift').toString()).replaceAll('4588','4545').replaceAll('購入試験版','Project Hub').replaceAll('purchase-test-app/','release-app/');

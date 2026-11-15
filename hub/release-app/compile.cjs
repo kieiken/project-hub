@@ -22,7 +22,7 @@ function runtime(s){
 `+s.slice(end);
   s=s.replaceAll('.purchase-test-workspace','.release-workspace').replaceAll('.ProjectHub-Purchase-Test-init-','.ProjectHub-release-init-');
   s=once(s,'docs\\/|issuer-public','docs\\/|window\\/|issuer-public');
-  s=once(s,'|START-WINDOWS\\.cmd$','|MAKE-WINDOWS-APP\\.cmd$|START-WINDOWS\\.cmd$');
+  s=once(s,'|START-WINDOWS\\.cmd$','|MAKE-WINDOWS-APP\\.cmd$|SETUP-WINDOWS\\.cmd$|START-WINDOWS\\.cmd$');
   s=once(s,"'hub/server.js', 'hub/staging-app/runtime.cjs', 'hub/staging-app/protocol.cjs',","'hub/server.js', 'hub/release-app/core.cjs', 'hub/release-app/protocol.cjs',");
   s=once(s,", 'issuer-public.json', 'hub/paid-bundle.json'",", 'hub/paid-bundle.json'");
   s=once(s,"  assert.equal(core.sha(fs.readFileSync(path.join(base, 'issuer-public.json'))), core.profileSha);\n  protocol.profile(JSON.parse(fs.readFileSync(path.join(base, 'issuer-public.json'))));", "  assert.equal(names.has('issuer-public.json'),false);\n  for(const name of names)assert.ok(!/staging-app|purchase-test-app/.test(name),'release_test_component');");
