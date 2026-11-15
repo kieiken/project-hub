@@ -17,7 +17,7 @@ test('更新確認は稼働中にも読取だけを行い、同時確認をま�
     let release, fail = false, reads = 0;
     const gate = new Promise(r => { release = r; });
     const calls = [];
-    const tools = new AiTools({ root: f.root, home: f.home, busy: () => 2, find: () => '/fixture/codex', methods: { codex: 'standalone' },
+    const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home, busy: () => 2, find: () => '/fixture/codex', methods: { codex: 'standalone' },
       run: async (file, args) => { calls.push(args); assert.deepEqual(args, ['--version']); return 'codex-cli 0.159.0'; },
       latest: async () => { reads++; await gate; if (fail) throw Error('secret'); return { version: '0.160.0', source: 'fixture' }; } });
     const first = tools.checkUpdate('codex'), second = tools.checkUpdate('codex');
@@ -44,7 +44,7 @@ test('確認中の適用結果を古い確認で上書きせず、各CLIの現�
   const f=fixture();
   try {
     let release; const gate=new Promise(r=>{release=r;});
-    const tools=new AiTools({root:f.root,home:f.home,find:()=>'/fixture/cli',methods:{codex:'standalone'},
+    const tools=new AiTools({ ready: (_ai, file) => file,root:f.root,home:f.home,find:()=>'/fixture/cli',methods:{codex:'standalone'},
       run:async (file,args)=>args[0]==='debug'?codexJson([['gpt-6.1-sol','GPT-6.1-Sol']]):'0.159.0 (CLI)',latest:async()=>{await gate;return {version:'0.160.0',source:'fixture'};}});
     assert.equal(await tools.version('claude','/fixture/cli'), '0.159.0');
     assert.equal(await tools.version('agy','/fixture/cli'), '0.159.0');
@@ -75,7 +75,7 @@ test('ローカルカタログの表示対象だけを候補へ足し、既存�
     fs.writeFileSync(path.join(f.home, '.claude', 'cache', 'model-catalog', 'catalog.json'), claudeJson([
       ['claude-opus-5-5', 'Opus 5.5'], ['claude-sonnet-5-5', 'Sonnet 5.5'], ['claude-opus-4-6', 'Opus 4.6', 'overflow'],
     ]));
-    const tools = new AiTools({ root: f.root, home: f.home, dry: true });
+    const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home, dry: true });
     const catalog = tools.catalog();
     assert.deepEqual(catalog.codex.models.map(x => x.id), ['gpt-6-sol', 'gpt-6.1-sol']);
     assert.deepEqual(catalog.claude.models.map(x => x.id), ['claude-opus-5-5', 'claude-sonnet-5-5']);
@@ -97,7 +97,7 @@ test('Codex更新は固定argv、更新後版の確認、モデル再取得と�
     let version = '0.157.1';
     let rows = [['gpt-6.1-sol', 'GPT-6.1-Sol']];
     const calls = [];
-    const tools = new AiTools({ root: f.root, home: f.home,
+    const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home,
       find: name => name === 'codex' ? '/fixture/codex' : '', methods: { codex: 'standalone' },
       run: async (file, args) => {
         calls.push([file, ...args]);
@@ -117,14 +117,14 @@ test('Codex更新は固定argv、更新後版の確認、モデル再取得と�
     fs.writeFileSync(path.join(f.home, '.codex', 'models_cache.json'), codexJson([['gpt-6-sol', 'GPT-6-Sol']]));
     await tools.status();
     assert.deepEqual(tools.catalog().codex.models.map(x => x.id), ['gpt-6.1-sol']);
-    const savedRestart = new AiTools({ root: f.root, home: f.home, dry: true });
+    const savedRestart = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home, dry: true });
     assert.deepEqual(savedRestart.catalog().codex.models.map(x => x.id), ['gpt-6.1-sol']);
 
     rows = [['gpt-6.2-sol', 'GPT-6.1-Sol']]; // 同じ表示名でも実IDは別
     await tools.refresh('codex');
     assert.equal(tools.staleModel('codex', 'GPT-6.1-Sol'), true);
     assert.equal(tools.catalog().codex.models[0].label, 'gpt-6.2-sol');
-    const restarted = new AiTools({ root: f.root, home: f.home, dry: true });
+    const restarted = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home, dry: true });
     launch.setDiscoveredModels(restarted.catalog());
     assert.equal(launch.flagFor('codex', 'GPT-6.1-Sol'), 'gpt-6.1-sol');
     assert.equal(restarted.staleModel('codex', 'GPT-6.1-Sol'), true);
@@ -137,7 +137,7 @@ test('稼働中・並行操作を拒否し、空や失敗カタログでは保�
     let busy = 1, release;
     const gate = new Promise(resolve => { release = resolve; });
     let mode = 'hold';
-    const tools = new AiTools({ root: f.root, home: f.home,
+    const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home,
       find: name => name === 'codex' ? '/fixture/codex' : '', methods: { codex: 'standalone' }, busy: () => busy,
       run: async (file, args) => {
         if (args[0] === '--version') return 'codex-cli 0.159.0';
@@ -166,7 +166,7 @@ test('更新後の版が読めない時は最新と断定せず、モデル候�
   const f = fixture();
   try {
     let updated = false;
-    const tools = new AiTools({ root: f.root, home: f.home,
+    const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home,
       find: name => name === 'codex' ? '/fixture/codex' : '', methods: { codex: 'standalone' },
       run: async (file, args) => {
         if (args[0] === '--version') return updated ? 'not-a-version' : 'codex-cli 0.157.1';
@@ -191,7 +191,7 @@ test('Claudeの制御応答とmainが一致すればcache再書込なしでも�
     const first = path.join(dir, 'first.json');
     fs.writeFileSync(first, claudeJson([['claude-opus-5-5', 'Opus 5.5']]));
     let refreshed = false;
-    const tools = new AiTools({ root: f.root, home: f.home,
+    const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home,
       find: name => name === 'claude' ? '/fixture/claude' : '', methods: { claude: 'native' },
       refreshClaude: async () => {
         if (refreshed) fs.writeFileSync(path.join(dir, 'second.json'), claudeJson([
@@ -215,14 +215,65 @@ test('Claudeの制御応答とmainが一致すればcache再書込なしでも�
   } finally { f.close(); }
 });
 
+for (const scenario of [
+  { name: '初回不一致から再取得で一致すれば新一覧を保存する', updated: true, matches: true },
+  { name: '再取得でも不一致なら二回で止めて前回一覧を保持する', updated: true, matches: false },
+  { name: 'cache未更新の不一致では再取得せず前回一覧を保持する', updated: false, matches: false },
+]) {
+  test(`Claudeのモデル一覧は${scenario.name}`, async () => {
+    const f = fixture();
+    try {
+      const cacheDir = path.join(f.home, '.claude');
+      const cache = path.join(cacheDir, 'cache', 'model-catalog', 'catalog.json');
+      const previous = [['claude-fable-5-1', 'Fable 5.1']];
+      const fresh = [...previous, ['claude-fable-5-2', 'Fable 5.2']];
+      fs.writeFileSync(cache, claudeJson(previous));
+      fs.utimesSync(cache, 1600000000, 1600000000);
+      const env = { FIXTURE_ACCOUNT: 'claude:catalog-lag' };
+      let calls = 0;
+      const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home,
+        find: ai => ai === 'claude' ? '/fixture/claude' : '',
+        run: async () => { throw Error('unexpected CLI call'); },
+        refreshClaude: async (file, timeout, observedEnv) => {
+          assert.equal(file, '/fixture/claude'); assert.equal(timeout, 12000); assert.equal(observedEnv, env);
+          calls++;
+          if (calls === 1 && scenario.updated) {
+            fs.writeFileSync(cache, claudeJson(fresh));
+            fs.utimesSync(cache, 1600000010, 1600000010);
+          }
+          return calls === 2 && scenario.matches ? fresh.map(([id]) => id) : scenario.updated ? previous.map(([id]) => id) : [];
+        },
+      });
+      tools.persist();
+      const savedBefore = fs.readFileSync(tools.file, 'utf8');
+      const catalogBefore = JSON.stringify(tools.catalog().claude);
+      const result = await tools.refresh('claude', { cacheDir, env });
+      assert.equal(calls, scenario.updated ? 2 : 1);
+      if (scenario.matches) {
+        const expected = fresh.map(([id, label]) => ({ id, label }));
+        assert.equal(result.unchanged, undefined); assert.equal(result.source, 'claude-cache');
+        assert.deepEqual(result.observedModels, expected); assert.deepEqual(result.models, expected);
+        assert.deepEqual(JSON.parse(fs.readFileSync(tools.file, 'utf8')).claude.models, expected);
+        const restarted = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home, dry: true });
+        assert.deepEqual(restarted.catalog().claude.models, expected);
+      } else {
+        assert.equal(result.unchanged, true); assert.equal(result.observedModels, undefined);
+        assert.equal(result.warning, 'Claude Code のローカル候補を新しく確認できず、前回の内容を残しました');
+        assert.equal(JSON.stringify(tools.catalog().claude), catalogBefore);
+        assert.equal(fs.readFileSync(tools.file, 'utf8'), savedBefore);
+      }
+    } finally { f.close(); }
+  });
+}
+
 for (const scenario of ['partial', 'empty-response', 'invalid-response', 'missing-cache', 'broken-cache', 'unreadable-cache', 'initialize-failed']) {
   test(`Claudeのcache再書込なしでも${scenario}は未確認のまま前回候補を保持する`, async () => {
     const f = fixture();
     try {
       const file = path.join(f.home, '.claude', 'cache', 'model-catalog', 'catalog.json');
-      const models = [['claude-opus-5-5', 'Opus 5.5'], ['claude-fable-5-1', 'Fable 5.1']];
+      const models = [['claude-opus-5-5', 'Opus 5.5'], ['claude-fable-5-2', 'Fable 5.2']];
       fs.writeFileSync(file, claudeJson(models));
-      const tools = new AiTools({ root: f.root, home: f.home,
+      const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home,
         find: ai => ai === 'claude' ? '/fixture/claude' : '',
         refreshClaude: async () => {
           if (scenario === 'initialize-failed') throw Error('SECRET');
@@ -251,7 +302,7 @@ for (const scenario of ['partial', 'empty-response', 'invalid-response', 'missin
 test('Claudeのcacheが無く前回候補も無い時は制御応答だけで候補を作らない', async () => {
   const f = fixture();
   try {
-    const tools = new AiTools({ root: f.root, home: f.home,
+    const tools = new AiTools({ ready: (_ai, file) => file, root: f.root, home: f.home,
       find: ai => ai === 'claude' ? '/fixture/claude' : '', refreshClaude: async () => ['opus'],
     });
     await assert.rejects(tools.refresh('claude'), e => e.stage === 'models');

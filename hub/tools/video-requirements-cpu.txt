@@ -1,0 +1,2 @@
+# Intel Mac, Windows and other CPU environments.
+faster-whisper==1.2.1

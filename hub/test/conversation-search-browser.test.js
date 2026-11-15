@@ -17,14 +17,16 @@ test('sidebar search and modes: stable IME, right-hand results, destination navi
     for (const task of p.tasks) write(path.join(root, 'Product', p.id, '.ai/tasks', task.id + '.md'), `---\ntitle: ${task.title}\nstate: ${task.state}\n---\n`);
   }
   const pdir = path.join(root, 'Product/p');
-  write(path.join(pdir, '.ai/chat/t.jsonl'), [row('<img src=x onerror="window.searchXSS=1"> needle Ｍｕｓｅ ｶﾞ カ\u3099 ガ e\u0301'), row('unique-new'), row('mode-slow current'), ...Array.from({ length: 115 }, (_, i) => row('needle current ' + i))].map(r => JSON.stringify(r)).join('\n') + '\n');
+  write(path.join(pdir, '.ai/chat/t.jsonl'), [row('<img src=x onerror="window.searchXSS=1"> needle Ｍｕｓｅ ｶﾞ カ\u3099 ガ e\u0301'), row('unique-new'), row('mode-slow current'), ...Array.from({ length: 515 }, (_, i) => row((i < 115 ? 'needle current ' : 'background current ') + i))].map(r => JSON.stringify(r)).join('\n') + '\n');
   write(path.join(root, 'Product/freetalk/.ai/chat/t.jsonl'), JSON.stringify(row('needle free-topic')) + '\n');
   write(path.join(root, 'Product/freetalk/.ai/chat/migrated.jsonl'), JSON.stringify(row('needle migrated')) + '\n');
   write(path.join(root, 'Product/child/.ai/chat/t.jsonl'), JSON.stringify(row('needle child-completed')) + '\n');
   const aid = randomUUID(), adir = path.join(pdir, '.ai/chat/history/t', aid), original = Buffer.from([row('archive before'), row('needle archived'), row('archive after'), row('mode-slow archived')].map(r => JSON.stringify(r)).join('\n') + '\n');
   write(path.join(adir, '0.original'), original); fs.chmodSync(path.join(adir, '0.original'), 0o600);
   write(path.join(adir, 'manifest.json'), JSON.stringify({ id: aid, project: 'p', task: 't', stage: 'committed', entries: [{ kind: 'log', saved: '0.original', existed: true, mode: 0o600, bytes: original.length, digest: createHash('sha256').update(original).digest('hex') }] }));
-  const requests = [], errors = [], publicDir = path.resolve(__dirname, '../public'), search = new (require('../lib/conversation-search').ConversationSearch)(root);
+  const requests = [], errors = [], publicDir = path.resolve(__dirname, '../public'), search = new (require('../lib/conversation-search').ConversationSearch)(root, {
+    jev: {prepare:()=>false,rerank:async(query,hits)=>({hits,rerank:{used:false,reason:'off'}})},
+  });
   let browser, sse, routes, delayContext = false;
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost'); requests.push(req.method + ' ' + url.pathname);
@@ -80,6 +82,7 @@ test('sidebar search and modes: stable IME, right-hand results, destination navi
   assert.match(await page.locator('#conversation-search-status').innerText(), /中断/);
   await page.unroute('**/api/conversation-search?*', holdPoll);
   await run('needle'); assert.equal(await page.locator('#main #conversation-search').count(), 1); assert.equal(await page.locator('.conversation-search-hit').count(), 50);
+  assert.match(await page.locator('#conversation-search-status').innerText(), /Jev未使用：オフ/);
   assert.equal(await page.locator('#conversation-search-list img').count(), 0); assert.equal(await page.evaluate(() => window.searchXSS), undefined);
   assert.match(await page.locator('#conversation-search-scope').innerText(), /簡易検索/); assert.equal(await card('needle archived').count(), 0);
   const sidebarOrder = await page.evaluate(() => [...document.querySelector('#list').children].map(e => e.id || e.querySelector('section')?.querySelector('button')?.id));
@@ -114,6 +117,7 @@ test('sidebar search and modes: stable IME, right-hand results, destination navi
   await run('unique-new'); await card('unique-new').locator('.conversation-search-hit').click(); await page.waitForSelector('#msgs .m.search-focus');
   assert.match(await page.locator('#msgs .m.search-focus').innerText(), /unique-new/); assert.equal(await page.locator('#msgs .m.search-focus').count(), 1);
   const inView = () => page.evaluate(() => { const f = document.querySelector('.m.search-focus').getBoundingClientRect(), b = document.querySelector('#msgs').getBoundingClientRect(); return f.bottom > b.top && f.top < b.bottom && f.right <= innerWidth + 1 && f.left >= -1; });
+  assert.equal(await page.locator('#msgs > .m[data-role]').count(),518, 'search must finish a pending long snapshot before matching its first row');
   assert.equal(await inView(), true); assert.equal(await page.locator('#chat-in').inputValue(), '下書きを保持'); await back();
   await run('needle absent'); assert.ok(await page.getByText('関連候補：一部の語が一致', { exact: false }).count());
   await run('Ｍｕｓｅ'); assert.equal(await page.locator('.conversation-search-hit mark').innerText(), 'Ｍｕｓｅ');

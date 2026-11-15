@@ -250,9 +250,72 @@ function baseMsgHtml(r) {
     return UI.template`<div class="m ai"><div class="mh"><span class="chip"><span class="ic">↩</span>${r.from === 'delegate' ? UI.text('渡した作業の結果') : r.from === 'subtask' ? UI.text('子作業の結果') : UI.text('子プロジェクトの結果')}${r.ai ? UI.template`<small>・${esc(AI_LABEL[r.ai] || r.ai)}</small>` : ''}</span><span class="small">${time}</span>${absorb}</div>${note ? UI.template`<p class="transfer-hint">${esc(note)}</p>` : ''}<div class="mb">${richText(r.text)}</div></div>`;
   }
   if (r.role === 'user' && r.to === 'dot' && r.request) return UI.template`<div class="m me" data-dot-request="${esc(r.request)}"><div class="mh"><b data-dot-status>Dotへの依頼（廃止・参照のみ）</b><span class="small">${time}</span></div><div class="mb">${richText(r.text)}</div><p class="small">依頼ID：${esc(r.request)}</p></div>`;
-  if (r.role === 'user') return UI.template`<div class="m me"><div class="mh">${r.mode === 'redo' || r.mode === 'interrupt' ? UI.html('<span class="tagm int">やり直し</span>') : r.mode === 'amend' ? UI.html('<span class="tagm am">追加指示</span>') : r.mode === 'queued' ? UI.html('<span class="tagm">順番待ちの指示</span>') : ''}<span class="small">${time}・${esc(AI_LABEL[r.to] || '')}${r.model ? '・' + esc(r.model) : ''}${r.to === 'codex' && r.fast === true ? UI.text('・加速ON（Fast）') : ''} へ</span></div>${requestBodyHtml(r)}</div>`;
+  if (r.role === 'user') return UI.template`<div class="m me"><div class="mh">${r.mode === 'redo' || r.mode === 'interrupt' ? UI.html('<span class="tagm int">やり直し</span>') : r.mode === 'amend' ? UI.html('<span class="tagm am">追加指示</span>') : r.mode === 'queued' ? UI.html('<span class="tagm">順番待ちの指示</span>') : ''}<span class="small">${time}・${esc(AI_LABEL[r.to] || '')}${r.model ? '・' + esc(r.model) : ''}${r.delegationEffort ? '・' + esc(r.effort || UI.text('CLIの既定')) + '（' + (r.delegationEffort.source === 'fallback' ? UI.text('Ultraを保存値へ戻しました') : r.delegationEffort.source === 'override' ? UI.text('この依頼だけの思考') : UI.text('役割の思考')) + '）' : ''}${r.delegationEffort?.workflow ? UI.text('・補助AIの分担あり') : ''}${r.to === 'codex' && r.fast === true ? UI.text('・加速ON（Fast）') : ''} へ</span></div>${requestBodyHtml(r)}</div>`;
   return UI.template`<div class="m ai ${r.discussion ? 'discussion-message' : ''} ${r.discussion?.summary && !r.error ? 'discussion-summary' : ''}" ${r.ai === 'chatgpt-chat' && r.request ? `data-gpt-report="${esc(r.request)}"` : ''} ${r.ai === 'dot' && r.request ? `data-dot-report="${esc(r.request)}"` : ''}><div class="mh">${r.discussion ? UI.template`<b>${esc(r.discussion.summary ? '話し合いのまとめ' : r.discussion.stage)}</b>` : ''}<span class="chip k-${esc(r.ai)}"><span class="ic">${AI_ICON[r.ai] || '?'}</span>${esc(AI_LABEL[r.ai] || r.ai)}${r.model ? UI.template`<small>・${esc(r.model)}${r.effort ? '・' + esc(r.effort) : ''}</small>` : ''}</span><span class="small">${time}</span>${r.error ? UI.html('<span class="done bad">⚠ 止まりました</span>') : UI.template`<span class="done">✓ 完了${r.ms ? '（' + dur(r.ms) + '）' : ''}</span>`}${r.text ? UI.template`<button type="button" class="cp cp-msg" data-copy="${esc(r.text)}" title="この返事をコピー">⧉ コピー</button>` : ''}</div>
     ${r.text ? UI.template`<div class="mb">${richText(r.text)}</div>` : ''}${(r.generatedImages || []).map(x => imagePathLink(x.path, x.name)).join('')}${!r.questionsManaged && r.asks && r.asks.length ? askHtml(r.asks) : ''}${r.error ? UI.template`<div class="merr">${esc(r.error)}</div>` : ''}</div>`;
+}
+
+// Paint the tail of a large snapshot first, then prepend bounded batches.
+// Every row is retained. Explicit search/selection/copy finishes pending work
+// synchronously, and existing scroll anchors keep the current row in place.
+function drawChatRows(box, rows, { defer, current, capture, restore, refresh, complete }) {
+  box.hubCancelRows?.();
+  const supported = typeof requestAnimationFrame === 'function' && typeof cancelAnimationFrame === 'function'
+    && typeof box.getBoundingClientRect === 'function' && typeof box.isConnected === 'boolean'
+    && typeof window.getSelection === 'function';
+  if (!defer || !supported || rows.length < 256) {
+    box.innerHTML = rows.length ? rows.map(msgHtml).join('') : EMPTY_CHAT;
+    return false;
+  }
+  const batch = 32;
+  let end = rows.length - batch, frame = null, stopped = false;
+  box.innerHTML = rows.slice(end).map(msgHtml).join('');
+  const cleanup = () => {
+    stopped = true;
+    if (frame !== null) cancelAnimationFrame(frame);
+    document.removeEventListener('keydown', key, true);
+    document.removeEventListener('copy', flush, true);
+    document.removeEventListener('contextmenu', flush, true);
+    document.removeEventListener('selectionchange', select);
+    box.removeEventListener('pointerdown', flush, true);
+    if (box.hubFlushRows === flush) { delete box.hubFlushRows; delete box.hubCancelRows; }
+  };
+  const insert = count => {
+    const before = capture(), start = Math.max(0, end - count);
+    box.insertAdjacentHTML('afterbegin', rows.slice(start, end).map(msgHtml).join(''));
+    end = start;
+    refresh(); restore(before);
+  };
+  const finish = () => { cleanup(); complete(); };
+  function flush() {
+    if (stopped) return;
+    if (!current() || !box.isConnected) { cleanup(); return; }
+    insert(end); finish();
+  }
+  function key(e) {
+    if ((e.metaKey || e.ctrlKey) && ['a', 'c', 'f'].includes(e.key.toLowerCase())
+      && !e.target.closest?.('input, textarea, [contenteditable="true"]')) flush();
+  }
+  function select() {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.containsNode(box, true)) flush();
+  }
+  const step = () => {
+    frame = null;
+    if (stopped) return;
+    if (!current() || !box.isConnected) { cleanup(); return; }
+    insert(batch);
+    if (end) frame = requestAnimationFrame(step); else finish();
+  };
+  box.hubFlushRows = flush; box.hubCancelRows = cleanup;
+  document.addEventListener('keydown', key, true);
+  document.addEventListener('copy', flush, true);
+  document.addEventListener('contextmenu', flush, true);
+  document.addEventListener('selectionchange', select);
+  box.addEventListener('pointerdown', flush, true);
+  // Leave a complete frame for the tail before starting older history.
+  frame = requestAnimationFrame(() => { frame = requestAnimationFrame(step); });
+  return true;
 }
 
 function drawPendingQuestion(box, question) {

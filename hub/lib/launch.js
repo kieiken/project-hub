@@ -1,4 +1,5 @@
 'use strict';
+const { FABLE_MODEL, FABLE_LABEL, LEGACY_FABLE_MODEL, LEGACY_FABLE_LABEL } = require('./fable-model');
 const { lt } = require('./locale');
 // Claude Code / Codex の起動コマンドを組み立てる。フォルダを Finder で開く。
 const platform = require('./platform');
@@ -42,8 +43,10 @@ function exeArgv(file, args = [], envPath = process.env.PATH) {
   return t.js ? { file: process.execPath, args: [t.target, ...args] } : { file: t.target, args };
 }
 // Preserve native PATH lookup on macOS/Linux; Windows resolves using this request's environment.
-function resolveCli(file, args, env = process.env) {
-  return WIN ? exeArgv(findExe(file, env.PATH) || file, args, env.PATH) : { file, args };
+function resolveCli(file, args, env = process.env, ai = path.basename(file || '')) {
+  if (WIN) return exeArgv(findExe(file, env.PATH) || file, args, env.PATH);
+  if (ai === 'claude') file = require('./cli-trust').ensureCliReady(ai, findExe(file, env.PATH) || file);
+  return { file, args };
 }
 // Git for Windows の bash（外部ターミナルとコマンド実行に使う）。他の OS は /bin/bash
 function gitBash() {
@@ -129,8 +132,8 @@ const CONTEXT_RULE = lt('# 長い会話の決まり\n文字数とトークン数
 // ※ 実際の CLI が受け付ける名前と違えば、ここを直すだけでよい
 const MODEL_FLAG = {
   // Claude Code は本当のモデル名が分かっているので、それを渡す
-  claude: { 'Opus 5.5': 'claude-opus-5-5', 'Fable 5.1': 'claude-fable-5-1' },
-  // Codex の /model の一覧（v0.157）に合わせた名前。GPT-6 に Terra は無いので 6terra は GPT-5.6-Terra
+  claude: { 'Opus 5.5': 'claude-opus-5-5', [FABLE_LABEL]: FABLE_MODEL, [LEGACY_FABLE_LABEL]: LEGACY_FABLE_MODEL },
+  // 6terra は昔の呼び名で GPT-5.6 Terra を指す。GPT-6.1 Terra は現在のモデル一覧から解決する。
   codex: { 'GPT-6.1-Sol': 'gpt-6.1-sol', Astra: 'gpt-6-astra', '6sol': 'gpt-6-sol', '6luna': 'gpt-6-luna', '6terra': 'gpt-5.6-terra' },
   agy: {},
 };
@@ -138,9 +141,11 @@ const MODEL_FLAG = {
 let overrides = { claude: {}, codex: {} };
 let discovered = { claude: {}, codex: {}, agy: {}, grok: {} };
 let agyCurrent = [];
+let effortCatalog = {};
 function setOverrides(o) { overrides = { claude: { ...((o && o.claude) || {}) }, codex: { ...((o && o.codex) || {}) } }; }
 function getOverrides() { return overrides; }
 function setDiscoveredModels(catalog) {
+  effortCatalog = Object.fromEntries(AIS.map(ai => [ai, catalog[ai]?.models || []]));
   discovered = { claude: {}, codex: {}, agy: {}, grok: {} };
   agyCurrent = catalog.agy?.models || [];
   for (const ai of AIS) {
@@ -179,11 +184,28 @@ function startupInfo(ai, model, modelFlag = flagFor(ai, model), fast = false) {
   return lt`【この番の起動】Hub がこの番の起動に指定した設定は ${AI_LABEL[ai] || oneLine(ai)}・${setting}。これは起動設定で、実際に応答したモデルの証明ではない。あなた自身にはモデルを確かめる方法がない。起動設定が依頼の指定と一致している場合は、自分で証明できないことだけを理由に停止しない。モデル名を聞かれたら「起動設定：${setting}。自分では確かめられない」と答える。`;
 }
 const EFFORT_FLAG = {
-  claude: { '中': 'medium', '高': 'high', '極高': 'xhigh', 'MAX': 'max', 'Ultra': 'ultra' },
-  codex: { '中': 'medium', '高': 'high', '極高': 'xhigh', 'MAX': 'max', 'Ultra': 'ultra' },
+  claude: { '低': 'low', '中': 'medium', '高': 'high', '極高': 'xhigh', 'MAX': 'max' },
+  codex: { '低': 'low', '中': 'medium', '高': 'high', '極高': 'xhigh', 'MAX': 'max', 'Ultra': 'ultra' },
   grok: { '中': 'medium', '高': 'high', '極高': 'xhigh', 'MAX': 'max' },
   agy: {}, // 思考のCLI引数は付けず、選んだモデルIDをそのまま使う。
 };
+
+// Legacy Claude Ultra fell back to the CLI default. Keep its effective high setting.
+function normalizeEffort(ai, effort) {
+  return ['claude', 'claude-code'].includes(ai) && effort === 'Ultra' ? '高' : effort;
+}
+function effortsFor(ai, model, rows) {
+  ai = ai === 'claude-code' ? 'claude' : ai;
+  if (ai === 'agy') return ['高'];
+  const id = flagFor(ai, model) || model;
+  const entry = (rows || effortCatalog[ai] || []).find(r => r.id === id || r.label === model);
+  return Object.keys(EFFORT_FLAG[ai] || {}).filter(e => e !== '低' || ai === 'claude' || entry?.efforts?.includes('低'));
+}
+function effortFlag(ai, effort, model) {
+  effort = normalizeEffort(ai, effort);
+  if (effort === '低' && !effortsFor(ai, model).includes(effort)) return '';
+  return EFFORT_FLAG[ai]?.[effort] || '';
+}
 
 // 動いている AI に途中で切り替えを伝える時のコマンド（画面の中で打つのと同じ）
 // ※ CLI のコマンドが違えば、ここを直すだけでよい
@@ -193,8 +215,8 @@ const SWITCH_CMD = {
   grok: { model: m => `/model ${m}`, effort: e => `/effort ${e}` },
 };
 
-function switchCommand(ai, field, value) {
-  const v = field === 'model' ? flagFor(ai, value) : (EFFORT_FLAG[ai] && EFFORT_FLAG[ai][value]);
+function switchCommand(ai, field, value, model) {
+  const v = field === 'model' ? flagFor(ai, value) : effortFlag(ai, value, model);
   const f = SWITCH_CMD[ai] && SWITCH_CMD[ai][field];
   return v && f ? f(v) : '';
 }
@@ -211,7 +233,7 @@ function buildCommand({ ai, dir, prompt, cmd, model, effort, account = 'default'
   if (!base) throw new Error('unknown ai');
   const args = [...(ai === 'codex' ? CODEX_CONTEXT_ARGS : []), ...accountArgs(ai, account), ...accelerationArgs(ai, fast)];
   const m = flagFor(ai, model);
-  const e = effort && EFFORT_FLAG[ai]?.[effort];
+  const e = effortFlag(ai, effort, model);
   if (m) args.push('--model', m);
   if (e) args.push(...(ai === 'claude' ? ['--effort', e] : ['-c', `model_reasoning_effort=${e}`]));
   return `cd ${sq(dir)} && ${accountShell(ai, account)}${base}${args.map(a => ' ' + sq(a)).join('')} ${sq(prompt)}`;
@@ -231,7 +253,7 @@ function buildArgv({ ai, prompt, cmd, model, effort, account = 'default', fast =
   if (!base.length || !['claude', 'codex'].includes(ai)) throw new Error('unknown ai');
   const args = [...base.slice(1), ...accountArgs(ai, account)];
   const m = flagFor(ai, model);
-  const e = effort && EFFORT_FLAG[ai][effort];
+  const e = effortFlag(ai, effort, model);
   if (ai === 'claude') {
     if (m) args.push('--model', m);
     if (e) args.push('--effort', e);
@@ -250,4 +272,4 @@ const openFolder = (...args) => platform.openPath(...args);
 const revealFile = (...args) => platform.revealPath(...args);
 const openUrl = (...args) => platform.openUrl(...args);
 
-module.exports = { WIN, findExe, exeArgv, resolveCli, gitBash, GROK_API_ENV, GROK_AUTH_ENV, grokCommand, accelerationArgs, setAccounts, accountEnv, accountArgs, accountShell, AIS, AI_KEY, AI_LABEL, agyModelId, agyAccountError, agyAccountShell, childEnv, buildCommand, buildArgv, openTerminal, openFolder, revealFile, openUrl, sq, DEFAULT_CMD, CODEX_CONTEXT_ARGS, CONTEXT_RULE, MODEL_FLAG, EFFORT_FLAG, SWITCH_CMD, switchCommand, focusAuthTerminal, flagFor, modelLabel, startupInfo, setOverrides, getOverrides, setDiscoveredModels };
+module.exports = { WIN, findExe, exeArgv, resolveCli, gitBash, GROK_API_ENV, GROK_AUTH_ENV, grokCommand, accelerationArgs, setAccounts, accountEnv, accountArgs, accountShell, AIS, AI_KEY, AI_LABEL, agyModelId, agyAccountError, agyAccountShell, childEnv, buildCommand, buildArgv, openTerminal, openFolder, revealFile, openUrl, sq, DEFAULT_CMD, CODEX_CONTEXT_ARGS, CONTEXT_RULE, MODEL_FLAG, EFFORT_FLAG, normalizeEffort, effortsFor, effortFlag, SWITCH_CMD, switchCommand, focusAuthTerminal, flagFor, modelLabel, startupInfo, setOverrides, getOverrides, setDiscoveredModels };

@@ -1,14 +1,17 @@
 'use strict';
 
 module.exports = function taskreadRoutes(ctx) {
-  const { send, lt, store, stepSummary, inWork, gitw, expandHome, workRoot, taskIntegrate } = ctx;
+  const { send, sendEncoded, lt, store, stepSummary, inWork, gitw, expandHome, workRoot, taskIntegrate } = ctx;
   return {
     steps: {
       matches: (req, url) => req.method === 'GET' && url.pathname === '/api/task/steps',
       handle(req, res, url) {
         if (req.method === 'GET' && url.pathname === '/api/task/steps') {
           const p=store.readProject(url.searchParams.get('project')),t=p?.tasks.find(t=>t.id===url.searchParams.get('task'));
-          return t ? send(res,200,{steps:t.steps,version:stepSummary(t.steps).version}) : send(res,404,{error:lt('作業が見つかりません')});
+          if (!t) return send(res,404,{error:lt('作業が見つかりません')});
+          return sendEncoded(req,res,JSON.stringify({steps:t.steps,version:stepSummary(t.steps).version}),{
+            'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+          });
         }
       },
     },

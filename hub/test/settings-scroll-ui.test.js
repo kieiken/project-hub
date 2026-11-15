@@ -149,7 +149,7 @@ test('Two theme buttons switch directly, keeping drafts, scroll and live termina
   await click(value);
   assert.equal(storage.get('hub-theme'),value);assert.equal(f.context.window.HubTheme.current(),value);
   assert.equal(buttons[value]['aria-pressed'],'true');assert.equal(buttons[value==='light'?'dark':'light']['aria-pressed'],'false');
-  assert.equal(live.options.theme.background,value==='light'?'#fbf8f3':'#10131a');assert.deepEqual(second.options.theme,live.options.theme);
+  assert.equal(live.options.theme.background,value==='light'?'#f9fbfd':'#10131a');assert.deepEqual(second.options.theme,live.options.theme);
   assert.equal(f.run('rolesDraft[0].name'),'draft');assert.equal(f.scroll(),scroller);assert.equal(f.scroll().scrollTop,120);
  }
  blocked=true;await click('light');assert.equal(storage.get('hub-theme'),'dark');assert.equal(buttons.light['aria-pressed'],'true');assert.match(messages.at(-1),/保存できませんでした/);
@@ -169,4 +169,24 @@ test('zh-TW language-pack credit labels',()=>{
  assert.equal(UI.text('Claudeのクレジットを確認'),'確認 Claude 的點數');
  assert.equal(UI.text('Codexのクレジットを確認'),'確認 Codex 的點數');
  assert.equal(UI.text('既存クレジットを優先利用'),'優先使用現有點數');
+});
+
+test('automatic Ultra defaults OFF, preserves failed drafts and saves without changing roles',async()=>{
+ const f=fixture(),normal=f.context.api;const before=JSON.stringify(f.context.snapshot.roles.roles);
+ assert.doesNotMatch(f.main().match(/data-allow-delegate-ultra[^>]*/)[0],/checked/);
+ for(const fn of f.listeners.change)await fn({target:{dataset:{allowDelegateUltra:''},checked:true}});
+ assert.equal(f.run('rolesDirty()'),true);let saved;
+ f.context.api=async(route,body)=>{if(route!=='/api/roles')return normal(route,body);saved=JSON.parse(JSON.stringify(body));throw Error('save failed');};
+ await f.context.saveRoles();assert.equal(saved.allowDelegateUltra,true);assert.equal(f.run('allowDelegateUltraDraft'),true);assert.equal(JSON.stringify(saved.roles),before);
+ f.context.api=async(route,body)=>route==='/api/roles'?({...f.context.snapshot.roles,...saved}):normal(route,body);
+ await f.context.saveRoles();assert.equal(f.run('rolesDirty()'),false);assert.match(f.main().match(/data-allow-delegate-ultra[^>]*/)[0],/checked/);
+ for(const fn of f.listeners.change)await fn({target:{dataset:{allowDelegateUltra:''},checked:false}});
+ f.run('clearRolesDraft();renderSettings()');assert.match(f.main().match(/data-allow-delegate-ultra[^>]*/)[0],/checked/);
+});
+test('delegated request shows its applied effort and distinguishes role, one-off and fallback',()=>{
+ const f=fixture();f.context.row={role:'user',to:'codex',model:'GPT-6.1-Sol',text:'【渡した依頼：fixture】\nfixture',origin:'delegate',effort:'Ultra',delegationEffort:{source:'override',requested:'Ultra'}};
+ let html=f.run('baseMsgHtml(row)');assert.match(html,/Ultra（この依頼だけの思考）/);
+ f.context.row.effort='MAX';f.context.row.delegationEffort.source='fallback';html=f.run('baseMsgHtml(row)');assert.match(html,/MAX（Ultraを保存値へ戻しました）/);
+ f.context.row.delegationEffort.source='role';html=f.run('baseMsgHtml(row)');assert.match(html,/MAX（役割の思考）/);
+ f.context.row.to='claude';f.context.row.effort='極高';f.context.row.delegationEffort.workflow=true;html=f.run('baseMsgHtml(row)');assert.match(html,/補助AIの分担あり/);
 });

@@ -2,15 +2,22 @@
 // Display/periodic preflight only. Action permission is checked separately by
 // handoff-admission; its strict scan never uses this display shortcut.
 const {Worker,isMainThread,parentPort,workerData}=require('node:worker_threads');
+const fs=require('./platform/file-io');
+const {noLinks}=require('./remove');
 const message='会話の終了保存の点検を完了できません。少し待ってから開き直してください';
 class HandoffScan {
- constructor(root){this.root=root;this.worker=null;this.pending=null;this.fault=null;this.closed=false;}
+ constructor(root,{cacheFile=root+'-display-cache.json'}={}){this.root=root;this.cacheFile=cacheFile;this.worker=null;this.pending=null;this.fault=null;this.closed=false;}
  scan(freshDirs=new Set()){
   if(this.closed||this.fault)return Promise.resolve([{stage:'spool',error:message}]);
   if(!this.worker){
-   const worker=this.worker=new Worker(__filename,{workerData:{handoffScan:true,root:this.root}});
+   const worker=this.worker=new Worker(__filename,{workerData:{handoffScan:true,root:this.root,cacheFile:this.cacheFile}});
    const fail=()=>{this.fault=true;this.complete?.([{stage:'spool',error:message}]);};
-   worker.on('message',result=>this.complete?.(result.errors||[{stage:'spool',error:message}]));
+   worker.on('message',result=>{
+    // A cache write is optional and never turns a failed scan into all-clear.
+    // The read-only worker can only propose metadata; it cannot write receipts.
+    if(result.cache&&this.cacheFile)this.saveCache(result.cache);
+    this.complete?.(result.errors||[{stage:'spool',error:message}]);
+   });
    worker.once('error',fail);worker.once('exit',fail);worker.unref();
   }
   if(!this.pending){
@@ -23,6 +30,15 @@ class HandoffScan {
    const timer=setTimeout(()=>resolve([{stage:'spool',error:message}]),30000);
    this.pending.then(errors=>{clearTimeout(timer);resolve(errors);});
   });
+ }
+ saveCache(cache){
+  let tmp;
+  try{
+   noLinks(this.cacheFile);tmp=this.cacheFile+'.'+require('node:crypto').randomUUID();
+   fs.writeFileSync(tmp,JSON.stringify(cache),{flag:'wx',mode:0o600});
+   fs.renameSync(tmp,this.cacheFile);
+  }catch{/* Corrupt, unwritable or missing cache always falls back to strict reads. */}
+  finally{if(tmp)try{fs.unlinkSync(tmp);}catch{}}
  }
  close(){this.closed=true;this.complete?.([{stage:'spool',error:message}]);if(this.worker)void this.worker.terminate();this.worker=null;}
 }
@@ -39,6 +55,13 @@ if(!isMainThread&&workerData?.handoffScan===true){
  const open=fs.openSync;fs.openSync=(file,flags,...args)=>{if(flags!=='r'&&flags!==0)deny();return open(file,flags,...args);};
  for(const name of ['exec','execSync','execFile','execFileSync','spawn','spawnSync','fork'])cp[name]=deny;
  const spool=require('./cli-spool');
+ if(workerData.cacheFile)try{
+  // Optional local display metadata only. Broken or linked caches are ignored.
+  noLinks(workerData.cacheFile);const st=fs.lstatSync(workerData.cacheFile);
+  if(st.isFile()&&st.size<=16*1024*1024)spool.importDisplayCache(workerData.root,JSON.parse(fs.readFileSync(workerData.cacheFile,'utf8')));
+ }catch{}
+ let lastCache;
+
  parentPort.on('message',operation=>{
   try{
    if(operation?.operation!=='scan'||!Array.isArray(operation.freshDirs)||!operation.freshDirs.every(dir=>typeof dir==='string'))throw Error('unknown handoff display operation');
@@ -48,7 +71,8 @@ if(!isMainThread&&workerData?.handoffScan===true){
     const o=spool.read(dir,'request.json')?.options;
     errors.push({run:path.basename(dir),project:o?.project,task:o?.task,...issue});
    }
-   parentPort.postMessage({errors});
+   const cache=spool.exportDisplayCache(workerData.root),encoded=JSON.stringify(cache);
+   parentPort.postMessage({errors,...(workerData.cacheFile&&lastCache!==encoded?{cache}:{})});lastCache=encoded;
   }catch{parentPort.postMessage({errors:[{stage:'spool',error:message}]});}
  });
 }

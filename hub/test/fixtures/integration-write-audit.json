@@ -10,14 +10,15 @@
     ]
   },
   "accounts.js": {
-    "reason": "_hub/accountsおよびCLI専用HOMEの認証設定。台帳外。",
+    "reason": "_hub/accountsレジストリとアカウント専用CLI HOME、認証Terminalの専用account-processes札。レジストリは一時保存/rename、札は所有者一致時だけ削除、プロファイル削除はゴミ箱へ移動し失敗時に復元する既存経路。台帳外。",
     "sites": [
       "463c79fc059571ae476837898c9105813789178e544d8dbb6a5584d6286261b7",
       "b5418c44ec6c8efb00013e47c74bb9a74bbc1e75e11cc2e13d88509d55ab5b38",
       "bc203d74af1477c5887d05be71cf6a3a5723ac79597ad98c69d3abfcfcc59392",
+      "73bffc58e06d57d554c5b6f2e2869e35a7af0eb09be54a0f1787967bf89895ca",
       "e454bf1c18959a4d78d1ebb9a1f44b2d239bae4222dfb787206cff473aa937c4",
-      "59dbf84580800dc332b4ce22dfbadb44cb2ec69544aa6e12d64c55798732e148",
-      "35e245f2d7970c0145894847bdf82605b656aeb3c7f6a58f0ffd03e2d9334bb5",
+      "fd664e2d26f277981727a0a8acf095ae6f7ded0e408c95f47d96e57967274f59",
+      "056d55de3c469df1dcaac0e73fdc76a13525e16fa3b14cf336f96bee3ede37cf",
       "00fcee162192c3247b3889afc65320c8f562bdbb525f23bdccdd79db5bcc7209",
       "4c3eb76e2e21b8b9e57c9175834f8d1f9d6237f684ef117d07d3c6f4086e4bfb",
       "cefdeb246678f7e7a98bfd7dd7d525366fcb71824c858b42f981152b2096a5c1",
@@ -30,15 +31,14 @@
     ]
   },
   "ai-tools.js": {
-    "reason": "既存の_hub制御状態または読取り用fs importのみ。通常Product台帳への書込みなし。",
+    "reason": "_hub/ai-tools-models.json のCLIモデル候補・状態を一時ファイル0600からrenameして保存。失敗時は自分の一時ファイルだけ片付ける。台帳外。",
     "sites": [
       "463c79fc059571ae476837898c9105813789178e544d8dbb6a5584d6286261b7",
       "b5418c44ec6c8efb00013e47c74bb9a74bbc1e75e11cc2e13d88509d55ab5b38",
-      "01b6f6ace962644e25bbeccade158e48413896db0b965abfa17077ad60f4bf49",
+      "f2ff0e58ab40fda83275ba03953a4d36cf4a52465773c189a718e6278eb6d041",
       "e8d52bebb9bba9efb678e14eae82e23b8b43b51d1a3562fda2e83c71c9c105ee",
-      "f9623236353c4e3504053338656d8783459a6da98d835f4fd87b1ecd375e69aa",
-      "b5418c44ec6c8efb00013e47c74bb9a74bbc1e75e11cc2e13d88509d55ab5b38",
-      "ba247d6a629d76d061aba141ee5505a7cdbddc7101b12e341053a1e85eb85217"
+      "a25dbd0bd083b0d83f847970b40f5ff4b314ed80c80f580e3962dec2d08b2996",
+      "b5418c44ec6c8efb00013e47c74bb9a74bbc1e75e11cc2e13d88509d55ab5b38"
     ]
   },
   "ai-updates.js": {
@@ -128,7 +128,7 @@
     ]
   },
   "cli-spool.js": {
-    "reason": "_hub/cli-runs の所有・監督コード・出力・完了証拠だけ。owned-processes.cjs と同じ起動時に platform.supervisorFiles が宣言する選択OSの依存一式を固定し、同一run dirのplatform/へ保存（安全なJS名だけ・dir0700・file0600）。通常台帳の保存はchat経由。",
+    "reason": "_hub/cli-runs 配下の実行記録・所有権ロック・停止/終了受領の原子的保存と、起動時に固定する監督スクリプト。台帳への直接書込みなし。表示TTL追加はメモリ内のみで保存先不変。; 手動再開のCLIだけに既存所有者ヘッダー＋番の出所を0600のcli-runs/<run>/delegate-headers.txtへ保存。会話・台帳・request.jsonへ認証内容を記録しない。",
     "sites": [
       "9862c82c7fbd840e702c652326798900eefbde70cb2fabfe9d18ab06af947864",
       "ca454c5fb9600cb458ecd53ecf117d15dbbd5a463e1459bf945a818d3bb54c5a",
@@ -136,13 +136,14 @@
       "cff399b37f6c5b23f9c471822e34c4a6a73fd91c4f5f2ad1d88d68d40d31d1e5",
       "81744c6323bff82be361db8468970cbbc1e160e3c0a33013f04a0f056afe2104",
       "310f612785279089060fee09b263b174e541b7f58ffdafc1998cff8c7a671c0a",
-      "985c9bd514e9c812042ad2a6b28fc2c3904aa99750009283166cf886ba58d38c",
+      "aa06dfa59b7d66012888a1a565f1c3c7045bdbad6ed15cd2033839b6d595acbc",
       "781076b88495a16fe2969bda1bfc4d302d7b4a0fdbbd313c3143062f52e0fcbf",
       "f067d63eae7e57e4af8417f73c90c351b03933b07afdb4ead72e9b4faf631378",
       "57b06dd3ed9d6d6dbaac9ded778c97bde9ba3461f92fb2a4c0c260497c35eb75",
       "065dad0a9b5a85b81458a9f8fcbc1688c22ad0936026166ed3be594a4187c530",
       "d62f8587cf64029e70250b2f534480f2e2eed880752ff8256d8d987beea40da2",
       "bffe0c0e6b6d931c275f050d0b4c25fc61bfd4eb223ad14b6fd443e4fb398792",
+      "a5729050a934593ef163a71f67aabfa976549d51c037b5a3e89dadcc390213a9",
       "5972d6eff2a1330f81be9eb5c9fd95676833b9e6a6f451ef584e023077a3df9e",
       "14a6cf6ce8d070279fac52bde2c35c3b7032dde56d326091d05a8e573db0da95"
     ]
@@ -267,12 +268,13 @@
     ]
   },
   "git.js": {
-    "reason": "正式Git保存・merge・worktree・製品ローカル素材コピーの既存経路。自動信頼するHub記録ではない。",
+    "reason": "正式Git保存・worktree作成/ゴミ箱移動・未配置のローカル素材コピー。衝突時の書戻しはbookkeepingの検証済みplan.outputだけを保存し、未解消衝突・差分検査・Git commitの失敗時に当該mergeを取り消す既存の取り込み経路。fs.promises.lstatは読取り。",
     "sites": [
       "463c79fc059571ae476837898c9105813789178e544d8dbb6a5584d6286261b7",
       "57f0ae641dc4f9b07ff5e33bb9132f3fb52ecc6fc91c36e2e2c75b8908f438fd",
       "03f88e03866bd0bc67d9a4df844b04f115508ef91e27121f022dae19080c8de8",
       "743964aa229ef1256a4b32a1399e786cf3e8cd757c451cb37ecae688720d14c2",
+      "cbbf55eb9bde0aa4a02a23235553ed87baaf2dc9b64ef4b753e317fa39e230d7",
       "7069c454b047fdfa366a86bedc68e235e6440db04a5a8fced888f4d0f6cb7394",
       "113d76f8993a6487ba8f75973e0c81943d4a6986bc4572d45f8dec265bba6de8",
       "bbebd42b694af9be4c1e76fb858b9397e720ac8ffa8f5280eb21600fc7a112df",
@@ -914,10 +916,10 @@
     "reason": "_hub/stop-control の停止状態・armed・intentのみ。通常Product台帳へ書き込まない。",
     "sites": [
       "18d8726a5893515d3c82c30010ef531eb83a7d661fffcf00f3117bf82caf9b86",
-      "6962d923cdf1855b67c60bffb35e1a4084d466fc26587ad85eff3cb61fbf4388",
-      "4d01232ef4b3061e98d4176a1ac4f3e0ad9fc68eb114beb88c30ccaf5aa71d1f",
+      "536bab5a8c02ab539733320d33a9130f38abc26cd6d1f31c77d9dcfd2752ddf0",
+      "3e680b8398aed0d57fe4dab9cbce8daa356853171848d12c8e8654d188659a92",
       "faa9cad1b16929878c92d9178a82dd62831257766623a30fa2b9ff2a444d9605",
-      "be620539d3bc1741d47d9e3917c4af9f2f0f88f97c810e66dda2096be9676679",
+      "e1f916a42f1c597a5123a98fe0984fa8bbb1251009b287f82c277875156b6f23",
       "ca59a339cec4a987953a5142df71f4df60f682ee2d44206c404961c24363fa3a"
     ]
   },
@@ -939,11 +941,18 @@
     ]
   },
   "platform/darwin.js": {
+    "reason": "node-ptyの既定prebuild/buildのspawn-helperを実行可能化するchmod。加えて所有者専用の一時projecthub-terminalディレクトリ0700にUUID.shをwx/O_NOFOLLOW・0600で作成し、実行開始時に自分自身を削除、失敗/期限切れの所有者一致スクリプトだけ片付ける。台帳外。",
     "sites": [
       "43b3ba439ed3e6599ee89774cd147d40356c7652141abcbfbe5a80ff27b07f35",
+      "41d62d18353cb691f0b4eae06749336e514c9cdadb0bbf40c4b3ca561eb0330d",
+      "0a1fb34fbd427bc7be3e5df6aa39c311606d83ae60b109100adca137d857e388",
+      "54ec53ed0ad932ea3137588f2a3cb489e6b904efb9b0ba4a669f954832cc0aa1",
+      "4ed62878d50107bdd78c39471e36b9c6460fb61d00349adf07259b7cc2d75b37",
+      "817cdbc53d2889a917afea1acc20aed64776e9b6678238f2854e3bfca1b34a72",
+      "d2a477aed7d4be290af9f93675e9f4caee6617f112c728531eb9c875c686af09",
+      "e509d4ec16a34d060a14b96b12812489161aaa22f078db1d2a8857f6b75dc5bc",
       "8ae4d3494885b5fc5531f2e05f487b1a87b03af40ad9c8d9b56b6745cdb49171"
-    ],
-    "reason": "sessions.jsから移したnode-pty配布先（prebuilds・build/Release・build/Debug）のspawn-helperへのchmod0755だけ。呼出元が解決したnode-ptyの場所を使い、通常Product台帳・認証設定には書かない。監督プロセスはプロセス検査だけを使い、この権限設定は呼ばない。"
+    ]
   },
   "platform/persistence.js": {
     "reason": "保存確定のOS境界。POSIXの既存ファイル/フォルダを読取専用で開き同期・closeするだけで内容変更なし。非対応OSと同期失敗は例外を返す。監督の同世代同梱対象。 注入ioのopen/alias/promises/計算プロパティも同じ監査で検査する。",
@@ -1195,9 +1204,9 @@
     ]
   },
   "platform/win32-update-store.js": {
-    "reason": "_hub/updates/windows専用private directoryの初期mkdirのみ。他の変更はWindows専用private native store経由。",
+    "reason": "_hub/updates/windows のupdate.sqliteとwal/shm/journalを専用ACL/identity確認下でSQLite FULL同期保存。固定アプリID/スキーマの更新状態のみ、台帳・鍵・ライセンスには書かない。",
     "sites": [
-      "3d326ca6ba92b0221a7ed0ec7a6977b0ed6359f7d27e14458c09ee3cb2bcfc49",
+      "529a330fd159c80e707d2b10c5a58cd044c74aa372875880b3102d2febd2603e",
       "4502c9f38d6c3b350534e7f6d7cc7a21ab8732061681e7cc107aa2761d425039"
     ]
   },
@@ -1321,8 +1330,12 @@
     ]
   },
   "handoff-scan.js": {
-    "reason": "Read-only finished-receipt scanner for display and periodic preflight only. Filesystem references here install deny guards for writes/open-for-write and process launches; the fixed scan message calls existing pending/failure readers only. No completion, adoption, recovery or action is exposed. Action paths retain current synchronous validation.",
+    "reason": "Display-only scanner worker remains read-only and cannot launch, adopt or recover. Parent writes optional private atomic metadata cache (cli-runs-display-cache.json sibling): verifier/root identity and completed run names+file metadata hashes only, no receipts or ledger writes. Cache is never imported into strict action verification; failed/unreadable cache falls back to full validation.",
     "sites": [
+      "0af7dee491854773c72e7ed59338adb6c075091876728867da2fb24e9d687d82",
+      "a0d8e5c493b6d497b8f85435e5a1cc0f192361562ecafaddcc5ac52f5a17c7c7",
+      "6fc0989e987a7d70f56d6374e968058515b73f42ad1acec686e5452b96f1673b",
+      "f689f7e98249eea205271aed97302b257274522854a12dcd7ea4256b0361a00a",
       "03379dc2312d2008e46744b705c6184bfea34ea1f7281d68846d61587d23f1ed",
       "774f30f43e390b9da561a43b38bece032a87c865f5bc1c4d66baff60a70cd1b4",
       "ed180b04a648aa31a934dd039f4b9656d363de4d698cb48270bda688c26cd8f5",
@@ -1343,6 +1356,103 @@
       "774f30f43e390b9da561a43b38bece032a87c865f5bc1c4d66baff60a70cd1b4",
       "ed180b04a648aa31a934dd039f4b9656d363de4d698cb48270bda688c26cd8f5",
       "ec9198d1a9553f9631b4e1879f37eef875a5abf2f5bdf9896f2e790aa4c0ff5c"
+    ]
+  },
+  "account-processes.js": {
+    "reason": "fs import は既存の実行開始証明の読取り用。プロセス一覧・開いているパスの照合だけで、fs書込みなし。認証ファイルの内容は読まない。",
+    "sites": [
+      "529a330fd159c80e707d2b10c5a58cd044c74aa372875880b3102d2febd2603e"
+    ]
+  },
+  "local-auth.js": {
+    "reason": "OSの専用run領域に所有者/ローカル接続ヘッダーを0700ディレクトリ・0600排他一時ファイルからrenameして保存。所有者とリンクを確認し、現所有者のファイルだけ削除。台帳外。登録のみで実認証は変更しない。",
+    "sites": [
+      "089fc037d65ada22dc72c15a3bae79966404218b267027893a1df9d576a1d2ff",
+      "7a180ccb96da11b6aa46e328985bf6cc0df9572d13ef79d826459c6f89da3be0",
+      "0bc165ad8a3c2934ed2c36dddc561862b6d3377b26b7cfa46d73b5c5c35abdd8",
+      "863e528ffd0f487f95132f62ca6fa08ea36b2b310ca72cf7c7174f7a6e91a544",
+      "51b8682e4ad64e998ee7471a26f79bc07d7dfd4e6637584d8b620d810ad3f4bc",
+      "b6f194ada29eee659b8c999d354e8b994bb6f3749df5d89b7bcb0fcaa3579323",
+      "59b06c330f6ea1a30a838680475441c2bf832e456a32846bf940ed2fc7d63c6a"
+    ]
+  },
+  "move-boot.js": {
+    "reason": "fs import は固定の同梱public/local-auth.jsの読取り用。直接のfs書込みなし。引越し操作そのものは既存のmove/authインターフェイスを通す。",
+    "sites": [
+      "089c8deb6503bcdbfc1af4dc58127e15e7b9a3f09fab7c87ed679396bb9dd29e"
+    ]
+  },
+  "project-attachments.js": {
+    "reason": "対象プロジェクトの.ai/work/<task>/chat-attachments内の新規UUID添付と動画由来ファイルだけ。リンク/対象作業を検証し、wx一時保存後rename、失敗時は自分の未確定一時ファイルだけ削除。規則・作業台帳・会話原文への直接書込みなし。",
+    "sites": [
+      "5bb1540e2505a549070151e406b1ca340f9f09334cd2b1db20f500c6f5e681d0",
+      "870a12bac04095206099f3ba8be5aa4876e1633fa45f9a9ac93133c79feb91b5",
+      "f2b53ab26ac29fac1de2d710daf04c3a7b974e76725d7bcad165f56c09a4054f",
+      "7ad1686ea37c3336e187988285b2fdd6d8b1a74fc73bb77aad33a4fceae57dfe"
+    ]
+  },
+  "video-frames.js": {
+    "reason": "専用添付ディレクトリのvideo.txtをwxで保存し、場面・文字起こし・字幕帯画像の場所と各帯の時刻対応を記録する。ffmpegは同ディレクトリへframe-NN.jpgを-nで生成し既存を上書きしない。ローカル動画を読取変換する経路で台帳・ネットワークへ書かない。",
+    "sites": [
+      "f4e5d0bf342e863c2ed7c9ed82734edf61140160c73e0f1bab059375316fc60f",
+      "52e55ba7133122b5989804b630b9e715c2efad2b6b080209e86cf562b516a506"
+    ]
+  },
+  "video-transcript.js": {
+    "reason": "専用添付ディレクトリの一時音声.audio.wavをffmpegの-nで生成し、成功・失敗にかかわらずfinallyで削除する。16kHzモノラル音声をローカル認識した時刻付き本文だけを同ディレクトリのtranscript.txtへwxで保存する。元動画・台帳・他作業・ネットワークへの書込みはしない。",
+    "sites": [
+      "f4e5d0bf342e863c2ed7c9ed82734edf61140160c73e0f1bab059375316fc60f",
+      "74af1f53c83a306f5ec2262a84cf680f60663d000ddb369afae2d9ffa9c84818",
+      "3cc2cd13ac7e0e41f7abe91caf707f3ff6670831c7c79d21be93406eb6ee6b0a"
+    ]
+  },
+  "idea-directory-identity.js": {
+    "reason": "fs import は対象ディレクトリのstatによるidentity読取り専用。df/diskutilもボリューム照合の読取りのみ。直接書込みなし。",
+    "sites": [
+      "4502fd9d07345e84bbb3f25827bd1a4e8400fa0622da53bba9ecee439e2c15a4"
+    ]
+  },
+  "jev-search-budget.js": {
+    "reason": "_hub/jev-search.json の利用上限/予約回数を専用lockディレクトリと0600排他一時ファイル・fsync/renameで保存。リンクと保存ディレクトリを確認し自分の未確定一時ファイル/lockだけ削除。台帳外、登録確認で外部サービスは呼ばない。",
+    "sites": [
+      "6991a65fca8a8e413300d48348d9d519c7672d04253ba019f53622b985454754",
+      "33c0681ced4f674ceaa3ce7de106d8c24189a89af417eac70af5c8dcd166a245",
+      "29ed370bd34e7e2276a818daa0a4cd3708eb9451ffd418c513341dad371c7fe6",
+      "334f4289b92f68e2b3c8d94364c1dcff454790a0cd4626751795bdd95acea705",
+      "d65448b798b68d1ca9552315feb8e35adb70efaa573fca448aecab2c86101630",
+      "b397be26108bbb2e2cdadd3f6a122faa99d9c05288fc774b433eebfae407d3b9",
+      "431f2480168b4a08968ad6369b2c3b787d4dba483a0446cc30a8b7f819aa5e28",
+      "3bec0a72aaeb144d57321f19e735e7d39991c1fce9acae0c5a8df7aa67cbc734"
+    ]
+  },
+  "license/windows-storage.js": {
+    "reason": "_hub/license配下のlicense.sqliteとSQLiteのwal/shm/journal。専用ディレクトリ・リンク/所有identity確認・FULL同期と固定スキーマでライセンス状態だけを保存。台帳外。登録のみで実ライセンスは変更しない。",
+    "sites": [
+      "529a330fd159c80e707d2b10c5a58cd044c74aa372875880b3102d2febd2603e",
+      "a110a26ec528c90f26ba3637f898253346a52e194a419d9f64b19453bd850e11"
+    ]
+  },
+  "license/storage.js": {
+    "reason": "Macは_hub/license/<許可名>.jsonを0600排他一時fdに保存してfsync/rename/ディレクトリ同期。Windowsは専用SQLiteストアへ委譲。リンク/ファイル名を確認し自分の未確定一時ファイルだけ片付ける。台帳外。",
+    "sites": [
+      "73fced7ce9652ffc15cf08f164e7ef59c73fd5bb6c8ac960e272f785ee77d954",
+      "8b5b699834f64446c42bb4ec645e246ced23e6b9ce1a9ef1729123eb00d5d905",
+      "b006e9ff127a99222576762d70b2418f22b5d30b151b8a03c2a057403ad4000f",
+      "174048d3e19da7443ff95ead9070b890573c9949a7bd26f1273dfac6d2e3ddb0",
+      "4bc03e4bca6810d4993e98729537a660384bc12086cccfe34592f0615f206b78"
+    ]
+  },
+  "platform/win32-command-sandbox.js": {
+    "reason": "注入されたfsはCLI・Gitの存在、manifest、実パスの読取りのみ。Hubからの直接ファイル書込みなし。コマンドは指定workspaceのCodex sandbox内だけで実行し、Windows側ACLの残留は利用者向けに明記。",
+    "sites": []
+  },
+  "video-subtitles.js": {
+    "reason": "呼出元の専用添付ディレクトリ内にmkdtempで字幕帯の一時フォルダを作り、ffmpeg -nで最大24枚のstrip-NN.pngとcombined.jpgを生成する。各画像は4MB以内、1600px以内の完成画像だけを同ディレクトリのsubtitles.jpgへCOPYFILE_EXCLで保存し、既存ファイルを上書きしない。一時フォルダは成功・失敗ともfinallyで削除する。元動画・台帳・他作業・ネットワークへの書込みはしない。",
+    "sites": [
+      "f4e5d0bf342e863c2ed7c9ed82734edf61140160c73e0f1bab059375316fc60f",
+      "a348deb9e8e93a12bdb5b8cb9f710c0530f97a76e2ffd6f464567c82161f48ed",
+      "dd88ba2653fcd2545858dedb2f9ea3467f2186cc75d511befe408ef5c49d6184",
+      "ead6c7adde3af3afc33757f86f784e157bf3238770ec2afff5fd9b2c3e7512c9"
     ]
   }
 }

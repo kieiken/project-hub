@@ -27,7 +27,7 @@ function fixture(mode='ok'){
   }});
  auto.pendingRequest=(r,k,phase,request)=>runner.pendingIntegration(r.project,r.task,k,phase,request);
  auto.savedCompletion=(r,k,phase)=>chat.read(dir,'t').findLast(row=>row.role==='assistant'&&row.integrationAuto?.key===k&&row.integrationAuto.phase===phase&&row.integrationAuto.closed);
- function options(phase,text=marker(phase)){return{project:'p',task:'t',pdir:dir,dir,ai:'claude',model:'claude-fable-5-1',text,request:phase,perm:process.execPath+' source.cjs'};}
+ function options(phase,text=marker(phase)){return{project:'p',task:'t',pdir:dir,dir,ai:'claude',model:'claude-fable-5-2',text,request:phase,perm:process.execPath+' source.cjs'};}
  async function clean(){const run=runner.busy('p','t');if(run){runner.stop('p','t');await run.finishedP;}process.env.PATH=oldPath;fs.rmSync(dir,{recursive:true,force:true});}
  return{runner,auto,events,issues,options,clean,get r(){return record;},get receipts(){return receipts;},get mains(){return mains;},setHeld:x=>{held=x;}};
 }

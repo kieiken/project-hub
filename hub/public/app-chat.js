@@ -24,7 +24,7 @@ function openChat(p, t, savedScroll) {
   ta.addEventListener('input', () => { setChatDraft(draftKey, ta.value); });
   const filesInput = $('#chat-files');
   $('#chat-attach').addEventListener('click', () => {
-    filesInput.accept = $('#chat-ai').value === 'muse|direct' ? '.txt,.md,.csv,.tsv' : p.id === 'freetalk' ? FREETALK_ACCEPT : isPhone() ? 'image/*' : '';
+    filesInput.accept = $('#chat-ai').value === 'muse|direct' ? '.txt,.md,.csv,.tsv' : p.id === 'freetalk' || isPhone() ? FREETALK_ACCEPT : '';
     filesInput.value = '';
     filesInput.click();
   });
@@ -95,7 +95,7 @@ function openChat(p, t, savedScroll) {
     finally{museReadBusy=false;chatSending.delete(draftKey);if(currentMuseView()){updateWorkAnswerControls();if (state.museSupported !== false) void refreshMuseReply();}}
   });
   const keep = (manual = true) => { const [ai, model] = $('#chat-ai').value.split('|'); if (manual) specialOverrides.set(p.id + '/' + t.id, { ai, model, effort: $('#chat-effort').value }); try { localStorage.setItem('hub-chat-' + p.id + '/' + t.id, JSON.stringify({ ai, model, effort: $('#chat-effort').value })); } catch (e) { /* 無視 */ } };
-  $('#chat-ai').addEventListener('change', () => { drawChatAccount(p, t); const ai = $('#chat-ai').value.split('|')[0], agy = ai === 'agy'; const e = $('#chat-effort'), previous = e.value; e.hidden = effortHidden(ai); e.disabled = agy || ['chatgpt', 'dot', 'muse'].includes(ai); e.innerHTML = effortsFor(ai).map(v => UI.template`<option ${v === (agy ? '高' : effortsFor(ai).includes(previous) ? previous : '高') ? 'selected' : ''}${UI.valueAttribute(v)}>${esc(UI.label(v))}</option>`).join(''); keep(); updateWorkAnswerControls(); syncChatWebchatAvailability(); }); $('#chat-effort').addEventListener('change', () => keep());
+  $('#chat-ai').addEventListener('change', () => { drawChatAccount(p, t); const ai = $('#chat-ai').value.split('|')[0], agy = ai === 'agy'; const e = $('#chat-effort'), previous = e.value; e.hidden = effortHidden(ai); e.disabled = agy || ['chatgpt', 'dot', 'muse'].includes(ai); e.innerHTML = effortsFor(ai, $('#chat-ai').value.split('|')[1], $('#chat-account')?.value || t.accounts?.codex).map(v => UI.template`<option ${v === (agy ? '高' : effortsFor(ai, $('#chat-ai').value.split('|')[1], $('#chat-account')?.value || t.accounts?.codex).includes(previous) ? previous : '高') ? 'selected' : ''}${UI.valueAttribute(v)}>${esc(UI.label(v))}</option>`).join(''); keep(); updateWorkAnswerControls(); syncChatWebchatAvailability(); }); $('#chat-effort').addEventListener('change', () => keep());
   const updateDiscussion = bindDiscussion(p, t);
   $('#chat-stop').addEventListener('click', () => api('/api/chat/stop', { project: p.id, task: t.id }).then(r=>{state.stopControl=r;toast(r.ok?'停止処理を終えました。新しい指示を送ると、この会話だけ再開します。待ち指示は保留中です':'停止を確認できないAIがあります。設定の［復旧］を確認してください');}).catch(e => toast(e.message)));
   // mode: ''（普通）／'interrupt'（① 中断して送る）／'queue'（② 追加：終わったら続けて）
@@ -156,7 +156,10 @@ function openChat(p, t, savedScroll) {
     const askKey = answer !== undefined || !activeAsk?.dataset.questionSource ? activeAsk?.dataset.askKey : undefined;
     const attempt = question && askKey ? { question, askKey } : null;
     if (attempt) askAttempts.set(draftKey, attempt);
-    chatSending.add(draftKey); updateWorkAnswerControls();
+    const answerSend = question ? { question } : null;
+    if (answerSend) workAnswerSends.set(draftKey, answerSend);
+    chatSending.add(draftKey);
+    if (answerSend) refreshWorkAnswerSend(); else updateWorkAnswerControls();
     try {
       const sc=state.stopControl,st=sc?.tasks?.find(x=>x.project===p.id&&x.task===t.id);
       const r = await api('/api/chat/send', { manualStopTicket:sc?{epoch:sc.epoch,task:st?.epoch||0}:undefined, project: p.id, task: t.id, ai, account: (taskOf(proj(p.id), t.id) || t).accounts?.[ai] || 'default', model: modelRequest(ai,model), effort: $('#chat-effort').value, text, projectImages: p.kind !== 'freetalk' && sent.length ? sent.filter(x => x.kind !== 'file').map(x => x.id) : undefined, attachmentDraft: answer === undefined && sent.length ? { text: original, attachments: sent } : undefined, images: p.id === 'freetalk' ? sent.map(x => x.id) : ai === 'chatgpt' ? sent.filter(x => x.kind !== 'file').map(x => x.id) : undefined, generation: p.id === 'freetalk' ? attachmentGeneration(t.id) : undefined, mode, answerQuestion: question, answerSource }).catch(err => {
@@ -171,7 +174,7 @@ function openChat(p, t, savedScroll) {
       if (state.specialMode?.enabled) syncSpecialPick(p, t);
       if (answer === undefined) instructionHistory.record(draftKey, original);
       if (askAttempts.get(draftKey) === attempt) askAttempts.delete(draftKey);
-      await acceptedWorkAnswer(p, t, question, r, askKey);
+      await acceptedWorkAnswer(p, t, question, r, askKey, !answerSend || workAnswerSends.get(draftKey) === answerSend);
       if (answer === undefined && chatDraft[draftKey] === '' && (chatDraftRevisions.get(draftKey) || 0) === draftRevision) {
         instructionHistory.reset(draftKey);
       }
@@ -197,7 +200,11 @@ function openChat(p, t, savedScroll) {
       }
       toast(err.message); return false;
     }
-    finally { chatSending.delete(draftKey); updateWorkAnswerControls(); }
+    finally {
+      chatSending.delete(draftKey);
+      if (answerSend && workAnswerSends.get(draftKey) === answerSend) workAnswerSends.delete(draftKey);
+      if (answerSend) refreshWorkAnswerSend(); else updateWorkAnswerControls();
+    }
   };
   $('#composer').addEventListener('submit', e => { e.preventDefault(); sendChat(chatBusy ? 'queue' : ''); });
   $('#chat-redo').addEventListener('click', () => sendChat('redo'));
@@ -463,7 +470,7 @@ function openChat(p, t, savedScroll) {
   stream.onerror = () => {
     if (chatES !== stream || !currentQueueView()) return;
     const before = position(), retrying = stream.readyState !== 2;
-    if (box.dataset.askHistoryPending) {
+    if (box.dataset.chatLoading === '1') {
       box.innerHTML = retrying
         ? UI.template`<p class="chat-loading small danger" role="status">会話を読み込めませんでした。接続を再試行しています…</p>`
         : UI.template`<p class="chat-loading small danger" role="status">会話を読み込めませんでした。作業を開き直してください。</p>`;
@@ -481,8 +488,21 @@ function openChat(p, t, savedScroll) {
     const before = position();
     if (ev.type === 'discussion') { updateDiscussion(ev); return; }
     if (ev.type === 'queue') { drawQueue(ev.queue); return; }
-    if (ev.type === 'rows') { globalThis.HubChatGenerations ||= new Map();if(ev.generation){const key=p.id+'\0'+t.id,old=globalThis.HubChatGenerations.get(key);if(p.id==='freetalk' && old && old!==ev.generation)clearSentChatImages(p.id,t.id,[...chatImages(p.id,t.id)]);globalThis.HubChatGenerations.set(key,ev.generation);} setBusy(null); drawQueue(ev.queue); box.innerHTML = ev.rows.length ? ev.rows.map(msgHtml).join('') : EMPTY_CHAT; if(Object.hasOwn(ev,'pendingQuestion'))drawPendingQuestion(box,ev.pendingQuestion); delete box.dataset.askHistoryPending; refreshRequestStatus(box); refreshAsks(box); setBusy(ev.busy, true); if(scroller) scroller.rows(before); else scroll(true); finishInitialRead(); if (window.HubConversationSearch?.focusRows) { const rows = ev.rows; requestAnimationFrame(() => { if (chatES === stream && box.isConnected) window.HubConversationSearch.focusRows(p.id, t.id, box, rows); }); } }
+    if (ev.type === 'rows') { globalThis.HubChatGenerations ||= new Map();if(ev.generation){const key=p.id+'\0'+t.id,old=globalThis.HubChatGenerations.get(key);if(p.id==='freetalk' && old && old!==ev.generation)clearSentChatImages(p.id,t.id,[...chatImages(p.id,t.id)]);globalThis.HubChatGenerations.set(key,ev.generation);} box.hubCancelRows?.(); setBusy(null); drawQueue(ev.queue);
+      box.dataset.askHistoryPending = '1';
+      const pendingRows = drawChatRows(box, ev.rows, {
+        defer: before.follow && (!savedScroll || savedScroll.follow),
+        current: () => chatES === stream && currentQueueView(), capture: position,
+        restore: before => scroll(false, before),
+        refresh: () => { refreshRequestStatus(box); refreshAsks(box); },
+        complete: () => { delete box.dataset.askHistoryPending; refreshAsks(box); }
+      });
+      if(Object.hasOwn(ev,'pendingQuestion'))drawPendingQuestion(box,ev.pendingQuestion);
+      if (!pendingRows) delete box.dataset.askHistoryPending;
+      refreshRequestStatus(box); refreshAsks(box); setBusy(ev.busy, true); if(scroller) scroller.rows(before); else scroll(true); finishInitialRead(); if (window.HubConversationSearch?.focusRows) { const rows = ev.rows; requestAnimationFrame(() => { if (chatES === stream && box.isConnected) window.HubConversationSearch.focusRows(p.id, t.id, box, rows); }); } }
     else if (ev.type === 'row') {
+      // A fresh assistant question must never inherit an older answer's sending display.
+      if (ev.row.role === 'assistant' && workAnswerSends.delete(draftKey)) refreshWorkAnswerSend();
       const e = box.querySelector('.chat-empty'); if (e) e.remove();
       const tmp = $('#msg-partial');
       if (tmp) tmp.insertAdjacentHTML('beforebegin', msgHtml(ev.row)); else box.insertAdjacentHTML('beforeend', msgHtml(ev.row));

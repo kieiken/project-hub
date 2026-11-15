@@ -39,7 +39,13 @@ class MainMergeFlow {
    if(!r)return {stage:'ready'};
    if(!r.flow||['project','task','sourceDir','targetDir'].some(k=>r[k]!==scope[k]))return {stage:'unknown',error:'取り込みの送信範囲が一致しません。再送しません。'};
    const base={requestId:id||r.id,sourceHead:r.source.head,targetHead:r.target.head,commit:r.commit,version:r.flow.version,retained:true,restart:r.flow.restart};
-   if(['aborted','not-sent'].includes(r.state))return {...base,stage:'stopped',delivery:this.ledger.status({...scope,id:r.id})};
+   if(['aborted','not-sent'].includes(r.state)){
+    // A stopped attempt only holds the shown save. A newer save in the copy (the conflict fixed and
+    // saved) returns to ready; the aborted record stays as history and is never resent.
+    const current=this.git.inspect(scope.sourceDir,{readOnly:true})?.head;
+    if(current&&r.source?.head&&current!==r.source.head)return {stage:'ready',previousStop:{requestId:r.id,at:r.at,sourceHead:r.source.head,targetHead:r.target.head}};
+    return {...base,stage:'stopped',delivery:this.ledger.status({...scope,id:r.id})};
+   }
    if(r.flow.stage==='complete')return this.git.isAncestor(r.targetDir,r.commit)&&this.git.isAncestor(r.targetDir,r.source.head,r.commit)&&this.git.isAncestor(r.targetDir,r.target.head,r.commit)?{...base,stage:'complete',applied:true}:{...base,stage:'unknown',error:'完了後の保存履歴を照合できません。再送しません。'};
    let applied=false;try{applied=Boolean(this.applied(r));}catch(e){return {...base,stage:'blocked',applied:r.state==='applied',error:e.message};}
    return {...base,stage:applied?r.flow.stage:'unknown',applied,error:r.flow.error||'',waiting:r.flow.stage==='waiting'?this.restart().status().waiting:[]};

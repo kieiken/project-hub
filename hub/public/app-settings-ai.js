@@ -60,7 +60,7 @@ function drawAiTools() {
     const reason = needsDataLocation ? aiToolsDataLocationMessage() : aiToolsError || (busy ? UI.text('確認・更新中です…') : running ? UI.text('稼働中のCLIは飛ばし、ほかのCLIを更新できます。') : !targets.length ? UI.text('ログイン済みのCLIがありません。') : '');
     const modelText = status => ({ changed: UI.text('変更あり'), same: UI.text('変更なし'), first: UI.text('初回確認'), unknown: UI.text('未確認') }[status] || UI.text('未確認'));
     const excludedText = status => ({ 'not-installed': UI.text('未導入'), 'logged-out': UI.text('未ログイン'), api: UI.text('APIのログインは対象外です'), unknown: UI.text('ログイン状態を確認できませんでした') }[status] || UI.text('ログイン状態を確認できませんでした'));
-    box.innerHTML = UI.template`<div class="ai-update-toolbar"><span class="small">ログイン済みを毎日確認します。</span><button class="btn" type="button" data-ai-update-all ${needsDataLocation || busy || aiToolsError ? 'disabled' : ''}>一括更新</button>${hubUpdateButton()}${restartControls()}</div>
+    box.innerHTML = UI.template`<div class="ai-update-toolbar"><span class="small">ログイン済みを毎日確認します。</span><button class="btn" type="button" data-ai-update-all ${needsDataLocation || busy || aiToolsError ? 'disabled' : ''}>一括更新</button>${hubUpdateButton()}<span data-local-restart-status>${restartControls()}</span></div>
       ${reason ? UI.template`<p class="ai-tool-result" role="status">${esc(reason)}</p>` : ''}
       ${needsDataLocation ? UI.html('<button type="button" class="btn plain" data-ai-data-location>データの保存先を設定</button>') : ''}
       ${excluded.filter(ai => aiTools[ai]?.notice).map(ai => UI.template`<p class="ai-tool-result" role="status">${esc(AI_LABEL[ai])}：${esc(aiTools[ai].notice)}</p>`).join('')}
@@ -144,7 +144,7 @@ function aiToolResultText(action, r) {
       + (result.warning ? UI.template`注意：${result.warning}。` : '');
   };
   if (action === 'models') return modelReport(r);
-  if (r.state) return UI.template`更新結果：${({updated:UI.text('更新済み'),checked:UI.text('確認済み'),failed:UI.text('失敗'),unsupported:UI.text('未対応'),unverified:UI.text('版未確認'),busy:UI.text('稼働中')})[r.state] || r.state}。`;
+  if (r.state) return UI.template`更新結果：${({updated:UI.text('更新済み'),checked:UI.text('確認済み'),failed:UI.text('失敗'),unsupported:UI.text('未対応'),unverified:UI.text('版未確認'),busy:UI.text('稼働中'),'mac-confirmation':UI.text('Mac の確認が必要')})[r.state] || r.state}。` + (r.notice || '');
   const before = r.beforeVersion || '', after = r.afterVersion || '';
   const base = r.verified === false ? UI.template`更新操作は終わりましたが、版を確認できませんでした${r.verifyError ? `：${r.verifyError}` : ''}。` : r.changed
     ? before && after ? UI.template`更新しました：${before} → ${after}。` : UI.template`更新しましたが、版を確認できませんでした。`
@@ -182,7 +182,7 @@ async function runAiUpdateAll() {
   try {
     const result = await api('/api/ai-tools/update-all', {});
     const counts = key => (result.results || []).filter(r => r.state === key).length;
-    aiBatchMessage = UI.template`一括更新が終わりました。更新 ${counts('updated')} 件、失敗 ${counts('failed')} 件、版未確認 ${counts('unverified')} 件、未対応 ${counts('unsupported')} 件、稼働中 ${counts('busy')} 件。`;
+    aiBatchMessage = UI.template`一括更新が終わりました。更新 ${counts('updated')} 件、失敗 ${counts('failed')} 件、版未確認 ${counts('unverified')} 件、未対応 ${counts('unsupported')} 件、稼働中 ${counts('busy')} 件。` + UI.template`Mac の確認が必要 ${counts('mac-confirmation')} 件。`;
     await refreshAiToolCatalog();
   } catch (e) { aiBatchMessage = aiToolErrorText(e); }
   finally { aiBatchPending = false; aiToolsOperation = null; await loadAiTools(); drawAiTools(); }
@@ -190,11 +190,16 @@ async function runAiUpdateAll() {
 
 function modelOrderHtml() {
   const ids = orderedModels();
-  return UI.template`<div class="model-order-rows">${ids.map((id, i) => {
+  const scoped = Boolean(state.codexModelCatalogs);
+  if (!(state.accounts || []).some(r => r.ai === 'codex' && r.id === codexModelAccount)) codexModelAccount = 'default';
+  const catalog = state.codexModelCatalogs?.[codexModelAccount];
+  const hidden = state.codexHiddenModels?.[codexModelAccount] || (codexModelAccount === 'default' ? state.hiddenModels?.codex || [] : []);
+  return UI.template`${scoped ? UI.template`<div class="acts"><label>Codexのモデル一覧 <select id="codex-model-account" ${modelViewSaving || codexModelsPending ? 'disabled' : ''}>${accountOptions('codex',codexModelAccount)}</select></label><button class="btn plain sm" id="codex-model-refresh" ${codexModelsPending || modelViewSaving ? 'disabled' : ''}>${codexModelsPending ? UI.text('取得中…') : UI.text('このアカウントの一覧を取得')}</button></div><p class="small">${catalog?.source ? UI.text('チェックしたモデルを、このアカウントの選ぶ欄に表示します。変更は自動で保存します。') : UI.text('このアカウントの一覧は未確認です。ログイン後に一覧を取得してください。')} 役割の指定と稼働中・順番待ちの依頼は変わりません。</p>` : ''}<div class="model-order-rows">${ids.map((id, i) => {
     const [ai, model] = id.split('|'), label = UI.template`${AI_LABEL[ai === 'claude-code' ? 'claude' : ai]}・${model}`;
+    const absent = scoped && ai === 'codex' && !(catalog?.models || []).some(row => row.id === (state.cliFlags?.codex?.[model] || model));
     return UI.template`<div class="model-order-row" data-mo-row="${esc(id)}">
       <span class="model-grip" draggable="${!modelViewSaving}" data-mo-grip="${esc(id)}" aria-hidden="true" title="ドラッグして順番を変える">⋮⋮</span>
-      <label class="chk"><input type="checkbox" data-mv-ai="${ai}" data-mv="${esc(model)}" ${((state.hiddenModels || {})[ai] || []).includes(model) ? '' : 'checked'} ${modelViewSaving ? 'disabled' : ''}> <span>${esc(label)}</span></label>
+      <label class="chk"><input type="checkbox" data-mv-ai="${ai}" data-mv="${esc(model)}" ${(scoped && ai === 'codex' ? hidden : (state.hiddenModels || {})[ai] || []).includes(model) || absent ? '' : 'checked'} ${modelViewSaving || absent || codexModelsPending ? 'disabled' : ''}> <span>${esc(label)}${absent ? UI.text('（このアカウントの候補外）') : ''}</span></label>
       <button class="btn plain sm" type="button" data-mo-up="${esc(id)}" aria-label="${esc(label)} を上へ" ${modelViewSaving || i === 0 ? 'disabled' : ''}>↑</button>
       <button class="btn plain sm" type="button" data-mo-down="${esc(id)}" aria-label="${esc(label)} を下へ" ${modelViewSaving || i === ids.length - 1 ? 'disabled' : ''}>↓</button>
     </div>`;
@@ -254,12 +259,25 @@ async function toggleModelVisibility(el) {
   const { mvAi: ai, mv: model } = el.dataset, checked = el.checked;
   ++stateLoadEpoch; modelViewSaving = true; modelOrderNotice = ''; drawModelOrder();
   try {
-    const r = await api('/api/models/hidden', { ai, model, hidden: !checked });
+    const r = await api('/api/models/hidden', { ai, model, hidden: !checked, ...(ai === 'codex' && state.codexModelCatalogs ? { account: codexModelAccount } : {}) });
+    if (r.codexHiddenModels) state.codexHiddenModels = r.codexHiddenModels;
     state.hiddenModels = r.hiddenModels; state.modelOrder = r.modelOrder;
     syncRoleModelOrder(); drawInitialPick();
     toast(checked ? UI.template`${model} を出します` : UI.template`${model} を隠しました`);
   } catch (e) { modelOrderNotice = UI.template`表示の設定を保存できませんでした：${e.message}`; toast(modelOrderNotice); }
   finally { ++stateLoadEpoch; modelViewSaving = false; drawModelOrder({ id: `${ai}|${model}`, checkbox: true }); }
+}
+
+async function refreshCodexAccountModels() {
+  if (codexModelsPending || modelViewSaving) return;
+  const account = codexModelAccount;
+  codexModelsPending = true; modelOrderNotice = ''; drawModelOrder();
+  try {
+    await api('/api/ai-tools/models/refresh', { ai: 'codex', account });
+    await refreshAiToolCatalog();
+    modelOrderNotice = UI.text('このアカウントのモデル一覧を保存しました');
+  } catch (e) { modelOrderNotice = e.message; toast(e.message); }
+  finally { codexModelsPending = false; drawModelOrder(); }
 }
 
 function clearModelDrop() { document.querySelectorAll('.model-order-row').forEach(x => x.classList.remove('model-drop-before','model-drop-after')); }
@@ -289,7 +307,7 @@ function initialPickHtml() {
   return UI.template`<div class="cfg">
     <select data-initial="ai" aria-label="新規開始のAI" ${disabled}>${['claude', 'codex'].map(ai => UI.template`<option value="${ai}" ${pick.ai === ai ? 'selected' : ''}>${AI_LABEL[ai]}</option>`).join('')}</select>
     <select data-initial="model" aria-label="新規開始のモデル" ${disabled}>${missing ? UI.template`<option selected disabled value="${esc(pick.model)}">${esc(pick.model)}（利用不可）</option>` : ''}${shownModels(key, pick.model).map(m => UI.template`<option ${m === pick.model ? 'selected' : ''}>${esc(m)}${m === pick.model && state.initialPickError ? UI.text('（利用不可）') : ''}</option>`).join('')}</select>
-    <select data-initial="effort" aria-label="新規開始の思考" ${disabled}>${state.efforts.map(e => UI.template`<option ${e === pick.effort ? 'selected' : ''}${UI.valueAttribute(e)}>${esc(UI.label(e))}</option>`).join('')}</select>
+    <select data-initial="effort" aria-label="新規開始の思考" ${disabled}>${effortsFor(pick.ai, pick.model).map(e => UI.template`<option ${e === pick.effort ? 'selected' : ''}${UI.valueAttribute(e)}>${esc(UI.label(e))}</option>`).join('')}</select>
     </div><div class="acts"><button type="button" class="btn plain" data-initial-reset ${disabled}>初期値に戻す</button></div>
     <p class="small" role="status">${initialPickSaving ? UI.text('保存中…') : unavailable ? UI.template`選んだモデルは利用不可です。モデルを選び直してください。${esc(state.initialPickError || '')}` : UI.text('変更するとすぐ保存します。')}</p>`;
 }
@@ -450,7 +468,7 @@ function accountOptions(ai, selected) {
 function taskAccountSelect(p, t, ai, chat = false) {
   const rows = (state.accounts || []).filter(r => r.ai === ai), selected = t.accounts?.[ai] || 'default';
   const hidden = rows.length < 2 && selected === 'default';
-  return UI.template`<label class="account-pick small" ${hidden ? 'hidden' : ''}>${chat ? UI.text('アカウント') : UI.template`${esc(AI_LABEL[ai])}のアカウント`} <select ${chat ? 'id="chat-account"' : ''} data-task-account data-p="${esc(p.id)}" data-t="${esc(t.id)}" data-ai="${esc(ai)}" aria-label="${UI.template`${esc(AI_LABEL[ai] || '')}のアカウント`}">${accountOptions(ai, selected)}</select></label>`;
+  return UI.template`<label class="account-pick small" ${hidden ? 'hidden' : ''}>${chat ? '' : UI.template`${esc(AI_LABEL[ai])}のアカウント`} <select ${chat ? 'id="chat-account"' : ''} data-task-account data-p="${esc(p.id)}" data-t="${esc(t.id)}" data-ai="${esc(ai)}" aria-label="${UI.template`${esc(AI_LABEL[ai] || '')}のアカウント`}">${accountOptions(ai, selected)}</select></label>`;
 }
 
 function taskFastSelect(p, t, ai) {
@@ -518,6 +536,19 @@ function syncAccountPickers() {
     el.value = selected;
     const label = el.closest?.('.account-pick'); if (label) label.hidden = rows.length < 2 && selected === 'default';
   });
+  if (view.kind === 'work' && state.codexModelCatalogs) {
+    const p = proj(view.project), t = p && taskOf(p, view.task);
+    if (t) {
+      const key = JSON.stringify([t.accounts?.codex || 'default', state.codexModelCatalogs, state.codexHiddenModels]);
+      const select = $('#chat-ai');
+      if (select && select.dataset.accountModelsKey !== key) { syncChatModelChoices(); select.dataset.accountModelsKey = key; }
+      document.querySelectorAll('.spec[data-model-ai="codex"]').forEach(box => {
+        if (box.dataset.accountModelsKey === key) return;
+        box.outerHTML = specSelect(p,t,'codex',Boolean(sessOf(p.id,t.id,'codex')));
+      });
+      document.querySelectorAll('.spec[data-model-ai="codex"]').forEach(box => { box.dataset.accountModelsKey = key; });
+    }
+  }
   if (typeof usageContextChanged === 'function') usageContextChanged();
 }
 
@@ -589,19 +620,117 @@ function agyModelsHtml() {
   return UI.template`<div class="agy-models"><b>利用可能なモデル</b><p class="small" role="status">${esc(message)}</p>${models.length ? UI.template`<ul>${models.map(row => UI.template`<li>${esc(row.label)} <code>${esc(row.id)}</code></li>`).join('')}</ul>` : ''}<button class="btn plain sm" type="button" data-agy-model-refresh ${agyModelsRefreshing ? 'disabled' : ''}>${agyModelsRefreshing ? UI.text('確認中…') : UI.text('モデル一覧を再取得')}</button></div>`;
 }
 
+let jevSettingsStatus = null, jevSettingsLoaded = false, jevSettingsBusy = false, jevSettingsError = '';
+let jevKeyDialog = null;
+
+function jevStatusText() {
+  if (jevSettingsError) return jevSettingsError;
+  if (!jevSettingsStatus) return '登録状態は未確認';
+  if (!jevSettingsStatus.supported) return 'この環境では保護されたキー保管を利用できません';
+  if (!jevSettingsStatus.registered) return 'キー未設定';
+  if (jevSettingsStatus.connection === 'verified') {
+    const time = new Date(jevSettingsStatus.checkedAt);
+    return Number.isFinite(time.getTime()) ? `接続確認済み（${time.toLocaleString()}）` : '接続未確認';
+  }
+  if (jevSettingsStatus.connection === 'rejected') return 'キーが拒否されました';
+  if (jevSettingsStatus.connection === 'unavailable') return '確認できません（通信）';
+  return 'キー登録済み・接続未確認';
+}
+
+function drawJevStatus() {
+  const status = $('#jev-status'); if (status) status.textContent = UI.text(jevStatusText());
+  const save = $('#jev-register'); if (save) save.disabled = jevSettingsBusy || !jevSettingsStatus?.supported;
+  const check = $('#jev-status-check'); if (check) check.disabled = jevSettingsBusy || !jevSettingsStatus?.registered;
+  const toggle = $('#jev-search-enabled'); if (toggle) { toggle.checked = !!jevSettingsStatus?.search?.enabled; toggle.disabled = jevSettingsBusy || !jevSettingsStatus?.registered || !jevSettingsStatus?.search?.available; if (!jevSettingsBusy && jevSettingsStatus) localRecoveryEdits.delete(toggle); }
+  const usage = $('#jev-search-usage'); if (usage) usage.textContent = UI.text(jevSearchUsageText());
+}
+
+async function loadJevSettings() {
+  if (jevSettingsBusy) return;
+  jevSettingsBusy = true; jevSettingsLoaded = true; drawJevStatus();
+  try { jevSettingsStatus = await api('/api/jev', null, {'X-Hub':'1'}); jevSettingsError = ''; }
+  catch { jevSettingsStatus = null; jevSettingsError = '登録状態を確認できません。再登録せず、保存先を確認してください。'; }
+  finally { jevSettingsBusy = false; drawJevStatus(); }
+}
+
+async function verifyJevConnection() {
+  if (jevSettingsBusy || !jevSettingsStatus?.registered) return;
+  jevSettingsBusy = true; jevSettingsError = ''; drawJevStatus();
+  try { Object.assign(jevSettingsStatus, await api('/api/jev/verify', {confirm:true})); }
+  catch { jevSettingsStatus.connection = 'unavailable'; jevSettingsStatus.checkedAt = null; }
+  finally { jevSettingsBusy = false; drawJevStatus(); }
+}
+
+function jevSearchUsageText() {
+  const s = jevSettingsStatus?.search;
+  if (!s?.available) return '利用回数の記録を確認できないため、並べ替えは使いません。';
+  return `今月 ${s.requests} / 1000回・予約額 $${Number(s.reservedUSD).toFixed(6)} / $3.00（UTCの月初に更新）`;
+}
+
+async function configureJevSearch() {
+  if (jevSettingsBusy || !jevSettingsStatus?.registered) return;
+  const enabled = !!$('#jev-search-enabled')?.checked;
+  jevSettingsBusy = true; jevSettingsError = ''; drawJevStatus();
+  try { jevSettingsStatus = await api('/api/jev/search', {enabled, confirm:true}); }
+  catch {
+    jevSettingsStatus = null; jevSettingsLoaded = false;
+    jevSettingsError = '利用設定の保存を確認できません。設定を開き直して確認してください。';
+  } finally { jevSettingsBusy = false; drawJevStatus(); }
+}
+
+function openJevKeyDialog() {
+  if (jevKeyDialog || jevSettingsBusy || !jevSettingsStatus?.supported) return;
+  // Outside the periodically redrawn settings tree. Raw input lives only in
+  // this password field and is never included in settings/draft snapshots.
+  const dialog = document.createElement('dialog'); jevKeyDialog = dialog;
+  dialog.className = 'onboarding-sheet'; dialog.setAttribute('aria-labelledby', 'jev-key-title');
+  dialog.innerHTML = UI.template`<form id="jev-key-form" autocomplete="off"><h2 id="jev-key-title">Jevの接続用キーを登録</h2><p>公式サイトで取得したキーを、この端末の保護された保管先へ登録します。他のAIのログインとは別です。</p><p>登録だけでは接続しません。［接続状態を確認］を押すと、登録したキーで提供元へ1回接続します。登録済みの場合は、この端末のJev用キーを置き換えます。</p><label for="jev-key-input">接続用APIキー</label><input id="jev-key-input" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" minlength="16" maxlength="1024" required><p id="jev-key-notice" class="small" role="status"></p><div class="acts"><button class="btn" type="submit">この端末に登録</button><button id="jev-key-close" class="btn plain" type="button">閉じる</button></div></form>`;
+  document.body.appendChild(dialog);
+  const field = dialog.querySelector('#jev-key-input'), form = dialog.querySelector('form');
+  const close = () => { field.value = ''; dialog.close(); dialog.remove(); jevKeyDialog = null; };
+  dialog.querySelector('#jev-key-close').addEventListener('click', close);
+  dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
+  form.addEventListener('submit', async event => {
+    event.preventDefault(); if (jevSettingsBusy) return;
+    if (!/^[\x21-\x7e]{16,1024}$/.test(field.value)) {
+      dialog.querySelector('#jev-key-notice').textContent = UI.text('キーの形式を確認してください。空白や改行は含められません。'); return;
+    }
+    jevSettingsBusy = true; drawJevStatus();
+    const request = api('/api/jev/key', {key:field.value, confirm:true});
+    field.value = ''; form.querySelector('button[type="submit"]').disabled = true;
+    try { jevSettingsStatus = await request; jevSettingsError = ''; close(); }
+    catch {
+      jevSettingsStatus = null; jevSettingsLoaded = false;
+      jevSettingsError = '登録の完了を確認できません。設定画面を開き直して登録状態を確認してください。';
+      if (jevKeyDialog === dialog) close();
+    } finally { jevSettingsBusy = false; drawJevStatus(); }
+  });
+  dialog.showModal(); field.focus();
+}
+
+function accountRowsWithStatus() {
+  return (state.accounts || accountStatusRows || []).map(row => {
+    const checked = accountStatusRows?.find(r => r.ai === row.ai && r.id === row.id);
+    return checked ? { ...row, status: checked.status, email: checked.email, message: checked.message } : row;
+  });
+}
+function accountHoldReason(row) {
+  return UI.text(row.busyReason === 'unknown-process' ? '同じAIの処理のアカウントを確認できないため保留中です。［状態を確認］で再確認できます。' : row.busyReason === 'external-codex' ? 'Hub外のCodex（デスクトップアプリ等）が使用中です。終了してから操作してください。' : '作業中／順番待ちです。終了してから操作してください。');
+}
 function accountSettingsHtml() {
   const grokInstallReason = r => r.ai === 'grok' && r.status === 'not-installed' && r.message === 'Grok Build が未導入です';
-  const rows = accountStatusRows || state.accounts || [];
+  const rows = accountRowsWithStatus();
   const label = r => r.status === 'logged-in' ? UI.text('ログイン済み') : r.status === 'logged-out' ? UI.text('未ログイン') : r.status === 'api' ? UI.text('API認証（対象外）') : r.status === 'not-installed' ? UI.text('未導入') : UI.text('未確認');
   const agyFailed = ['failed', 'auth-required'].includes(state.agyModelsState) || !(state.agyModels || []).length;
   const agyReason = state.agyModelsState === 'failed' ? 'モデル一覧の取得に失敗しました。再取得するまで実行できません。' : state.agyModelsState === 'auth-required' ? 'モデル一覧の取得にはログインが必要です。' : '利用可能なモデルがありません。モデル一覧を再取得してください。';
   return UI.template`<section class="ai-use-section"><div class="ai-section-heading"><h3>アカウント</h3><button type="button" class="btn plain sm" data-account-action="status" ${accountOperation ? 'disabled' : ''}>状態を確認</button></div>
     <p id="account-message" class="small" role="status"></p>
-    ${rows.map(r => UI.template`<div class="account-row" data-account-row data-auth-terminal="${r.authTerminal ? '1' : '0'}" data-ai="${esc(r.ai)}" data-id="${esc(r.id)}"><div class="ai-account-line"><b>${esc(r.ai === 'agy' ? 'Gemini（Agy）' : AI_LABEL[r.ai])}${r.id !== 'default' ? '・' + esc(UI.label(r.name)) : ''}</b><span class="ai-account-status small">${label(r)}</span><div class="ai-account-note small">${r.email ? UI.template`<span title="${esc(r.email)}">${esc(r.email)}</span>` : ''}${r.authTerminal ? UI.text(' 認証用Terminalを開いています') : r.busy ? UI.text(' 作業中／順番待ち') : ''}${grokInstallReason(r) ? UI.template`<span>${esc(UI.message(r.message))}</span>` : ''}
+    ${rows.map(r => UI.template`<div class="account-row" data-account-row data-auth-terminal="${r.authTerminal ? '1' : '0'}" data-ai="${esc(r.ai)}" data-id="${esc(r.id)}"><div class="ai-account-line"><b>${esc(r.ai === 'agy' ? 'Gemini（Agy）' : AI_LABEL[r.ai])}${r.id !== 'default' ? '・' + esc(UI.label(r.name)) : ''}</b><span class="ai-account-status small">${label(r)}</span><div class="ai-account-note small">${r.email ? UI.template`<span title="${esc(r.email)}">${esc(r.email)}</span>` : ''}${r.authTerminal ? UI.text(' 認証用Terminalを開いています') : r.busy ? UI.text(r.busyReason === 'unknown-process' ? ' 同じAIの処理のアカウントを確認できないため保留中' : r.busyReason === 'external-codex' ? ' Hub外のCodex（デスクトップアプリ等）が使用中' : ' 作業中／順番待ち') : ''}${grokInstallReason(r) ? UI.template`<span>${esc(UI.message(r.message))}</span>` : ''}
       ${r.ai === 'agy' ? UI.template`<details class="more" data-ai-fold="agy-${esc(r.id)}"><summary>モデル ${esc((state.agyModels || []).length)}件</summary>${agyModelsHtml()}</details>` : ''}
       ${r.id !== 'default' ? UI.template`<details class="more" data-ai-fold="edit-${esc(r.ai)}-${esc(r.id)}"><summary>編集</summary><div class="acts ai-detail-body"><input data-account-name maxlength="60" value="${esc(r.name)}" aria-label="${esc(UI.label(r.name))}の新しい名前"><button class="btn plain sm" type="button" data-account-action="rename" ${accountOperation ? 'disabled' : ''}>名前変更</button><button class="btn plain sm" type="button" data-account-action="delete" ${r.busy || accountOperation ? `disabled title="${esc(UI.text('終了してから操作してください'))}"` : ''}>削除（ゴミ箱へ）</button></div></details>` : ''}</div>
-      <div class="acts">${r.ai === 'grok' && r.status === 'not-installed' ? UI.template`<details class="more" data-ai-fold="grok-install"><summary>導入方法</summary><p class="small ai-detail-body">MacのTerminalで <code>curl -fsSL https://x.ai/cli/install.sh | bash</code> を実行してください。Hubは実行しません。</p></details>` : UI.template`<button class="btn plain sm" type="button" data-account-action="${r.status === 'logged-in' || r.status === 'api' ? 'logout' : 'login'}" ${accountOperation || r.busy && !r.authTerminal ? `disabled title="${esc(UI.text('終了してから操作してください'))}"` : ''}>${r.status === 'logged-in' || r.status === 'api' ? UI.text('ログアウト') : UI.text('ログイン')}</button>`}</div></div>
-      ${r.message && !grokInstallReason(r) ? UI.template`<p class="small ai-account-message" role="status">${esc(UI.message(r.message))}</p>` : ''}${r.ai === 'agy' && agyFailed ? UI.template`<p class="small ai-account-message" role="status">${esc(UI.text(agyReason))}</p>` : ''}</div>`).join('')}
+      <div class="acts">${r.ai === 'grok' && r.status === 'not-installed' ? UI.template`<details class="more" data-ai-fold="grok-install"><summary>導入方法</summary><p class="small ai-detail-body">MacのTerminalで <code>curl -fsSL https://x.ai/cli/install.sh | bash</code> を実行してください。Hubは実行しません。</p></details>` : UI.template`<button class="btn plain sm" type="button" data-account-action="${r.status === 'logged-in' || r.status === 'api' ? 'logout' : 'login'}" ${accountOperation ? 'disabled' : r.busy && !r.authTerminal ? `data-account-held="true" title="${esc(accountHoldReason(r))}"` : ''}>${r.status === 'logged-in' || r.status === 'api' ? UI.text('ログアウト') : UI.text('ログイン')}</button>`}</div></div>
+      ${r.busy && !r.authTerminal && accountHoldNotices.has(r.ai + '/' + r.id) ? UI.template`<p class="small ai-account-message" data-account-hold-message role="status">${esc(accountHoldReason(r))}</p>` : ''}${r.message && !grokInstallReason(r) ? UI.template`<p class="small ai-account-message" role="status">${esc(UI.message(r.message))}</p>` : ''}${r.ai === 'agy' && agyFailed ? UI.template`<p class="small ai-account-message" role="status">${esc(UI.text(agyReason))}</p>` : ''}</div>`).join('')}
+    <div class="account-row"><div class="ai-account-line"><b>Jev（TypeSafe AI）</b><span id="jev-status" class="ai-account-status small" role="status">${esc(UI.text(jevStatusText()))}</span><div class="ai-account-note small">会話検索の順位付けを補助するサービスです。キー登録とHubでの実利用は別です。AIの返答を自動で速くする機能ではありません。</div><div class="acts"><button id="jev-register" type="button" class="btn plain sm" ${jevSettingsBusy || !jevSettingsStatus?.supported ? 'disabled' : ''}>APIキーを登録</button><button id="jev-status-check" type="button" class="btn plain sm" ${jevSettingsBusy || !jevSettingsStatus?.registered ? 'disabled' : ''}>接続状態を確認</button></div></div><div class="ai-detail-body small"><label><input id="jev-search-enabled" type="checkbox" ${jevSettingsStatus?.search?.enabled ? 'checked' : ''} ${jevSettingsBusy || !jevSettingsStatus?.registered || !jevSettingsStatus?.search?.available ? 'disabled' : ''}>会話検索の並べ替えに使う</label><p id="jev-search-usage" role="status">${esc(UI.text(jevSearchUsageText()))}</p><p>オンにすると、検索した言葉と、上位候補のAIの返事から短い抜粋をJevへ送ります。人の発言・引用・秘密らしい文字列・画像・添付・自由会話は除外します。対象にできる候補の順位だけを変えます。</p><p>月1000回・3ドルまで。入力中の自動検索も、Jevへ送るたびに回数へ含めます。送信前に1回の最大費用を予約し、失敗しても予約は戻しません。上限や通信失敗時は今までどおりの検索に戻ります。検索の待ち時間は増えます。追加購入・自動チャージはしません。</p></div><details class="more" data-ai-fold="jev-install"><summary>接続設定について</summary><div class="ai-detail-body small"><p>公式サイトでログインしてキーを取得し、［APIキーを登録］でこの端末へ保存します。キーは再表示しません。Macはキーチェーン、Windowsは資格情報マネージャーと端末の保護機能を使います。</p><p>［接続状態を確認］を押した時だけ、キーが有効か提供元へ1回問い合わせます。会話の内容は送りません。確認に料金がかかる場合は支払い済み残高を使います。接続確認済みは確認時点でキーが有効という意味です。検索の並べ替えは、下のスイッチをオンにした時だけ使います。通常のAI送信には使いません。</p><p><a href="https://console.typesafe.ai/keys" target="_blank" rel="noopener noreferrer">公式ログイン・キー取得</a> ／ <a href="https://docs.typesafe.ai/introduction/quickstart" target="_blank" rel="noopener noreferrer">公式の導入案内</a></p></div></details></div>
     <div class="account-row ai-chatgpt-row">${webchatUI()?.slot() || ''}
       <details class="more ai-mcp-detail" data-ai-fold="mcp"><summary>MCP <span id="chatgpt-mcp-status" class="small" role="status">確認中…</span></summary><div class="ai-detail-body"><div id="chatgpt-box" aria-live="polite">確認中…</div>${chatgptConnectionHelpHtml()}</div></details>
       <div id="chatgpt-shell-alert">${shellWarningHtml()}</div></div>
@@ -611,11 +740,17 @@ function accountSettingsHtml() {
 function drawAccountSettings() {
   const box = $('#ai-accounts'); if (!box || view.kind !== 'settings') return;
   preserveAiSettings(() => {
+    if (typeof settingsLayoutRestoreSource === 'function') settingsLayoutRestoreSource('accounts');
     box.innerHTML = accountSettingsHtml();
     box.querySelectorAll('[data-account-action]').forEach(b => b.addEventListener('click', () => operateAccount(b)));
+    $('#jev-register')?.addEventListener('click', openJevKeyDialog);
+    $('#jev-status-check')?.addEventListener('click', verifyJevConnection);
+    $('#jev-search-enabled')?.addEventListener('change', configureJevSearch);
+    if (!jevSettingsLoaded) void loadJevSettings();
     loadChatgpt();
     drawWebchatSettings();
     if (state.webchat?.location && !state.webchat.check && !state.webchat.busy) loadWebchat();
+    if (typeof settingsLayoutSync === 'function') settingsLayoutSync();
   });
 }
 
@@ -623,22 +758,37 @@ async function operateAccount(button) {
   if (accountOperation || button.disabled) return;
   const action = button.dataset.accountAction, row = button.closest('[data-account-row]');
   const ai = row?.dataset.ai || $('#account-new-ai').value, id = row?.dataset.id || 'default';
-  const existingTerminal = row?.dataset.authTerminal === '1' && ['login', 'logout'].includes(action);
-  let body = { ai, id, ...(existingTerminal ? {action} : {}) };
+  let existingTerminal = row?.dataset.authTerminal === '1' && ['login', 'logout'].includes(action);
+  const body = { ai, id };
   if (action === 'add') body.name = $('#account-new-name').value;
   if (action === 'rename') body.name = row.querySelector('[data-account-name]').value;
-  if (!existingTerminal && (action === 'logout' || action === 'delete')) {
-    if (!confirm(action === 'logout' ? UI.text('このアカウントからログアウトしますか？') : UI.text('アカウントの保存場所をゴミ箱へ移しますか？ 会話と認証情報もその場所に含まれます。'))) return;
-    body.confirm = true;
-    if (id === 'default' && action === 'logout') {
-      if (!confirm(UI.text('既定のログアウトは、Hub以外の同じCLIにも影響します。ログアウトしますか？'))) return;
-      body.confirmDefault = true;
-    }
-  }
   accountOperation = true; button.disabled = true;
   let notice = UI.text('処理中…');
   drawAccountSettings(); $('#account-message').textContent = notice;
   try {
+    if (['login', 'logout'].includes(action) && !existingTerminal) {
+      // A held button remains clickable so it can explain the current reason.
+      // Never use the cached status check to authorize an authentication action.
+      const latest = await api('/api/accounts'); state.accounts = latest.accounts;
+      const current = state.accounts.find(r => r.ai === ai && r.id === id);
+      if (!current) throw Error(UI.text('アカウントを確認できません。［状態を確認］を押してください。'));
+      existingTerminal = !!current.authTerminal;
+      if (current.busy && !existingTerminal) {
+        accountHoldNotices.set(ai + '/' + id, true);
+        notice = accountHoldReason(current);
+        return;
+      }
+      accountHoldNotices.delete(ai + '/' + id);
+    }
+    if (existingTerminal) body.action = action;
+    if (!existingTerminal && (action === 'logout' || action === 'delete')) {
+      if (!confirm(action === 'logout' ? UI.text('このアカウントからログアウトしますか？') : UI.text('アカウントの保存場所をゴミ箱へ移しますか？ 会話と認証情報もその場所に含まれます。'))) { notice = ''; return; }
+      body.confirm = true;
+      if (id === 'default' && action === 'logout') {
+        if (!confirm(UI.text('既定のログアウトは、Hub以外の同じCLIにも影響します。ログアウトしますか？'))) { notice = ''; return; }
+        body.confirmDefault = true;
+      }
+    }
     const result = action === 'status' ? await checkRoleAccounts() : await api(existingTerminal ? '/api/accounts/terminal' : action === 'add' ? '/api/accounts' : '/api/accounts/' + action, body);
     if (action !== 'status' && !existingTerminal) { accountStatusRows = null; accountCheckedAt = ''; accountAutoChecked = false; const r = await api('/api/accounts'); state.accounts = r.accounts; }
     notice = result?.warning || (action === 'login' ? UI.text('Macで開いたTerminalでログインし、終わったら［状態を確認］を押してください。') : UI.text('完了しました'));
@@ -648,7 +798,7 @@ async function operateAccount(button) {
     accountOperation = false; button.disabled = false;
     drawAccountSettings(); syncRoleAccountChoices();
     if (view.kind === 'settings' && $('#account-message')) $('#account-message').textContent = notice;
-    toast(notice);
+    if (notice) toast(notice);
   }
 }
 

@@ -2,7 +2,7 @@
 process.env.HUB_LANG='ja';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),{execFileSync}=require('node:child_process');
 const chat=require('../lib/chat'),review=require('../lib/integration-review');
-for(const [ai,model]of [['claude','claude-fable-5-1'],['codex','gpt-6.1-sol']])test('隔離確認は旧session/親履歴を含めず、新規read-only起動：'+ai,()=>{
+for(const [ai,model]of [['claude','claude-fable-5-2'],['codex','gpt-6.1-sol']])test('隔離確認は旧session/親履歴を含めず、新規read-only起動：'+ai,()=>{
  const meta={sessions:{[ai]:'implementation-session'},models:{[ai]:model}},rows=[{role:'assistant',ai,text:'OLD-IMPLEMENTATION-VERDICT'},{role:'user',text:'OLD-USER-HISTORY'}];
  const before=structuredClone(meta),turn=chat.buildTurn({ai,model,meta,rows,text:'CURRENT-REVIEW',basePrompt:'NEUTRAL-RULES',policy:'OLD-POLICY',perm:ai+' --dangerously-skip-permissions',isolatedReview:true});
  assert.equal(turn.resume,false);assert.equal(turn.isolatedReview,true);assert.doesNotMatch(turn.stdin,/OLD-|implementation-session/);assert.match(turn.stdin,/CURRENT-REVIEW/);assert.ok(!turn.args.includes('--resume'));assert.ok(!turn.args.includes('resume'));assert.ok(!turn.args.includes('--dangerously-skip-permissions'));assert.deepEqual(meta,before);

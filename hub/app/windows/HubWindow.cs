@@ -10,12 +10,41 @@ using System.Windows.Forms;
 using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Security.AccessControl;
+using System.Runtime.InteropServices;
 using System.Web.Script.Serialization;
 using System.Collections.Generic;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
 public sealed class HubWindow : Form {
+  [DllImport("user32.dll", SetLastError=true)]
+  static extern bool SetProcessDPIAware();
+  [DllImport("shcore.dll")]
+  static extern int GetProcessDpiAwareness(IntPtr process, out int awareness);
+  static float startupDpiScale=1f;
+  static void ConfigureStartupDpi() {
+    // The shell targets .NET Framework 4.6.2. System DPI awareness avoids
+    // Windows bitmap-stretching the WebView2 window at the login DPI.
+    try {
+      if(!SetProcessDPIAware()) {
+        int awareness;
+        using(var current=Process.GetCurrentProcess()) {
+          if(GetProcessDpiAwareness(current.Handle,out awareness)!=0||awareness==0) {
+            Console.Error.WriteLine("HUB_WINDOW_DPI_WARNING: System DPI awareness could not be enabled.");
+            return;
+          }
+        }
+      }
+      using(var desktop=System.Drawing.Graphics.FromHwnd(IntPtr.Zero))
+        startupDpiScale=desktop.DpiX/96f;
+    } catch(Exception) {
+      // Preserve startup even when the operating system cannot report DPI.
+      Console.Error.WriteLine("HUB_WINDOW_DPI_WARNING: Display scaling could not be determined.");
+    }
+  }
+  static int StartupPixels(int logicalPixels) {
+    return (int)Math.Round(logicalPixels*startupDpiScale,MidpointRounding.AwayFromZero);
+  }
   readonly JavaScriptSerializer json = new JavaScriptSerializer();
   readonly Dictionary<string,object> config;
   readonly WebView2 view = new WebView2();
@@ -37,8 +66,8 @@ public sealed class HubWindow : Form {
   HubWindow(Dictionary<string,object> settings) {
     config=settings; origin="http://127.0.0.1:"+Convert.ToInt32(config["port"]);
     Icon=System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-    Text="Project Hub"; Width=1180; Height=820; MinimumSize=new System.Drawing.Size(720,480);
-    status.Text="Project Hub を準備しています…"; status.AutoSize=false; status.Height=48; status.Dock=DockStyle.Top;
+    Text="Project Hub"; Width=StartupPixels(1180); Height=StartupPixels(820); MinimumSize=new System.Drawing.Size(StartupPixels(720),StartupPixels(480));
+    status.Text="Project Hub を準備しています…"; status.AutoSize=false; status.Height=StartupPixels(48); status.Dock=DockStyle.Top;
     view.Dock=DockStyle.Fill; view.Enabled=false; Controls.Add(view); Controls.Add(status);
     Shown+=async delegate { await Start(); };
     FormClosing+=async delegate(object sender,FormClosingEventArgs e) {
@@ -327,6 +356,7 @@ public sealed class HubWindow : Form {
       Console.SetIn(new StreamReader(Console.OpenStandardInput(),new UTF8Encoding(false,true),false));
       Console.SetOut(new StreamWriter(Console.OpenStandardOutput(),new UTF8Encoding(false)) { AutoFlush=true });
       Console.SetError(new StreamWriter(Console.OpenStandardError(),new UTF8Encoding(false)) { AutoFlush=true });
+      ConfigureStartupDpi();
       if(new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)) throw new Exception("管理者として起動しないでください。普通の権限で開き直してください。");
       var config=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(Console.In.ReadToEnd());
       string name="Local\\ProjectHub-"+WindowsIdentity.GetCurrent().User.Value+"-"+(string)config["rootHash"];

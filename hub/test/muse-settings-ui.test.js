@@ -140,7 +140,7 @@ test('real UI api helper reaches real usage route with Hub header and a single c
     return {status:result.status,ok:result.status<400,json:async()=>result.body};
   };
   const source=fs.readFileSync(path.join(__dirname,'../public/app.js'),'utf8');
-  vm.runInContext('const stateResponseTags = new WeakMap();\n'+source.slice(source.indexOf('async function api('),source.indexOf('\nfunction toast(')),f.context);
+  vm.runInContext('let apiPendingWrites = 0; const stateResponseTags = new WeakMap();\n'+source.slice(source.indexOf('async function api('),source.indexOf('\nfunction toast(')),f.context);
   const rejected=await f.context.fetch('/api/muse/usage',{method:'POST',body:'{"confirm":true}'});
   assert.equal(rejected.status,403);assert.equal(reads,0);
   f.nodes['#muse-usage-box']={};

@@ -8,6 +8,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { Usage, readCli, codexWindows, claudeWindows, resetTime } = require('../lib/usage');
+// Protocol tests replace every spawn; do not inspect the installed real CLI.
+test.mock.method(require('../lib/cli-trust'), 'ensureCliReady', (_ai, file) => file);
 
 const NOW = Date.parse('2026-10-03T00:00:00Z');
 const codex = { rateLimits:{ limitId:'codex',primary:{usedPercent:0,windowDurationMins:10080,resetsAt:1791046922},secondary:null,credits:{balance:'SECRET'}} };
@@ -136,7 +138,7 @@ test('Credit checks read only the requested provider and account, share requests
   assert.ok(calls.every(c => Object.keys(c).sort().join(',') === 'account,ai'));
 });
 
-test('Claude extra usage remains unknown when only monthly allowance is supplied', async () => {
+test('Claude monthly allowance is display-only and never proves a prepaid balance', async () => {
   for (const extra of [undefined, { is_enabled: true, monthly_limit: 100, used_credits: 1, utilization: 1, currency: 'USD', private: 'SECRET' },
     { is_enabled: true, utilization: 100 }, { is_enabled: false }, { is_enabled: 'true', utilization: '0' }]) {
     const u = new Usage({ now: () => NOW, find: ai => ai, read: async () => ({ ...claude, rate_limits: { ...claude.rate_limits, extra_usage: extra } }) });
@@ -144,9 +146,45 @@ test('Claude extra usage remains unknown when only monthly allowance is supplied
     assert.equal(result.availability, 'unknown');
     assert.equal(result.balance, undefined);
     assert.doesNotMatch(JSON.stringify(result), /SECRET|monthly_limit|used_credits|currency/);
+    const visible = u.snapshot().providers.claude.extraUsage;
+    if (extra?.currency === 'USD') assert.deepEqual(visible, { is_enabled: true, monthly_limit: 100, used_credits: 1, utilization: 1, currency: 'USD' });
+    assert.doesNotMatch(JSON.stringify(u.snapshot()), /SECRET|private|disabled_reason/);
   }
   const u = new Usage({ now: () => NOW, find: ai => ai, read: async () => ({ ...claude, extra_usage: { disabled_reason: 'out_of_credits' } }) });
   assert.equal((await u.checkCredits('claude')).availability, 'empty');
+});
+
+test('Claude extra usage exposes only validated display fields at both response locations', async () => {
+  for (const nested of [true, false]) {
+    const extra = { is_enabled: true, used_credits: 1234, monthly_limit: 5000, currency: 'USD', utilization: 24.68,
+      private: 'SECRET', disabled_reason: 'SECRET', balance: 999, account: 'SECRET', auto_reload: { enabled: true } };
+    const data = { ...claude, rate_limits: { ...claude.rate_limits, ...(nested ? { extra_usage: extra } : {}) }, ...(nested ? {} : { extra_usage: extra }) };
+    const u = new Usage({ now: () => NOW, find: ai => ai, read: async () => data });
+    const snapshot = await u.status(false, {}, { only: { ai: 'claude', account: 'default' } });
+    const expected = { is_enabled: true, used_credits: 1234, monthly_limit: 5000, currency: 'USD', utilization: 24.68 };
+    assert.deepEqual(snapshot.providers.claude.extraUsage, expected);
+    assert.deepEqual(snapshot.accountProviders[0].extraUsage, expected);
+    assert.doesNotMatch(JSON.stringify(snapshot), /SECRET|private|disabled_reason|balance|auto_reload/);
+    assert.deepEqual(snapshot.providers.claude.windows, claudeWindows(claude));
+    assert.equal(u.creditState('claude').availability, 'unknown');
+  }
+});
+
+test('Claude extra usage omits malformed fields without coercion or default amounts/currency', async () => {
+  const visible = async extra => {
+    const u = new Usage({ now: () => NOW, find: ai => ai, read: async () => ({ ...claude, rate_limits: { ...claude.rate_limits, extra_usage: extra } }) });
+    return (await u.status(false, {}, { only: { ai: 'claude', account: 'default' } })).providers.claude.extraUsage;
+  };
+  for (const extra of [undefined, null, [], 'SECRET', {}, { is_enabled: 'true' }, { is_enabled: 1 }]) assert.equal(await visible(extra), undefined);
+  for (const value of [-1, Infinity, -Infinity, NaN, '1', null, undefined, {}, true]) {
+    assert.deepEqual(await visible({ is_enabled: true, used_credits: value, monthly_limit: value, utilization: value }), { is_enabled: true });
+  }
+  for (const currency of ['usd', ' USD', 'USD\n', 'US', 'USDD', '<svg>', null, 123, {}]) {
+    assert.deepEqual(await visible({ is_enabled: true, currency }), { is_enabled: true });
+  }
+  assert.deepEqual(await visible({ is_enabled: false }), { is_enabled: false });
+  assert.deepEqual(await visible({ is_enabled: true, used_credits: 0, monthly_limit: 0, utilization: 0, currency: 'JPY' }),
+    { is_enabled: true, used_credits: 0, monthly_limit: 0, utilization: 0, currency: 'JPY' });
 });
 
 test('Credit failures, stale/future timestamps and malformed balances remain unknown, and account invalidation rejects late reads', async () => {
@@ -415,7 +453,7 @@ rl.on('line',line=>{const m=JSON.parse(line);fs.appendFileSync(log,line+'\\n');
   }else{
     const id=m.request_id;
     if(m.request.subtype==='initialize')send({type:'control_response',response:{request_id:id,subtype:'success',response:{account:{email:'SECRET'}}}});
-    if(m.request.subtype==='get_usage')send({type:'control_response',response:{request_id:id,subtype:mode==='unsupported'?'error':'success',error:'SECRET',response:${JSON.stringify(claude)}}});
+    if(m.request.subtype==='get_usage')send({type:'control_response',response:{request_id:id,subtype:mode==='unsupported'?'error':'success',error:'SECRET',response:mode==='extra'?${JSON.stringify({ ...claude, rate_limits: { ...claude.rate_limits, extra_usage: { is_enabled: true, used_credits: 1234, monthly_limit: 5000, currency: 'USD', utilization: 100, private: 'SECRET' } } })}:${JSON.stringify(claude)}}});
   }
   process.stderr.write('SECRET\\n');
 });
@@ -456,10 +494,27 @@ test('Both real subprocess protocols send only fixed state requests and exit bef
       assert.deepEqual(requests.map(x=>x.request.subtype),['initialize','get_usage']);
       assert.equal(requests[1].request.skip_behaviors,true);
       assert.ok(f.args[0].includes('--safe-mode')); assert.ok(f.args[0].includes('{"disableAllHooks":true}'));
-      assert.equal(f.args[0][f.args[0].indexOf('--model')+1],'claude-fable-5-1');
+      assert.equal(f.args[0][f.args[0].indexOf('--model')+1],'claude-fable-5-2');
     }
     assert.ok(requests.every(x=>x.type!=='user' && !x.method?.includes('turn') && !x.method?.includes('thread')));
   }
+});
+test('Claude extra usage survives the existing control protocol without inference and does not affect limit holds', async t => {
+  const f = fixture('claude', 'extra'), { ModelLimits } = require('../lib/model-limits');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-extra-display-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const limits = new ModelLimits(path.join(dir, 'limits.json'), { now: () => NOW });
+  const u = new Usage({ now: () => NOW, find: ai => ai, observe: snapshot => limits.observe(snapshot),
+    read: (ai, file) => readCli(ai, file, { spawn: f.spawn, timeoutMs: 3000 }) });
+  const snapshot = await u.status(false, {}, { only: { ai: 'claude', account: 'default' } });
+  assert.deepEqual(snapshot.providers.claude.extraUsage, { is_enabled: true, used_credits: 1234, monthly_limit: 5000, currency: 'USD', utilization: 100 });
+  assert.doesNotMatch(JSON.stringify(snapshot), /SECRET|private|behaviors/);
+  assert.equal(limits.active('default', 'claude-fable-5-2'), null, '100% extra usage must not add a subscription hold');
+  assert.equal(u.creditState('claude').availability, 'unknown');
+  const requests = fs.readFileSync(f.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(requests.map(r => r.request.subtype), ['initialize', 'get_usage']);
+  assert.equal(requests[1].request.skip_behaviors, true);
+  assert.ok(requests.every(r => r.type === 'control_request'));
 });
 test('API-only account stops before Codex rate-limit request', async () => {
   const f=fixture('codex','api');

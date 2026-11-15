@@ -14,7 +14,7 @@ test('one human grant removes only Codex default usage holds and survives restar
  const f=fixture(t);f.state.observe(f.snapshot());assert.equal(f.state.list().length,2);
  f.state.observe(f.snapshot('62500',{account:'work'}));f.state.observe(f.snapshot('62500',{ai:'claude',windows:[{id:'five_hour',usedPercent:100,resetsAt:null}]}));
  const e=f.start();f.tick();f.state.observe(f.snapshot('62499.9999999999'));assert.equal(f.state.active('default','gpt-6.1-sol'),null);assert.equal(f.state.active('default','gpt-6-astra'),null);
- assert.ok(f.state.active('work','gpt-6.1-sol'));assert.ok(f.state.active('default','claude-fable-5-1'));
+ assert.ok(f.state.active('work','gpt-6.1-sol'));assert.ok(f.state.active('default','claude-fable-5-2'));
  const restored=new ModelLimits(f.state.file,{now:f.now});assert.equal(restored.creditException().consumed,'0.0000000001');
  assert.equal(restored.startCreditException({ai:'codex',account:'default',confirm:true,expectedBalance:'outdated'},{}).grantedAt,e.grantedAt);
  const runner=new ChatRunner({limitPreflight:o=>restored.forRequest(o)});let captured;runner.run=o=>(captured=o,{startedP:Promise.resolve(true)});

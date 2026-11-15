@@ -27,7 +27,7 @@ class IdeaRunEvidence {
   metadata(d,r) {return {kind:'idea',schema:1,projectUid:d.projectUid,runId:r.id,targets:r.targets,purpose:r.purpose,laneBindingRev:r.laneBindingRev,requestId:r.requestId,contextMode:'idea',readOnly:r.readOnly,autoGeneration:r.autoGeneration,stopGeneration:r.stopGeneration,releaseId:r.releaseId||null,reviewBinding:r.reviewId?{reviewId:r.reviewId,bundleHash:d.reviews[r.reviewId].bundleHash}:null};}
   location(project,r) {
     const p=this.ideas.project(project),t=p.tasks.find(t=>t.id===r.task);U.check(t,'idea-task','配送先の既存作業を確認してください');
-    if(r.purpose==='organize'){U.check(fs.realpathSync(p.dir)===r.deliveryBinding.dir&&U.hash(U.identity(p.dir))===U.hash(r.deliveryBinding.identity),'idea-organize-binding','整理の配送先が変わりました');return {p,t,dir:r.deliveryBinding.dir,pdir:p.dir};}
+    if(r.purpose==='organize'){U.check(fs.realpathSync(p.dir)===r.deliveryBinding.dir&&U.sameIdentity(r.deliveryBinding.identity,U.identity(p.dir)),'idea-organize-binding','整理の配送先が変わりました');return {p,t,dir:r.deliveryBinding.dir,pdir:p.dir};}
     const lane=this.lane.resolve(project,r.laneBindingRev);U.check(t.id===lane.task,'idea-task','配送先が変更されました');return {p,t,dir:lane.workdirReal,pdir:p.dir};
   }
   verify(o,{adoption=false}={}) {

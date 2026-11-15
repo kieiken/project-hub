@@ -1,4 +1,5 @@
 'use strict';
+const { FABLE_LABEL } = require('./fable-model');
 const { lt, sectionPattern } = require('./locale');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -8,7 +9,7 @@ function git(dir, args) {
 }
 function snapshot(dir) { if (!dir) return { head: null, status: null }; return { head: git(dir, ['rev-parse', 'HEAD']), status: git(dir, ['status', '--short']) }; }
 function clip(value, max) { const text = String(value || ''); return text.length > max ? text.slice(0, max - 1) + '…' : text; }
-function buildHandoffCard({ original, user, sourceTurns = [], rows, dir, pdir, task, queue = [], delegates = [], direct = false, evidence, reason, from = 'Fable 5.1', to = 'Codex・GPT-6-Astra' }) {
+function buildHandoffCard({ original, user, sourceTurns = [], rows, dir, pdir, task, queue = [], delegates = [], direct = false, evidence, reason, from = FABLE_LABEL, to = 'Codex・GPT-6-Astra' }) {
   const intro = reason === 'capacity'
     ? lt`【${from} のモデル混雑による自動の引き継ぎ】${from} はモデルの混雑で終了した。利用上限とは別の障害で、上限の保持や既定の担当は変更していない。許可された交代先 ${to} で一回だけ続ける。すでに済んだ部分と委任は繰り返さず、実物を確かめて残りを続ける。`
     : lt`【${from} の利用上限による自動の引き継ぎ】${from} は利用上限で止まった。担当は起動設定どおり ${to}。すでに済んだ部分は繰り返さず、残りを続ける。`;

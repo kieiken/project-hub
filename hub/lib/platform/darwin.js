@@ -16,6 +16,7 @@ const path = require('node:path');
 const execFile = options.execFile || childProcess.execFile;
 const execFileSync = options.execFileSync || childProcess.execFileSync;
 const spawn = options.spawn || childProcess.spawn;
+const spawnSync = options.spawnSync || childProcess.spawnSync;
 const kill = options.kill || ((pid, signal) => process.kill(pid, signal));
 const asyncRun = promisify(execFile);
 const TIMEOUT = 5000;
@@ -30,19 +31,51 @@ function run(file, args, dry) {
   });
 }
 
-function openTerminal(command, dry) {
-  return run('osascript', [
-    '-e', `tell application "Terminal" to do script "${as(command)}"`,
-    '-e', 'tell application "Terminal" to activate',
-  ], dry);
+async function openTerminal(command, dry) {
+  const args = text => ['-e', `tell application "Terminal" to do script "${as(text)}"`, '-e', 'tell application "Terminal" to activate'];
+  // Preserve the existing dry response without creating a launch file.
+  if (dry || name !== 'darwin') return run('osascript', args(command), dry);
+  const uid = process.getuid(), dir = options.terminalDir || `/private/tmp/projecthub-terminal-${uid}`;
+  for (let p = path.resolve(dir);;) {
+    try { if (fs.lstatSync(p).isSymbolicLink()) throw Error('terminal_launch_link'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const parent = path.dirname(p); if (parent === p) break; p = parent;
+  }
+  try { fs.mkdirSync(dir, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+  // An existing directory must already belong exclusively to this user.
+  const info = fs.lstatSync(dir);
+  if (!info.isDirectory() || info.uid !== uid || (info.mode & 0o777) !== 0o700) throw Error('terminal_launch_permissions');
+  // A launch normally self-deletes immediately. Keep delayed launches usable,
+  // but retire abandoned files after one day, without following any links.
+  for (const entry of fs.readdirSync(dir)) {
+    if (!/^[0-9a-f-]{36}\.sh$/.test(entry)) continue;
+    const file = path.join(dir, entry);
+    try {
+      const stat = fs.lstatSync(file);
+      if (stat.isFile() && stat.uid === uid && Date.now() - stat.mtimeMs > 86400000) fs.unlinkSync(file);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  const file = path.join(dir, c.randomUUID() + '.sh'), sq = value => "'" + value.replace(/'/g, "'\\''") + "'";
+  const typed = '/bin/bash ' + sq(file);
+  if (Buffer.byteLength(typed) > 300 || /[\r\n\x00]/.test(typed)) throw Error('terminal_launch_path_too_long');
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+    fs.fchmodSync(fd, 0o600);
+    fs.writeFileSync(fd, '#!/bin/bash\n/bin/rm -f -- "$0" || exit $?\n' + command + '\n');
+  } catch (error) { if (fd !== undefined) fs.unlinkSync(file); throw error; }
+  finally { if (fd !== undefined) fs.closeSync(fd); }
+  try { return await run('osascript', args(typed), false); }
+  catch (error) { try { fs.unlinkSync(file); } catch (cleanup) { if (cleanup.code !== 'ENOENT') throw cleanup; } throw error; }
 }
 
 async function focusTerminal(pid, dry) {
   if (!Number.isInteger(pid) || pid < 1) throw Error(lt('認証用Terminalの記録を確認できません'));
   macOnly();
   if (dry) return { dry: true, existingTerminal: true };
-  const tty = await new Promise((resolve, reject) => execFile('/bin/ps', ['-p', String(pid), '-o', 'tty='], (error, stdout) => error ? reject(error) : resolve(stdout.trim())));
-  if (!/^ttys[0-9]+$/.test(tty)) throw Error(lt('認証用Terminalの画面を見つけられませんでした'));
+  const missing = () => Error(lt('認証用Terminalを見つけられません。開いているTerminalを確認してください。起動途中で止まった窓は閉じ、20秒ほど待って［状態を確認］を押し、［ログイン］が押せるようになったらやり直してください。'));
+  const tty = await new Promise((resolve, reject) => execFile('/bin/ps', ['-p', String(pid), '-o', 'tty='], (error, stdout) => error ? reject(error.code === 1 && !String(stdout || '').trim() ? missing() : error) : resolve(stdout.trim())));
+  if (!/^ttys[0-9]+$/.test(tty)) throw missing();
   await run('osascript', ['-e', `tell application "Terminal"
 repeat with w in windows
 repeat with t in tabs of w
@@ -55,7 +88,7 @@ end if
 end repeat
 end repeat
 error "Authentication Terminal not found"
-end tell`], false);
+end tell`], false).catch(error => { if (/Authentication Terminal not found/.test(error.message)) throw missing(); throw error; });
   return { ok: true, existingTerminal: true };
 }
 
@@ -108,6 +141,36 @@ function parseLsof(text) {
   return out;
 }
 
+
+// Strict, bounded path-only inspection. Unlike cwd discovery, partial lsof
+// output is not evidence: any error/warning leaves account ownership unknown.
+function processOpenFiles(pids) {
+  macOnly();
+  if (!pids.length || pids.some(pid => !Number.isSafeInteger(pid) || pid <= 1)) throw Error('process_files_unavailable');
+  const result = spawnSync('/usr/sbin/lsof', ['-nP', '-a', '-p', pids.join(','), '-F0pun'], {
+    encoding: 'utf8', timeout: 1000, maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, LC_ALL: 'C', LANG: 'C' }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.error || result.status !== 0 || result.signal || result.stderr) throw Error('process_files_unavailable');
+  const rows = new Map(); let current = null, descriptor = null;
+  for (const raw of String(result.stdout).split('\0')) {
+    const field = raw.replace(/^\n/, '');
+    if (!field) continue;
+    if (/^p[0-9]+$/.test(field)) {
+      const pid = Number(field.slice(1));
+      if (!pids.includes(pid) || rows.has(pid)) throw Error('process_files_unavailable');
+      current = { paths: [], mapped: [], uid: undefined }; rows.set(pid, current); descriptor = null;
+    } else if (/^u[0-9]+$/.test(field) && current && current.uid === undefined) current.uid = Number(field.slice(1));
+    else if (/^f[^\x00-\x1f]+$/.test(field) && current) descriptor = field.slice(1);
+    else if (field[0] === 'n' && current && descriptor !== null) {
+      current.paths.push(field.slice(1));
+      if (descriptor === 'txt') current.mapped.push(field.slice(1));
+    }
+    else throw Error('process_files_unavailable');
+  }
+  if (pids.some(pid => !rows.has(pid) || !Number.isSafeInteger(rows.get(pid).uid))) throw Error('process_files_unavailable');
+  return rows;
+}
 
 function processSnapshot(run = execFileSync){
   if(!['darwin','linux'].includes(name))throw Error('このOSではプロセスの所有確認に対応していません');
@@ -229,6 +292,9 @@ class MacSecretStore {
   }
   get(account) { return this.call({ action: 'get', account }).value; }
   put(account, value) { this.call({ action: 'put', account, value }); }
+  jevStatus() { return this.call({ action: 'jev-status' }).registered; }
+  getJev() { const value = this.call({ action: 'jev-get' }).value; if (value !== null && typeof value !== 'string') throw Error('secret_store_unavailable'); return value; }
+  putJev(value) { this.call({ action: 'jev-put', value }); }
   elapsed() { const n = this.call({ action: 'clock' }).seconds; if (!Number.isFinite(n)) throw Error('elapsed_clock_unavailable'); return n; }
   watchResume(onResume, onError) {
     if (this.platform !== 'darwin') return null;
@@ -363,7 +429,7 @@ const appUpdater = {
   detachDmg(mount, extra, run) { macOnly(); return run('/usr/bin/hdiutil', ['detach', mount, ...extra]); },
 };
 return { name, openTerminal, focusTerminal, openPath, revealPath, openUrl, pickFolder, documentsDirectory,
-  listProcesses, processCwd, processSnapshot, processOwner, currentProcessOwner, processBirth, killTree, isExternalTerminal,
+  listProcesses, processCwd, processOpenFiles, processSnapshot, processOwner, currentProcessOwner, processBirth, killTree, isExternalTerminal,
   supervisorFiles: Object.freeze(['darwin.js', 'persistence.js']),
   persistence: require('./persistence').create(name, fs),
   shellCandidates, findExecutable, fixPtyHelper, trashDir, trashRootFor, volumeRoot, existingParent,

@@ -54,6 +54,7 @@ function app(userAgent = '', sessionStorage) {
   if(fs.existsSync(paidUI))vm.runInContext(fs.readFileSync(paidUI,'utf8'),context);
   const webUI=path.join(__dirname,'../../public/paid/webchat.js');
   if(fs.existsSync(webUI))vm.runInContext(fs.readFileSync(webUI,'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../..', 'public', 'role-tiers.js'), 'utf8'), context);
   loadApp(context);
   vm.runInContext('webchatUI()',context);
   return { context, document, elements, element, events, documentListeners, timers, timeouts, details, stream: () => stream };

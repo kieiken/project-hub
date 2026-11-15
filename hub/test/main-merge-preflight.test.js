@@ -131,3 +131,11 @@ for(const side of ['source','target'])test('nested Git refusal is precise and no
  const before=[g(f.body,'rev-parse','HEAD'),g(f.w.dir,'rev-parse','HEAD'),g(nested,'rev-parse','HEAD')],d=await post('/api/task/merge/preview',f.b);
  assert.equal(d.status,409);assert.equal(d.blocker.kind,'nested-git');assert.equal(d.blocker.side,side);assert.deepEqual(d.blocker.paths,['.ai/work/unreceived/']);assert.equal(d.delivery.state,'not-sent');assert.equal(d.token,undefined);assert.doesNotMatch(d.error,/読み取れません|多すぎ/);assert.deepEqual([g(f.body,'rev-parse','HEAD'),g(f.w.dir,'rev-parse','HEAD'),g(nested,'rev-parse','HEAD')],before);assert.equal(fs.readFileSync(path.join(nested,'result'),'utf8'),'unreceived original');
 });
+test('one-click flow after a conflict abort: stopped until the copy saves again, then ready; the abort stays history',async()=>{
+ const f=conflictFixture(),p=await api('/api/task/merge/preview',f.b);const out=await post('/api/task/merge',{...f.b,token:p.token,oneclick:true});assert.equal(out.delivery.state,'aborted');
+ const stopped=await api('/api/task/merge/status',{...f.b,flow:true});assert.equal(stopped.stage,'stopped');assert.equal(stopped.requestId,p.token);
+ fs.writeFileSync(path.join(f.w.dir,'base.txt'),'main');git.save(f.w.dir,'copy fixed');
+ const ready=await api('/api/task/merge/status',{...f.b,flow:true});assert.equal(ready.stage,'ready');assert.equal(ready.previousStop.requestId,p.token);
+ assert.equal((await api('/api/task/merge/status',{...f.b,requestId:p.token})).state,'aborted');
+ const again=await api('/api/task/merge/preview',f.b);assert.ok(again.token);assert.equal(again.waiting.length,0);
+});

@@ -15,9 +15,10 @@ else{
  let selectionStarts=0;chat.ChatRunner.prototype.send=function(){selectionStarts++;throw Error('Browser fixture never starts an AI CLI');};
  let hold=false,rt,base,browser,context,page,target,posts;
  TaskHistory.prototype.autoFinish=function(...args){if(hold)return;return originalFinish.apply(this,args);};
- const get=async(route)=>await(await fetch(base+route,{headers:{'X-Hub':'1'}})).json();
+ const get=async(route)=>await(await fetch(base+route,{headers:{'X-Hub':'1','X-Hub-Token':require('../lib/local-auth').capability(rt.localAuth.token)}})).json();
  const completed=async()=>{for(let n=0;n<400;n++){const s=await get('/api/task/continue/status?'+new URLSearchParams(target));if(s.status==='done')return s;if(s.status==='failed')throw Error(JSON.stringify(s));await new Promise(r=>setTimeout(r,25));}throw Error('browser continuation timeout '+JSON.stringify({posts,status:await get('/api/task/continue/status?'+new URLSearchParams(target)),notice:await page.locator('#history-progress').textContent()}));};
- async function openPage(tab){await tab.addInitScript(v=>localStorage.setItem('hub-view',JSON.stringify(v)),{kind:'work',...target});await tab.goto(base);await tab.waitForSelector('[data-task-history="continue"]');}
+ // Use only this isolated server's ephemeral browser capability, never the live Hub.
+ async function openPage(tab){await tab.addInitScript(({view,session})=>{localStorage.setItem('hub-view',JSON.stringify(view));sessionStorage.setItem('hub-local-session',JSON.stringify(session));},{view:{kind:'work',...target},session:rt.localAuth.browserSession()});await tab.goto(base);await tab.waitForSelector('[data-task-history="continue"]');}
  test.before(async()=>{const probe=net.createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const port=probe.address().port;await new Promise(r=>probe.close(r));process.env.HUB_PORT=String(port);rt=require('../server');await new Promise(r=>rt.server.listen(port,'127.0.0.1',r));base='http://127.0.0.1:'+rt.server.address().port;browser=await chromium.launch({executablePath:chrome,headless:true});});
  test.beforeEach(async()=>{
   const task=store.createTask(p.id,{title:'One click',steps:['done']});store.setStep(p.id,task.id,0,true);target={project:p.id,task:task.id};chat.append(p.dir,task.id,{role:'user',text:'BROWSER-ORIGINAL'});

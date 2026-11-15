@@ -2,7 +2,7 @@
 process.env.HUB_LANG='ja';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const journal=require('../lib/chat-continuation'),chat=require('../lib/chat'),spool=require('../lib/cli-spool');
-const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'hub-continue-')),root=path.join(tmp,'root'),dir=path.join(root,'Product/Fixture');
+const tmp=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'hub-continue-'))),root=path.join(tmp,'root'),dir=path.join(root,'Product/Fixture');
 const key={project:'Fixture',task:'chat'},pause=ms=>new Promise(r=>setTimeout(r,ms));let hub,base,ackTimer;
 const post=async(route,body={})=>{const r=await fetch(base+route,{method:'POST',headers:{'X-Hub':'1','Content-Type':'application/json',Connection:'close'},body:JSON.stringify({...key,...body})});return {status:r.status,body:await r.json()};};
 const send=body=>post('/api/chat/send',{ai:'codex',model:'gpt-6.1-sol',text:'ORIGINAL full\nsecond line',...body});
@@ -78,7 +78,7 @@ test('unexpected failure is kept once, follows FIFO without retrying the failed 
  assert.equal((await send({text:'FAIL original exact\nline'})).status,200);const source=hub.chats.busy(key.project,key.task),a=await queued('first after failure'),b=await queued('second after failure');fs.writeFileSync(path.join(tmp,'fail-now'),'go');
  await wait(()=>rows().some(x=>x.role==='assistant'&&x.request===b));await wait(()=>!hub.chats.busy(key.project,key.task));
  const e=data().entries[source.userRow.turn];assert.equal(e.status,'open');assert.equal(e.original,'FAIL original exact\nline');assert.match(e.reason,/fixture unexpected failure/);assert.equal(e.partial,'partial result');
- assert.deepEqual(rows().filter(x=>x.role==='user'&&[a,b].includes(x.request)).map(x=>x.request),[a,b]);assert.equal(rows().filter(x=>x.role==='user'&&x.turn===source.userRow.turn).length,1);assert.match(journal.prompt(dir,key.task),/未完の作業は/);assert.match(journal.prompt(dir,key.task),/unfinished.json/);assert.equal(q().length,0);
+ assert.deepEqual(rows().filter(x=>x.role==='user'&&[a,b].includes(x.request)).map(x=>x.request),[a,b]);assert.equal(rows().filter(x=>x.role==='user'&&x.turn===source.userRow.turn).length,1);assert.match(journal.prompt(dir,key.task),/返事の最後に未完の件数/);assert.match(journal.prompt(dir,key.task),/unfinished.json/);assert.equal(q().length,0);
 });
 
 test('redo records cancellation instead of another unfinished original',async()=>{
@@ -191,11 +191,11 @@ test('model edit after a rejected cutover reaches the delayed amend once with th
  hub.chats.stop=function(p,t,opts){if(opts?.interrupting){oldStop.call(this,p,t,opts).catch(()=>{});return Promise.reject(Error('fixture pending save'));}return oldStop.call(this,p,t,opts);};
  try{
   assert.equal((await post('/api/chat/send',{fromQueue:id,mode:'amend'})).body.queued,true);
-  const before=q().find(x=>x.id===id),edit=await post('/api/chat/queue/edit',{id,text:'FOLLOW-UP edited model',expectedText:before.text,expectedItem:JSON.stringify(before),ai:'claude',model:'claude-fable-5-1'});assert.equal(edit.status,200,JSON.stringify(edit));
-  const saved=q().find(x=>x.id===id);assert.equal(saved.requiredModel,'claude-fable-5-1');assert.equal(saved.limitSlot,'main');release();const manual=post('/api/chat/send',{fromQueue:id,expectedItem:JSON.stringify(saved)});
+  const before=q().find(x=>x.id===id),edit=await post('/api/chat/queue/edit',{id,text:'FOLLOW-UP edited model',expectedText:before.text,expectedItem:JSON.stringify(before),ai:'claude',model:'claude-fable-5-2'});assert.equal(edit.status,200,JSON.stringify(edit));
+  const saved=q().find(x=>x.id===id);assert.equal(saved.requiredModel,'claude-fable-5-2');assert.equal(saved.limitSlot,'main');release();const manual=post('/api/chat/send',{fromQueue:id,expectedItem:JSON.stringify(saved)});
   await wait(()=>rows().some(x=>x.role==='assistant'&&x.request===id));await manual;await wait(()=>!hub.chats.busy(key.project,key.task));
-  const users=rows().filter(x=>x.role==='user'&&x.request===id);assert.equal(users.length,1);assert.equal(users[0].to,'claude');assert.equal(users[0].model,'Fable 5.1');assert.match(users[0].text,/FOLLOW-UP edited model/);
-  const input=fs.readFileSync(path.join(tmp,'edited-claude-input'),'utf8');assert.match(input,/ORIGINAL full\nsecond line/);assert.match(input,/FOLLOW-UP edited model/);const args=JSON.parse(fs.readFileSync(path.join(tmp,'edited-claude-args'),'utf8'));assert.equal(args[args.indexOf('--model')+1],'claude-fable-5-1');
+  const users=rows().filter(x=>x.role==='user'&&x.request===id);assert.equal(users.length,1);assert.equal(users[0].to,'claude');assert.equal(users[0].model,'Fable 5.2');assert.match(users[0].text,/FOLLOW-UP edited model/);
+  const input=fs.readFileSync(path.join(tmp,'edited-claude-input'),'utf8');assert.match(input,/ORIGINAL full\nsecond line/);assert.match(input,/FOLLOW-UP edited model/);const args=JSON.parse(fs.readFileSync(path.join(tmp,'edited-claude-args'),'utf8'));assert.equal(args[args.indexOf('--model')+1],'claude-fable-5-2');
  }finally{release?.();hub.chats.stop=oldStop;hub.chats.onSettled=oldSettled;}
 });
 function proofStarted(run){return spool.read(run.child.dir,'started.json')?.identity;}

@@ -71,7 +71,7 @@ class Ideas {
         }
       } finally { this.unlock(lock); }
     }
-    U.check(entry.realpath === real && U.hash(entry.identity) === U.hash(ident), 'project-binding', '台帳の移動を照合してから続けてください');
+    U.check(entry.realpath === real && U.sameIdentity(entry.identity, ident), 'project-binding', '台帳の移動を照合してから続けてください');
     this.outside(entry.dir);
     return { ...entry, file: path.join(entry.dir, 'ideas.json'), md: path.join(entry.colocated ? entry.dir : real, 'アイデア帳.md'), controlDir: path.join(this.control, 'projects', entry.projectUid) };
   }
@@ -203,6 +203,11 @@ class Ideas {
   }
   stale(d, reason) { for (const r of Object.values(d.releases)) if (['ready', 'preparing', 'reviewing'].includes(r.state)) { r.state = 'stale'; r.rev++; r.staleReason = reason; } }
   settings(id, b, apply) { return this.mutate(id, b.opId, b, d => { U.check(d.settings.rev === b.settingsRev, 'settings-revision', '設定が更新されました。表示を読み直してください'); apply(d); d.settings.rev++; return { settings: U.clone(d.settings) }; }); }
+  // Stopping must work in the free core too; enabling automation stays paid.
+  pauseAuto(id, b) { return this.settings(id, b, d => {
+    d.settings.auto.enabled = false; d.settings.manualPaused = true;
+    d.settings.auto.generation++; d.settings.stopGeneration++;
+  }); }
   internal(id, op, payload, apply) { return this.mutate(id, op, { internal: true, ...payload }, apply); }
   uploadImage(id,b,bytes) { return images.upload(this,id,b,bytes); }
   image(id,key,preview=false) { U.opId(key); const d=this.read(id), image=d.images?.[key]; U.check(image && image.projectUid===d.projectUid,'image-owner','この台帳の画像が見つかりません',404); return images.verify(this.resolve(id),image,preview); }

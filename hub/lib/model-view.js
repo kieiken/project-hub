@@ -55,10 +55,10 @@ class ModelView {
     const s = data.initial;
     return s && ['claude', 'codex'].includes(s.ai) && typeof s.model === 'string' && s.model.trim() &&
       !/[\r\n]/.test(s.model) && EFFORTS.includes(s.effort)
-      ? { ai: s.ai, model: s.model, effort: s.effort } : { ...INITIAL_PICK };
+      ? { ai: s.ai, model: s.model, effort: launch.normalizeEffort(s.ai, s.effort) } : { ...INITIAL_PICK };
   }
   setInitial(spec, models, modelError = () => '') {
-    if (!spec || !['claude', 'codex'].includes(spec.ai) || typeof spec.model !== 'string' || !EFFORTS.includes(spec.effort))
+    if (!spec || !['claude', 'codex'].includes(spec.ai) || typeof spec.model !== 'string' || !launch.effortsFor(spec.ai, spec.model).includes(spec.effort))
       return { status: 400, error: lt('初期AI・モデル・思考の形式が違います') };
     const model = launch.modelLabel(spec.ai, spec.model);
     if (!(models[launch.AI_KEY[spec.ai]] || []).includes(model)) return { status: 400, error: lt('このモデルは初期AIに選べません') };
@@ -74,8 +74,18 @@ class ModelView {
     try { fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n'); fs.renameSync(tmp, this.file); }
     finally { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); }
   }
-  setHidden(ai, model, hide) {
+  setHidden(ai, model, hide, account) {
     const data = this.read(true), h = this.hidden(data);
+    if (ai === 'codex' && account !== undefined) {
+      const profiles = data.codexHidden || {}, current = profiles[account] || (account === 'default' ? h.codex : []);
+      data.codexHidden = { ...profiles, [account]: hide ? [...new Set([...current, model])] : current.filter(m => m !== model) };
+      if (account === 'default') {
+        h.codex = data.codexHidden.default;
+        data.hidden = { ...data.hidden, codex: h.codex };
+      }
+      this.write(data);
+      return { hiddenModels: h, codexHiddenModels: data.codexHidden, modelOrder: this.saved(data) };
+    }
     h[ai] = hide ? [...new Set([...h[ai], model])] : h[ai].filter(m => m !== model);
     data.hidden = { ...data.hidden, ...h }; this.write(data);
     return { hiddenModels: h, modelOrder: this.saved(data) };

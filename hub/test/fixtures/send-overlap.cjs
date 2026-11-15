@@ -51,8 +51,8 @@ function fixture(t, { scanDelay = 0, queryDelay = 0, routeSource } = {}) {
     store: { readProject: () => p, taskFile: () => 'fixture', readTask: () => ({ ...task }), updateTask: (_p, _t, fields) => Object.assign(task, fields) },
     pickSpec: () => ({ model: 'GPT-6.1-Sol', effort: '高' }), requestAccount: (_p, _t, _ai, account) => account || 'work',
     modelError: () => null, startDir: () => ({ dir }), roles: { EFFORTS: ['高'] }, rolesData: () => policy,
-    queueEdit: { accept: () => undefined }, taskPrompt: () => '', modelPolicy: () => '', permCmd: () => '',
-    specialMode: { pick: () => null }, modelView: { special: () => null }, record() {}, chatEnded() {},
+    queueEdit: { accept: () => undefined, imagePaths: () => [] }, taskPrompt: () => '', modelPolicy: () => '', permCmd: () => '',
+    specialMode: { pick: () => null }, modelView: { special: () => null }, record: (action, _request, fields) => logs.push({ action, ...fields }), chatEnded() {},
     lt: (value, ...args) => Array.isArray(value) ? String.raw({ raw: value }, ...args) : value,
     send: (_res, status, body) => ({ status, ...body }) };
   let createRoute;

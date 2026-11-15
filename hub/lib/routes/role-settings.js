@@ -1,8 +1,21 @@
 'use strict';
 
 module.exports = function rolesettingsRoutes(ctx) {
-  const { send, lt, roleHistory, ROLES_FILE, roles } = ctx;
+  const { send, lt, roleHistory, ROLES_FILE, roles, tiers, getReview, extensions, license } = ctx;
+  const available=()=>{if(!extensions?.state().included.includes('delegate'))throw Object.assign(Error(lt('この版では段分けを使えません')),{status:404});license.require(['delegate']);};
+  const human=req=>require('../idea-api').humanRequest({...req,headers:{...req.headers,'x-hub-ui':req.headers['x-hub-ui']==='role-tiers'?'ideas':''}});
+  const guardUI=req=>{if(!human(req))throw Object.assign(Error(lt('この操作は設定画面から行ってください')),{status:403});};
   return {
+    tiers: { matches:(req,url)=>req.method==='GET'&&url.pathname==='/api/roles/tiers',handle(req,res){try{available();return send(res,200,tiers.view());}catch(e){return send(res,e.status||409,{error:e.message});}} },
+    tierAction: { matches:(req,url)=>req.method==='POST'&&url.pathname.startsWith('/api/roles/tiers/'), async handle(req,res,url,b){try{
+      available();
+      if(url.pathname==='/api/roles/tiers/stop')return send(res,200,tiers.stop(b,human(req)?'人':'ai'));
+      guardUI(req);
+      if(url.pathname==='/api/roles/tiers/review')return send(res,200,await getReview().start());
+      if(url.pathname==='/api/roles/tiers/proposal')return send(res,200,getReview().decide(b));
+      if(url.pathname==='/api/roles/tiers/catalog'){const r=tiers.read();r.data.catalogSeen=require('../role-tiers').snapshot(tiers.tools);require('../role-tiers').write(tiers.file,r.data,r.revision);return send(res,200,tiers.view());}
+      return send(res,404,{error:'not found'});
+    }catch(e){return send(res,e.status||409,{error:e.message});}} },
     history: {
       matches: (req, url) => req.method === 'GET' && url.pathname === '/api/roles/history',
       handle(req, res, url, b) {
@@ -14,7 +27,15 @@ module.exports = function rolesettingsRoutes(ctx) {
       matches: (req, url) => url.pathname === '/api/roles',
       handle(req, res, url, b) {
         if (!Array.isArray(b.roles)) return send(res, 400, { error: lt('形式が違います') });
-        const r = roles.write(ROLES_FILE, b.roles, b.checkCredits, false, b.preferCredits, { expectedRevision: b.expectedRevision });
+        if(b.tiers!==undefined){try{
+          available();guardUI(req);
+          if(tiers.read().revision!==b.tiersRevision)throw Error(lt('段の設定が変わりました。読み直してください'));
+          require('../role-tiers').validate(b.tiers,b.roles,tiers.tools.catalog());
+          const before=tiers.read().data.roles;
+          for(const [name,row]of Object.entries(before))if(row.routing==='stopped'&&(!b.tiers[name]||b.tiers[name].routing==='on')&&!b.resumeTiers?.includes(name))throw Error(lt('停止した振り分けの再開を確認してください'));
+        }catch(e){return send(res,e.status||409,{error:e.message});}}
+        const r = roles.write(ROLES_FILE, b.roles, b.checkCredits, false, b.preferCredits, { expectedRevision: b.expectedRevision, allowDelegateUltra: b.allowDelegateUltra });
+        if(r.ok&&b.tiers!==undefined){try{tiers.save(b.tiers,b.tiersRevision,{ui:true,resume:b.resumeTiers||[]});}catch(e){return send(res,e.status||409,{error:e.message});}}
         return r.ok ? send(res, 200, r.data) : send(res, r.status || 400, { error: r.errors.join(' / ') });
       },
     },

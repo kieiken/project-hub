@@ -3,10 +3,10 @@ process.env.HUB_LANG='ja';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),{createHash}=require('node:crypto');
 const {assignment,evidence,legacyRefusal,completedRefusal}=require('../lib/integration-delivery'),{IntegrateAuto}=require('../lib/integrate-auto');
 const hash=s=>createHash('sha256').update(s).digest('hex');
-const data={roles:[{name:'コーディング',main:{ai:'codex',model:'gpt-6.1-sol',effort:'中'}},{name:'調査',main:{ai:'claude-code',model:'claude-opus-5-5'}},{name:'チェック',main:{ai:'claude-code',model:'claude-fable-5-1'}}]};
+const data={roles:[{name:'コーディング',main:{ai:'codex',model:'gpt-6.1-sol',effort:'中'}},{name:'調査',main:{ai:'claude-code',model:'claude-opus-5-5'}},{name:'チェック',main:{ai:'claude-code',model:'claude-fable-5-2'}}]};
 for(const owner of ['codex','claude-code','agy'])test('子owner/modelを役割の明示担当へ混ぜない：'+owner,()=>{
  const req=assignment({role:'コーディング',organize:true,owner,model:'obsolete'},data);assert.equal(req.ai,'codex');assert.equal(req.model,'gpt-6.1-sol');assert.equal(req.effort,'中');
- const review=assignment({role:'チェック',owner,model:'obsolete'},data);assert.equal(review.ai,'claude');assert.equal(review.model,'claude-fable-5-1');
+ const review=assignment({role:'チェック',owner,model:'obsolete'},data);assert.equal(review.ai,'claude');assert.equal(review.model,'claude-fable-5-2');
 });
 test('設定不明は代替モデルへ落とさず拒否',()=>{assert.throws(()=>assignment({role:'unknown'},data));assert.throws(()=>assignment({role:'コーディング'},{roles:[{name:'コーディング',main:{ai:'人',model:'x'}}]}));});
 const integrationDir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'hub-resume-fixture-'));

@@ -1,4 +1,5 @@
 'use strict';
+const { FABLE_MODEL } = require('./fable-model');
 const { lt } = require('./locale');
 // AIには読む道具だけを渡す。判定の保存と削除候補への反映はHubが行う。
 const fs=require('./platform/file-io'),path=require('node:path'),{randomUUID}=require('node:crypto');
@@ -18,7 +19,7 @@ class RemovalReview {
   this.starting.add(project);
   let r;
   try {
-   const task=this.store.createTask(project,{title:lt('削除前の共有確認'),owner:'claude-code',role:'チェック',model:'claude-fable-5-1',...(this.pick() || {}),workspaceMode:'direct',steps:[lt('外の場所の共有を読み取りだけで確認する')]});
+   const task=this.store.createTask(project,{title:lt('削除前の共有確認'),owner:'claude-code',role:'チェック',model:FABLE_MODEL,...(this.pick() || {}),workspaceMode:'direct',steps:[lt('外の場所の共有を読み取りだけで確認する')]});
    if(!task)throw Error(lt('共有確認の作業を作れませんでした'));
    r={id:randomUUID(),task:task.id,status:'running',candidates,results:[],error:'',at:new Date().toISOString()};this.save(project,r);
    const p=this.store.readProject(project),text=[

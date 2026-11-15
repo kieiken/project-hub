@@ -95,7 +95,7 @@ test('ClaudeはRead指示、画像のみも開始、Discordは送信しないこ
 
 test('Sol・高の初期選択はCLIと会話用作業へ保存し、役割設定と過去の作業を保持する', async () => {
   const rolesFile = path.join(root, '_hub/roles.yaml');
-  const roleText = 'models:\n  claude-code: [Fable 5.1, Opus 5.5]\n  codex: [Astra, GPT-6.1-Sol]\nagents: [しおり, つむぎ, りつ]\nroles:\n  コーディング: { main: [claude-code, Fable 5.1, 極高], backup: [codex, Astra, 極高] }\n';
+  const roleText = 'models:\n  claude-code: [Fable 5.2, Opus 5.5]\n  codex: [Astra, GPT-6.1-Sol]\nagents: [しおり, つむぎ, りつ]\nroles:\n  コーディング: { main: [claude-code, Fable 5.2, 極高], backup: [codex, Astra, 極高] }\n';
   fs.writeFileSync(rolesFile, roleText);
   const rolesBefore = require('../lib/roles').read(rolesFile).text;
   const before = (await (await fetch(base + '/api/state')).json()).projects.find(x => x.id === 'サンプルアプリ');
@@ -118,7 +118,7 @@ test('子作業のSol・高は保存・再読込・会話とターミナルの�
   fs.writeFileSync(path.join(bin, 'codex'), `#!${process.execPath}\nprocess.stdin.resume();process.stdin.on('end',()=>{require('node:fs').writeFileSync(${JSON.stringify(captured)},JSON.stringify(process.argv.slice(2)));console.log(JSON.stringify({type:'turn.completed'}));});\n`, { mode: 0o755 });
   process.env.PATH = bin + ':/usr/bin:/bin';
   const oldRoles = fs.readFileSync(rolesFile, 'utf8');
-  const roleText = 'models:\n  claude-code: [Fable 5.1]\n  codex: [Astra, GPT-6.1-Sol]\nroles:\n  司令塔: { main: [claude-code, Fable 5.1, 極高], backup: [codex, Astra, 極高] }\n';
+  const roleText = 'models:\n  claude-code: [Fable 5.2]\n  codex: [Astra, GPT-6.1-Sol]\nroles:\n  司令塔: { main: [claude-code, Fable 5.2, 極高], backup: [codex, Astra, 極高] }\n';
   fs.writeFileSync(rolesFile, roleText);
   try {
     const rolesBefore = require('../lib/roles').read(rolesFile).text;
@@ -205,7 +205,7 @@ test('設定したClaude Opus中の子/分岐は保存・再読込・模擬会�
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'claude'), `#!${process.execPath}\nprocess.stdin.resume();process.stdin.on('end',()=>{require('node:fs').writeFileSync(${JSON.stringify(captured)},JSON.stringify(process.argv.slice(2)));console.log(JSON.stringify({type:'result',subtype:'success',result:'見本確認済み'}));});\n`, { mode: 0o755 });
   process.env.PATH = bin + ':/usr/bin:/bin';
-  fs.writeFileSync(rolesFile, 'models:\n  claude-code: [Fable 5.1, Opus 5.5]\n  codex: [GPT-6.1-Sol]\nroles: {}\n');
+  fs.writeFileSync(rolesFile, 'models:\n  claude-code: [Fable 5.2, Opus 5.5]\n  codex: [GPT-6.1-Sol]\nroles: {}\n');
   try {
     const initial = { ai: 'claude', model: 'Opus 5.5', effort: '中' };
     const setting = await post('/api/models/initial', initial); assert.equal(setting.status, 200);

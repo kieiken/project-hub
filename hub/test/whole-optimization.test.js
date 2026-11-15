@@ -121,7 +121,7 @@ test('static HTTP revalidation, encoding negotiation, concurrent cache, updates 
   const fallback = (res, code, body) => { res.writeHead(code, { 'Cache-Control': 'no-store' }); res.end(body); };
   const server = http.createServer((req, res) => assets.send(req, res, req.url === '/missing' ? file + '.missing' : file, 'text/javascript', fallback));
   await new Promise(r => server.listen(0, '127.0.0.1', r)); t.after(() => new Promise(r => server.close(r))); const port = server.address().port;
-  const plain = await get(port, '/asset'); assert.equal(plain.body.toString(), text); assert.equal(plain.headers['cache-control'], 'no-cache');
+  const plain = await get(port, '/asset'); assert.equal(plain.body.toString(), text); assert.equal(plain.headers['cache-control'], 'no-store');
   assert.equal(plain.headers['x-content-type-options'], 'nosniff'); assert.equal(plain.headers.vary, 'Accept-Encoding'); assert.match(plain.headers.etag, /^W\//);
   for (const tag of [plain.headers.etag, plain.headers.etag.replace('W/', ''), '"other", ' + plain.headers.etag, '*']) {
     const same = await get(port, '/asset', { 'If-None-Match': tag, 'Accept-Encoding': 'gzip' }); assert.equal(same.status, 304); assert.equal(same.body.length, 0); assert.equal(same.headers['content-encoding'], undefined);
@@ -147,8 +147,10 @@ test('encoded state keeps no-store and exact JSON while identity and gzip share 
   assert.equal(plain.body.toString(), body); assert.deepEqual(gunzipSync(gz.body), plain.body); assert.equal(gz.headers['cache-control'], 'no-store'); assert.equal(gz.headers.vary, 'Accept-Encoding'); assert.equal(gz.headers.etag, plain.headers.etag);
 });
 
-test('real server keeps locale/API no-store, serves static gzip/304 and state gzip/304', async t => {
+test('real server keeps locale/API no-store, serves extension/steps gzip, static gzip/304 and state gzip/304', async t => {
   const f = fixture(t), { spawn } = require('node:child_process');
+  write(path.join(f.root, 'Product/P/PROJECT.md'), '---\nname: P\nstatus: 進行中\n---\n');
+  write(path.join(f.root, 'Product/P/.ai/tasks/t.md'), '---\nid: t\ntitle: Fixture\nstate: 実行中\n---\n## 手順\n' + '- [ ] 合成の手順です。\n'.repeat(200));
   fs.mkdirSync(path.join(f.root, '_hub'), { recursive: true });
   fs.copyFileSync(path.join(__dirname, '../../docs/project-hub/templates/_hub/roles.yaml'), path.join(f.root, '_hub/roles.yaml'));
   const env = { ...process.env, HOME: f.root, HUB_ROOT: f.root, HUB_AI_HOME: f.root, HUB_TRASH: path.join(f.root, 'trash'), HUB_DRY_RUN: '1', HUB_AUTO_TRANSLATE: '0', HUB_PORT: '0', HUB_LANG: 'ja' };
@@ -157,10 +159,29 @@ test('real server keeps locale/API no-store, serves static gzip/304 and state gz
   t.after(() => new Promise(r => { if (child.exitCode !== null || child.signalCode) return r(); child.once('exit', r); child.kill(); }));
   const port = await new Promise((resolve, reject) => { const timeout = setTimeout(() => reject(Error('server start timeout: ' + output)), 10000); child.once('message', x => { clearTimeout(timeout); resolve(x); }); child.once('exit', code => { clearTimeout(timeout); reject(Error('server exited ' + code + ': ' + output)); }); });
   const request = (route, headers = {}) => get(port, route, { Host: '127.0.0.1:0', ...headers });
-  const js = await request('/app.js', { 'Accept-Encoding': 'gzip' }); assert.equal(js.status, 200); assert.equal(js.headers['content-encoding'], 'gzip'); assert.equal(js.headers['cache-control'], 'no-cache'); assert.deepEqual(gunzipSync(js.body), fs.readFileSync(path.join(__dirname, '../public/app.js')));
+  const js = await request('/app.js', { 'Accept-Encoding': 'gzip' }); assert.equal(js.status, 200); assert.equal(js.headers['content-encoding'], 'gzip'); assert.equal(js.headers['cache-control'], 'no-store'); assert.deepEqual(gunzipSync(js.body), fs.readFileSync(path.join(__dirname, '../public/app.js')));
   const same = await request('/app.js', { 'If-None-Match': js.headers.etag }); assert.equal(same.status, 304); assert.equal(same.body.length, 0);
+  const extensions = require('../lib/extensions').loadExtensions({ hub: path.join(__dirname, '..') });
+  for (const [route, type, source] of [['/extensions-ui.js', 'text/javascript', extensions.uiSource()], ['/extensions-ui.css', 'text/css', extensions.uiSource('style')]]) {
+    for (const encoding of ['identity', 'gzip', 'gzip;q=0']) {
+      const asset = await request(route, { 'Accept-Encoding': encoding, 'If-None-Match': '*' });
+      assert.equal(asset.status, 200); assert.match(asset.headers['content-type'], new RegExp('^' + type));
+      assert.equal(asset.headers['cache-control'], 'no-store'); assert.equal(asset.headers['x-content-type-options'], 'nosniff');
+      assert.equal(asset.headers.vary, 'Accept-Encoding'); assert.equal(asset.headers.etag, undefined);
+      assert.equal(Number(asset.headers['content-length']), asset.body.length);
+      if (encoding === 'gzip') {
+        assert.equal(asset.headers['content-encoding'], 'gzip'); assert.equal(gunzipSync(asset.body).toString(), source);
+        assert.ok(asset.body.length < Buffer.byteLength(source));
+      } else {
+        assert.equal(asset.headers['content-encoding'], undefined); assert.equal(asset.body.toString(), source);
+      }
+    }
+  }
   const locale = await request('/locale-config.js', { 'Accept-Encoding': 'gzip', 'If-None-Match': '*' }); assert.equal(locale.status, 200); assert.equal(locale.headers['cache-control'], 'no-store'); assert.equal(locale.headers.etag, undefined);
   const ping = await request('/api/ping', { 'Accept-Encoding': 'gzip' }); assert.equal(ping.headers['cache-control'], 'no-store');
+  const steps = await request('/api/task/steps?project=P&task=t', { 'Accept-Encoding': 'gzip' });
+  assert.equal(steps.status, 200); assert.equal(steps.headers['content-encoding'], 'gzip'); assert.equal(steps.headers['cache-control'], 'no-store');
+  assert.equal(JSON.parse(gunzipSync(steps.body)).steps.length, 200);
   await request('/api/state'); await new Promise(r => setTimeout(r, 100));
   const plain = await request('/api/state'), gz = await request('/api/state', { 'Accept-Encoding': 'gzip' });
   assert.equal(plain.status, 200); assert.equal(gz.status, 200); assert.deepEqual(gunzipSync(gz.body), plain.body); assert.equal(gz.headers['cache-control'], 'no-store'); assert.equal(gz.headers.etag, plain.headers.etag);

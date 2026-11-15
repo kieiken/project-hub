@@ -52,8 +52,8 @@ const run = (file, args, env) => new Promise(resolve => {
   execFile(x.file, x.args, { env, timeout: 15000, maxBuffer: 65536 }, (error, stdout, stderr) => resolve({ error, stdout, stderr }));
 });
 class Accounts {
-  constructor({ file, home = process.env.HUB_AI_HOME || os.homedir(), dry = false, busy = () => false, execute = run, trash = process.env.HUB_TRASH || platform.trashDir(home) }) {
-    Object.assign(this, { file, home, dry, busy, execute, trash }); this.locks = new Set(); this.readers = new Map(); this.authStates = new Map();
+  constructor({ file, home = process.env.HUB_AI_HOME || os.homedir(), dry = false, busy = () => false, execute = run, trash = process.env.HUB_TRASH || platform.trashDir(home), now = Date.now, processProbe = pid => process.kill(pid, 0) }) {
+    Object.assign(this, { file, home, dry, busy, execute, trash, now, processProbe }); this.locks = new Set(); this.readers = new Map(); this.authStates = new Map();
     this.termDir = path.join(path.dirname(file), 'account-processes');
     this.base = path.join(home, '.hub-accounts');
   }
@@ -106,7 +106,7 @@ class Accounts {
         if (ai && row.ai !== ai || id !== undefined && row.account !== id || authOnly && row.kind !== 'auth') continue;
         if (!Number.isInteger(row.pid) || row.pid < 1) return true;
         try {
-          process.kill(row.pid, 0);
+          if (!this.terminalRecordActive(path.join(this.termDir, f), row)) continue;
           // Agy の /login は完了後も対話画面が残る。状態確認と作業の起動は終了を待たない。
           // 壊れた記録・権限エラー・認証を書き換える操作の保護は解除しない。
           if (allowLoginTerminal && ai === 'agy' && row.ai === 'agy' && row.kind === 'auth' && [undefined, 'login'].includes(row.authAction)) continue;
@@ -116,16 +116,35 @@ class Accounts {
     }
     return false;
   }
+  terminalRecordActive(file, row) {
+    const discard = () => {
+      // A late Terminal handoff must not be removed using an older observation.
+      let current; try { current = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+      if (JSON.stringify(current) !== JSON.stringify(row)) return true;
+      try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      return false;
+    };
+    try { this.processProbe(row.pid); }
+    catch (error) { if (error.code !== 'ESRCH') throw error; return platform.name === 'darwin' ? discard() : false; }
+    if (platform.name === 'darwin' && row.kind === 'auth' && row.pid === process.pid) {
+      // Twenty seconds allows ordinary shell startup; an unclaimed launch is
+      // retryable afterwards. A delayed shell rewrites its own PID and restores
+      // protection. Legacy tickets use file time instead of the new timestamp.
+      const created = row.createdAt === undefined ? fs.statSync(file).mtimeMs : Date.parse(row.createdAt);
+      if (Number.isFinite(created) && this.now() - created >= 20000) return discard();
+    }
+    return true;
+  }
   // 外部Terminalを開く前から保護し、CLI終了時に札を外す。再起動後も生存PIDを照合する。
   terminalCommand(ai, account, command, sq, kind = 'work', authAction) {
     if (this.dry) return { command, cancel() {} };
     this.get(ai, account); noLinks(this.termDir); fs.mkdirSync(this.termDir, { recursive: true, mode: 0o700 });
     const file = path.join(this.termDir, randomUUID() + '.json');
     const marker = { ai, account, kind, ...(authAction ? { authAction } : {}) };
-    fs.writeFileSync(file, JSON.stringify({ ...marker, pid: process.pid }), { mode: 0o600 });
+    fs.writeFileSync(file, JSON.stringify({ ...marker, pid: process.pid, ...(kind === 'auth' && platform.name === 'darwin' ? { createdAt: new Date(this.now()).toISOString() } : {}) }), { mode: 0o600 });
     const prefix = JSON.stringify(marker).slice(0, -1) + ',"pid":';
     const script = `printf '%s%s%s' ${sq(prefix)} "$$" '}' > ${sq(file)}; trap ${sq('unlink ' + sq(file))} EXIT; ${command}`;
-    return { command: '/bin/bash -c ' + sq(script), cancel: () => { fs.unlinkSync(file); } };
+    return { command: '/bin/bash -c ' + sq(script), cancel: () => { try { fs.unlinkSync(file); } catch (error) { if (platform.name !== 'darwin' || error.code !== 'ENOENT') throw error; } } };
   }
   authTerminalPid(ai, id) {
     this.get(ai, id);
@@ -134,15 +153,29 @@ class Accounts {
       const row = JSON.parse(fs.readFileSync(path.join(this.termDir, file), 'utf8'));
       if (row.ai !== ai || row.account !== id || row.kind !== 'auth') continue;
       if (!Number.isInteger(row.pid) || row.pid < 1) fail(lt('認証用Terminalの記録を確認できません'), 409);
-      try { process.kill(row.pid, 0); return row.pid; } catch (e) { if (e.code !== 'ESRCH') throw e; }
+      if (platform.name === 'darwin') { if (this.terminalRecordActive(path.join(this.termDir, file), row)) return row.pid; }
+      else { try { this.processProbe(row.pid); return row.pid; } catch (error) { if (error.code !== 'ESRCH') throw error; } }
     }
     return null;
   }
   assertIdle(ai, id) {
     this.available(ai, id);
-    if (this.readers.get(ai + ':' + id) || this.busy(ai, id) || this.terminalBusy(ai, id)) fail(lt('このアカウントでAIが作業中または順番待ちです。終了してから操作してください'), 409);
+    const busy = this.busy(ai, id);
+    if (busy === 'unknown-process') fail(lt('同じAIの処理が見つかりましたが、アカウントを確認できません。認証を保護するため操作を保留しています'), 409);
+    if (busy === 'external-codex') fail(lt('Hub外のCodex（デスクトップアプリ等）が使用中です。終了してから操作してください'), 409);
+    if (this.readers.get(ai + ':' + id) || busy || this.terminalBusy(ai, id)) fail(lt('このアカウントでAIが作業中または順番待ちです。終了してから操作してください'), 409);
   }
-  list() { return [...AIS.flatMap(ai => [this.get(ai), ...this.read().filter(r => r.ai === ai)]), this.get('agy')].map(r => ({ ...r, busy: Boolean(this.busy(r.ai, r.id)) || this.terminalBusy(r.ai, r.id) || this.locks.has(r.ai + ':' + r.id), authTerminal: this.terminalBusy(r.ai, r.id, true) })); }
+  list({ includeActivity = true } = {}) {
+    const registry = this.read(), rows = [...AIS.flatMap(ai => [this.get(ai), ...registry.filter(r => r.ai === ai)]), this.get('agy')];
+    if (!includeActivity) return rows;
+    // Explicit, per-list token; action guards never receive it. No timer,
+    // promise or subsequent request can retain this display observation.
+    const observation = new Map();
+    return rows.map(r => {
+      const activity = this.busy(r.ai, r.id, observation);
+      return { ...r, busy: Boolean(activity) || this.terminalBusy(r.ai, r.id) || this.locks.has(r.ai + ':' + r.id), authTerminal: this.terminalBusy(r.ai, r.id, true), ...(['unknown-process', 'external-codex'].includes(activity) ? { busyReason: activity } : {}) };
+    });
+  }
   add(ai, name) {
     if (!AIS.includes(ai)) fail(lt('Claude Code・Codex・Grokを選んでください'));
     name = this.name(name);

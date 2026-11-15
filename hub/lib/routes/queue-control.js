@@ -1,14 +1,14 @@
 'use strict';
 
 module.exports = function queuecontrolRoutes(ctx) {
-  const { ROLES_FILE, chats, freetalkAttachments, fromRemote, fs, launch, limitIdentity, lt, modelError, permCmd, pickSpec, queueActions, queueEdit, queueEditable, getQueueRetreat, record, requestAccount, roleHistory, getRoleReview, roles, rolesData, send, store } = ctx;
+  const { ROLES_FILE, chats, freetalkAttachments, projectAttachments, fromRemote, fs, launch, limitIdentity, lt, modelError, permCmd, pickSpec, queueActions, queueEdit, queueEditable, getQueueRetreat, record, requestAccount, roleHistory, getRoleReview, roles, rolesData, send, store } = ctx;
 
   function handleDraft(req, res, url) {
       const p = store.readProject(url.searchParams.get('project')), task = url.searchParams.get('task');
       const item = p && store.taskFile(p.id, task) && chats.queue(p.id, task).find(x => x.id === url.searchParams.get('id'));
       if (!item) return send(res, 404, { error: 'その指示はもう待っていません' });
       if (!queueEditable(item)) return send(res, 409, { error: 'この待ち指示は編集できません' });
-      return send(res, 200, { draft: queueEdit.draft(p, task, item, freetalkAttachments), expectedItem: JSON.stringify(item) });
+      return send(res, 200, { draft: queueEdit.draft(p, task, item, freetalkAttachments, projectAttachments), expectedItem: JSON.stringify(item) });
     }
 
   function handleReceipt(req, res, url) {
@@ -38,24 +38,25 @@ module.exports = function queuecontrolRoutes(ctx) {
         let selection = {};
         if (b.ai !== undefined || b.model !== undefined) {
           if (!['claude', 'codex', 'agy', 'grok'].includes(b.ai) || typeof b.model !== 'string' || !b.model) throw Error('AI・モデルを選んでください');
-          const model = launch.modelLabel(b.ai, b.model), invalid = modelError(b.ai, model);
-          if (invalid) throw Error(invalid);
           const t = store.readTask(file), account = requestAccount(p, b.task, b.ai, b.ai === item.ai ? item.account || 'default' : undefined);
+          const model = launch.modelLabel(b.ai, b.model), invalid = modelError(b.ai, model, account);
+          if (invalid) throw Error(invalid);
           const preferred = roles.EFFORTS.includes(item.effort) ? item.effort : pickSpec(t, b.ai).effort;
-          const effort = b.ai === 'agy' || b.ai === 'grok' && preferred === 'Ultra' ? '高' : preferred;
+          const normalized = launch.normalizeEffort(b.ai, preferred);
+          const effort = b.ai === 'agy' ? '高' : normalized && !launch.effortsFor(b.ai, model).includes(normalized) ? '高' : normalized;
           if (item.requireModel && !launch.flagFor(b.ai, model)) throw Error('指定モデルの起動名を確認できません');
           selection = { ai: b.ai, model, account, effort, perm: permCmd(b.ai), requiredModel: item.requireModel ? launch.flagFor(b.ai, model) : undefined, limitSlot: item.role ? limitIdentity(rolesData(), { ai: b.ai, model, role: item.role })?.limitSlot : undefined };
         }
         let editedText = text, attachmentDraft, images = item.images, projectImages = item.projectImages;
         if (b.attachmentIds !== undefined) {
-          const source = queueEdit.draft(p, b.task, item, freetalkAttachments);
+          const source = queueEdit.draft(p, b.task, item, freetalkAttachments, projectAttachments);
           if (!Array.isArray(b.attachmentIds) || new Set(b.attachmentIds).size !== b.attachmentIds.length || b.attachmentIds.some(id => !source.attachments.some(x => x.id === id))) throw Error('添付情報が変更されています');
           const attachments = source.attachments.filter(x => b.attachmentIds.includes(x.id));
           // 参照の削除だけなので、既に無い画像も残存添付の保存を妨げない。
           attachmentDraft = { text: b.text, attachments };
           editedText = queueEdit.format(b.text, attachments);
-          if (p.kind === 'freetalk') images = attachments.map(x => x.imagePath).filter(Boolean);
-          else projectImages = attachments.filter(x => x.kind !== 'file').map(x => x.id);
+          images = queueEdit.imagePaths(attachments);
+          if(p.kind !== 'freetalk') projectImages = attachments.filter(x => x.kind !== 'file').map(x => x.id);
         }
         const edited = { ...item, ...selection, text: editedText, ...(item.shown !== undefined ? { shown: editedText } : {}),
           ...(b.attachmentIds !== undefined ? { attachmentDraft, images, ...(p.kind !== 'freetalk' ? { projectImages } : {}) } : { attachmentDraft: undefined }),

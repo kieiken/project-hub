@@ -62,7 +62,7 @@ test('Codexの全起動経路と再開で160k・全体の自動圧縮設定を�
     assert.ok(turn.args.includes('model_reasoning_effort=high'));
     assert.strictEqual(turn.stdin.split(launchLib.CONTEXT_RULE).length - 1, 1);
   }
-  const claude = chatLib.buildTurn({ ai: 'claude', model: 'Fable 5.1', meta: { sessions: { claude: 'sid' } }, rows: [], text: 'hello', policy: 'POLICY' });
+  const claude = chatLib.buildTurn({ ai: 'claude', model: 'Fable 5.2', meta: { sessions: { claude: 'sid' } }, rows: [], text: 'hello', policy: 'POLICY' });
   assert.ok(claude.args.includes('--resume'));
   assert.ok(!claude.args.some(x => x.includes('auto_compact')));
   assert.ok(claude.stdin.includes(launchLib.CONTEXT_RULE));
@@ -74,7 +74,7 @@ test('各AIの最初と継続の番にCLI引数と一致する起動設定を渡
   for (const [ai, model, label, flag] of [
     ['codex', 'GPT-6.1-Sol', 'GPT-6.1-Sol', 'gpt-6.1-sol'],
     ['codex', 'gpt-6.1-sol', 'GPT-6.1-Sol', 'gpt-6.1-sol'],
-    ['claude', 'claude-fable-5-1', 'Fable 5.1', 'claude-fable-5-1'],
+    ['claude', 'claude-fable-5-2', 'Fable 5.2', 'claude-fable-5-2'],
     ['agy', 'gemini-3.1-pro-high', 'Gemini 3.1 Pro (High)', 'gemini-3.1-pro-high'],
   ]) for (const resumed of [false, true]) {
     const turn = chatLib.buildTurn({ ai, model, meta: resumed ? { sessions: { [ai]: 'sid' }, models: { [ai]: model } } : {}, rows: [], text: '依頼', basePrompt: 'BASE', policy: 'POLICY' });
@@ -371,7 +371,7 @@ test('モデルと思考は役割から決まり、作業ファイルの指定�
   const st = await (await fetch(BASE2 + '/api/state')).json();
   assert.ok(Array.isArray(st.roles.roles) && st.roles.roles.length === 9);
   assert.equal(st.roles.roles.find(r => r.name === '見直し').job, '役割分担の相談');
-  assert.deepStrictEqual(st.efforts, ['中', '高', '極高', 'MAX', 'Ultra']);
+  assert.deepStrictEqual(st.efforts, ['低', '中', '高', '極高', 'MAX', 'Ultra']);
   // サンプルアプリ の作業は role: コーディング → codex GPT-6.1-Sol・高
   let r = await (await post2('/api/term/start', { project: 'サンプルアプリ', task: 'sample-app-01', ai: 'codex' })).json();
   assert.strictEqual(r.model, 'GPT-6.1-Sol'); assert.strictEqual(r.effort, '高');
@@ -399,11 +399,11 @@ test('役割分担を画面から保存でき、おかしな値は拒否', async
   const st = await (await fetch(BASE2 + '/api/state')).json();
   const rs = JSON.parse(JSON.stringify(st.roles.roles));
   const bun = rs.find(x => x.name === '文章');
-  bun.main.model = 'Fable 5.1'; bun.main.effort = 'MAX';
+  bun.main.model = 'Fable 5.2'; bun.main.effort = 'MAX';
   const saved = await (await post2('/api/roles', { roles: rs })).json();
-  assert.strictEqual(saved.roles.find(x => x.name === '文章').main.model, 'Fable 5.1');
+  assert.strictEqual(saved.roles.find(x => x.name === '文章').main.model, 'Fable 5.2');
   const text = fs.readFileSync(path.join(ROOT2, '_hub', 'roles.yaml'), 'utf8');
-  assert.match(text, /文章: \{ main: \[claude-code, Fable 5\.1, MAX\]/);
+  assert.match(text, /文章: \{ main: \[claude-code, Fable 5\.2, MAX\]/);
   assert.match(text, /# 文章は Opus 5\.5/); // コメント行は残る
   assert.match(text, /permissions:/);
   bun.main.model = 'Astra';
@@ -1072,7 +1072,7 @@ test('モデルを最新に整理：今の一覧だけ出し、役割の古い�
   try {
     assert.strictEqual(rolesLib.tidy(f).ok, false); // 一覧を取り直す前は断る
     rolesLib.setModelCatalog({
-      claude: { models: [{ id: 'claude-opus-5-5', label: 'Opus 5.5' }, { id: 'claude-fable-5-1', label: 'Fable 5.1' }, { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }] },
+      claude: { models: [{ id: 'claude-opus-5-5', label: 'Opus 5.5' }, { id: 'claude-fable-5-2', label: 'Fable 5.2' }, { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }] },
       codex: { models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' }, { id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol' }, { id: 'gpt-5.6-terra', label: 'GPT-5.6-Terra' }, { id: 'gpt-6.1-astra', label: 'GPT-6.1-Astra' }] },
     });
     const before = rolesLib.read(f).data;
@@ -1128,12 +1128,12 @@ test('別の AI に作業を渡す（/api/delegate）：同じ作業で動かし
     fs.mkdirSync(path.dirname(tf), { recursive: true });
     fs.writeFileSync(tf, '---\nid: dlg-parent\ntitle: 親の作業\nstate: 実行中\n---\n## やったこと\n');
     const before = fs.readdirSync(path.dirname(tf)).sort();
-    const r = await (await post2('/api/delegate', { project: 'サンプルアプリ', task: 'dlg-parent', ai: 'claude', model: 'claude-fable-5-1', title: '計算を頼む', text: '合計を出して' })).json();
+    const r = await (await post2('/api/delegate', { project: 'サンプルアプリ', task: 'dlg-parent', ai: 'claude', model: 'claude-fable-5-2', title: '計算を頼む', text: '合計を出して' })).json();
     assert.strictEqual(r.ok, true, JSON.stringify(r)); assert.strictEqual(r.task, 'dlg-parent');
     for (let i = 0; i < 100; i++) { await new Promise(x => setTimeout(x, 50)); const rows = chatLib.read(path.join(ROOT2, 'Product', 'サンプルアプリ'), 'dlg-parent'); if (rows.some(x => x.role === 'assistant')) break; }
     const rows = chatLib.read(path.join(ROOT2, 'Product', 'サンプルアプリ'), 'dlg-parent');
     const got = rows.find(x => x.role === 'assistant');
-    assert.ok(got, '結果の行が元の会話に無い'); assert.strictEqual(got.model, 'Fable 5.1'); assert.match(got.text, /DONE\[/);
+    assert.ok(got, '結果の行が元の会話に無い'); assert.strictEqual(got.model, 'Fable 5.2'); assert.match(got.text, /DONE\[/);
     const st = await (await fetch(BASE2 + '/api/state')).json();
     const p = st.projects.find(x => x.id === 'サンプルアプリ');
     assert.strictEqual(p.tasks.filter(x => x.derivedFrom === 'dlg-parent').length, 0);

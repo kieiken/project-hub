@@ -9,6 +9,7 @@ const owned=(headers={})=>({'X-Hub':'1','X-Hub-Token':capability(localAuth.token
 test.before(async()=>{fs.mkdirSync(root,{recursive:true});Object.assign(process.env,{HUB_ROOT:root,HUB_DRY_RUN:'1',HUB_AI_HOME:path.join(tmp,'ai'),HUB_PORT:String(port)});({server,sessions,localAuth}=require('../server'));await new Promise(r=>server.listen(port,'127.0.0.1',r));port=server.address().port;});
 test.after(async()=>{sessions.stopAll();await new Promise(r=>server.close(r));fs.rmSync(tmp,{recursive:true,force:true});});
 test('all read/write API entry points require owner; minimal ping has no configuration',async()=>{
+ assert.equal((await call('/api/state')).json().code,'local_auth_required');
  assert.deepEqual(Object.keys((await call('/api/ping')).json()).sort(),['instance','ok']);
  for(const route of ['/api/state','/api/mcp/tools','/api/file/view?path=x.txt','/api/term/stream','/api/chat/stream','/api/move/status','/api/remote/enrollment','/api/not-a-route']) {
   assert.equal((await call(route)).status,401,route);assert.equal((await call(route,{method:'POST',headers:{'X-Hub':'1'},body:'{}'})).status,401,route);
@@ -25,10 +26,13 @@ test('cookie, nonce-bound identity, one-use launch POST and document proof',asyn
  const ticket=(await call('/api/local-auth/launch',{method:'POST',headers:owned(),body:'{}'})).json().ticket;
  const result=await call('/local-auth',{method:'POST',headers:{Origin:'null','Content-Type':'application/x-www-form-urlencoded'},body:'ticket='+ticket});
  assert.equal(result.status,200);const browser=browserSession(result.text);assert.ok(!result.text.includes(capability(localAuth.token)));assert.ok(!result.text.includes(localAuth.token));const cookie=result.headers['set-cookie'][0];assert.match(cookie,/HttpOnly/);assert.match(cookie,/SameSite=Lax/);
+ assert.equal(browser.reconnect,false,'ordinary browser launch cannot auto-reauthenticate');
  assert.match(cookie,/Max-Age=28800/);assert.equal((await call('/api/state',{headers:{Cookie:cookie.split(';')[0]}})).status,401);assert.equal((await call('/api/state',{headers:{'X-Hub-Token':browser.token}})).status,200);
  assert.equal((await call('/api/state',{headers:{Cookie:cookie.split(';')[0].replace(`hub_owner_${port}=`,`hub_owner_${port+1}=`)}})).status,401);
  assert.equal((await call('/local-auth',{method:'POST',body:'ticket='+ticket})).status,403);
  const page=await call('/',{headers:owned({'X-Hub-Navigation':challenge})});assert.equal(page.status,200);assert.equal(page.headers['x-hub-proof'],ping.proof);assert.equal(page.headers['cache-control'],'no-store');
+ assert.equal(browserSession(page.text).reconnect,true,'owner-header document can use native navigation for recovery');
+ assert.equal(browserSession((await call('/',{headers:{'X-Hub-Token':browser.token}})).text).reconnect,false,'browser token cannot turn on native recovery');
 });
 test('private run files and symlink aliases are denied by authenticated file viewer',async()=>{
  for(const file of [localAuth.headersFile,localAuth.file]) assert.ok([403,404].includes((await call('/api/file/view?path='+encodeURIComponent(file),{headers:owned()})).status));

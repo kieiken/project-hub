@@ -11,14 +11,17 @@ const platforms = require('../lib/platform');
 const { createDarwin } = platforms;
 const nativeError = () => Object.assign(Error('not running'), { code: 'ESRCH' });
 
-test('Mac UI commands preserve quoting, arguments, dry mode and errors', async () => {
+test('Mac UI commands preserve quoting, arguments, dry mode and errors', async t => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-terminal-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = [];
-  const p = createDarwin({ execFile: (file, args, callback) => { calls.push({ file, args }); callback(file === 'bad' ? Error('bad') : null); } });
+  const p = createDarwin({ terminalDir: dir, execFile: (file, args, callback) => { calls.push({ file, args }); callback(file === 'bad' ? Error('bad') : null); } });
   const command = 'echo "x" \\ tail';
   const dry = await p.openTerminal(command, true);
   assert.equal(dry.file, 'osascript'); assert.equal(calls.length, 0);
   assert.equal(dry.args[1], 'tell application "Terminal" to do script "echo \\"x\\" \\\\ tail"');
-  await p.openTerminal(command); assert.deepEqual(calls[0], { file: dry.file, args: dry.args });
+  await p.openTerminal(command); assert.equal(calls[0].file, dry.file); assert.match(calls[0].args[1], /do script "\/bin\/bash '/);
+  assert.equal(fs.readFileSync(path.join(dir, fs.readdirSync(dir)[0]), 'utf8'), '#!/bin/bash\n/bin/rm -f -- "$0" || exit $?\n' + command + '\n');
   await p.openPath('/a b'); await p.revealPath('/a b'); await p.openUrl('https://example.invalid');
   await p.revealPath('/a b', false, { absolute: true });
   assert.deepEqual(calls.slice(1), [

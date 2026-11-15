@@ -11,6 +11,7 @@
  * @property {function(): string} documentsDirectory Current user's OS Documents path; lookup only, no creation or HOME-based fallback.
  * @property {function(Function=): Promise<Array<object>>} listProcesses
  * @property {function(number[], object=): Promise<Map<number,string>>} processCwd
+ * @property {function(number[]): Map<number,object>} processOpenFiles macOS only; bounded path/UID metadata, no file contents.
  * @property {function(Function=): Array<object>} processSnapshot Strong ownership identity.
  * @property {function(object): (number|string|undefined)} processOwner Native UID or nonempty Windows SID; never a display name.
  * @property {function(): (number|string|undefined)} currentProcessOwner Same native owner type as processOwner.
@@ -23,7 +24,7 @@
  * @property {function(string=): string} trashDir
  * @property {function(string, string=, object=): string} trashRootFor
  * @property {object} commandSandbox available(), profile(root, readFiles), spawn().
- * @property {function(object=): object} secretStore get/put/elapsed/watchResume.
+ * @property {function(object=): object} secretStore get/put/elapsed/watchResume; dedicated jevStatus/putJev and server-only getJev via native pipe.
  * @property {function(Function=): string} machineHint
  * @property {function(string, Function=): Promise<string>} readPdfText
  * @property {function(string): string} imageInfo

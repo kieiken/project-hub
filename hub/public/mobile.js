@@ -25,6 +25,8 @@
     const name = $('.whead h2')?.textContent || $('.ph h2')?.textContent || '';
     $('#mobile-badges').textContent = name;
     $('#mobile-badges').title = name;
+    const unfinished = $('#mobile-unfinished');
+    if (unfinished) unfinished.innerHTML = $('[data-work-unfinished]')?.innerHTML || '';
   }
   function layout() {
     const work = $('.work'), info = $('#mobile-work-info'), foot = $('.wfoot');

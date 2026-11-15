@@ -3,10 +3,10 @@ const { lt } = require('./locale');
 // roles.yaml の読み書き。役割と指定された確認オプションだけを保存する。
 const fs = require('fs');
 const { parseYaml } = require('./frontmatter');
-const { MODEL_FLAG, flagFor } = require('./launch');
+const { MODEL_FLAG, flagFor, normalizeEffort, effortsFor } = require('./launch');
 const history = require('./role-history');
 
-const EFFORTS = ['中', '高', '極高', 'MAX', 'Ultra'];
+const EFFORTS = ['低', '中', '高', '極高', 'MAX', 'Ultra'];
 const AIS = ['claude-code', 'codex', 'agy', 'grok', '人'];
 let discovered = { 'claude-code': [], codex: [], agy: [], grok: [] };
 let confirmed = {};
@@ -64,10 +64,10 @@ function normalize(raw) {
   // Discord のエージェント。設定がなければ担当の名前を補わない。
   const agents = Array.isArray(raw.agents) ? raw.agents.filter(Boolean).map(String) : [];
   // 古い呼び名（6sol など）でも、今の一覧のモデルを指していれば、その名前で見せる
-  for (const r of roles) for (const s of [r.main, r.backup]) s.model = currentName(s.ai, s.model);
+  for (const r of roles) for (const s of [r.main, r.backup]) { s.model = currentName(s.ai, s.model); s.effort = normalizeEffort(s.ai, s.effort); }
   // Saved slots keep their value, but never add removed models to candidates.
   const checkCredits = { claude: raw.checkCreditsClaude === true, codex: raw.checkCreditsCodex === true };
-  return { models, roles: withReviewRole(roles), agents, permissions: raw.permissions || {}, switch: raw.switch || {}, checkCredits, preferCredits: raw.preferCredits === true };
+  return { models, roles: withReviewRole(roles), agents, permissions: raw.permissions || {}, switch: raw.switch || {}, checkCredits, preferCredits: raw.preferCredits === true, allowDelegateUltra: raw.allowDelegateUltra === true };
 }
 
 function fmtSlot(s) {
@@ -93,7 +93,7 @@ function validate(models, roles, { previous = [], restore = false } = {}) {
         if (!restore && !unchanged && !list.includes(s.model)) errors.push(lt`${r.name} の ${k}: モデル「${s.model}」は ${s.ai} で選べません`);
         if (!restore && !unchanged && s.ai === 'agy' && ((!discovered.agy.some(row => row.label === s.model || row.id === s.model)) || s.effort !== '高')) errors.push(lt`${r.name} の ${k}: Agy の利用可能なモデルと、思考「高」を選んでください`);
         if (typeof s.model !== 'string' || !s.model || /[\n\r,{}\[\]#]/.test(s.model)) errors.push(lt`${r.name} の ${k}: モデル名が不正です`);
-        if (!restore && !unchanged && !(s.ai === 'grok' ? EFFORTS.filter(x => x !== 'Ultra') : EFFORTS).includes(s.effort)) errors.push(lt`${r.name} の ${k}: 思考「${s.effort}」は選べません`);
+        if (!restore && !unchanged && !effortsFor(s.ai, s.model, discovered[s.ai]).includes(s.effort)) errors.push(lt`${r.name} の ${k}: 思考「${s.effort}」は選べません`);
       }
     }
     if (/[\n\r]/.test(r.job || '')) errors.push(lt`${r.name} の内容に改行は使えません`);
@@ -131,6 +131,7 @@ function write(file, roles, checkCredits, forceRoles = false, preferCredits, opt
     errors.push(lt('クレジット確認の設定はClaudeとCodexの真偽値で指定してください'));
   }
   if (preferCredits !== undefined && typeof preferCredits !== 'boolean') errors.push(lt('クレジット優先利用は真偽値で指定してください'));
+  if (options.allowDelegateUltra !== undefined && typeof options.allowDelegateUltra !== 'boolean') errors.push(lt('自動Ultraの許可は真偽値で指定してください'));
   if (errors.length) return { ok: false, errors };
   const sourceText = options.sourceText || text;
   const lines = sourceText.split(/\r?\n/);
@@ -158,6 +159,11 @@ function write(file, roles, checkCredits, forceRoles = false, preferCredits, opt
     const rx = /^(preferCredits:[ \t]*)([^#\r\n]*)(.*)$/m;
     if (rx.test(out)) out = out.replace(rx, (_, head, old, comment) => `${head}${preferCredits}${comment ? ' ' + comment : ''}`);
     else out = out.replace(/\s*$/, '') + `\npreferCredits: ${preferCredits}\n`;
+  }
+  if (options.allowDelegateUltra !== undefined) {
+    const rx = /^(allowDelegateUltra:[ \t]*)([^#\r\n]*)(.*)$/m;
+    if (rx.test(out)) out = out.replace(rx, (_, head, old, comment) => `${head}${options.allowDelegateUltra}${comment ? ' ' + comment : ''}`);
+    else out = out.replace(/\s*$/, '') + `\nallowDelegateUltra: ${options.allowDelegateUltra}\n`;
   }
   try { history.commit(file, text, out, options); }
   catch (e) { return { ok: false, status: e.status || 500, errors: [e.message] }; }

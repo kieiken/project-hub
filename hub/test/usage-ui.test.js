@@ -10,13 +10,49 @@ function app(language='ja'){
   const media={matches:false,addEventListener(n,cb){events.set('media:'+n,cb);}};
   const el=id=>{if(!elements.has(id))elements.set(id,{hidden:id==='#usage-drawer',get textContent(){return this.innerHTML.replace(/<[^>]*>/g,'').replace(/&lt;/g,'<').replace(/&quot;/g,'"').replace(/&amp;/g,'&');},set textContent(v){this.innerHTML=String(v);},innerHTML:'',addEventListener(n,cb){events.set(id+':'+n,cb);},setAttribute(n,v){this[n]=v;},focus(){this.focused=true;}});return elements.get(id);};
   const c=vm.createContext({$:el,esc:s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'),api:()=>new Promise(()=>{}),document:{hidden:false,addEventListener(n,cb,capture){events.set(n+(capture?':capture':''),cb);}},matchMedia(query){assert.equal(query,'(max-width: 900px)');return media;},setInterval(){},console});
-  if(language==='zh-TW'){
-    c.HUB_LOCALE={locale:language,messages:require('../../langpacks/zh-TW/ui.json')};
+  if(language!=='ja'){
+    c.HUB_LOCALE={locale:language,messages:require(`../../langpacks/${language}/ui.json`)};
     c.document.documentElement={};c.document.querySelectorAll=()=>[];
     vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/locale.js'),'utf8'),c);
   }
   vm.runInContext(source,c);return{c,el,events,media};
 }
+test('Claude extra usage formats currency minor units, translates labels, and preserves the ticket guide',()=>{
+  for(const language of ['ja','en','zh-TW']){
+    const a=app(language),p={status:'ok',windows:[],extraUsage:{is_enabled:true,used_credits:1234,monthly_limit:5000,currency:'USD',utilization:24.68}};
+    const html=a.c.usageExtras('claude',p,NOW);
+    assert.match(html,/USD\s*12\.34/);assert.match(html,/USD\s*50\.00/);
+    assert.match(html,language==='ja'?/追加利用：今月 .* \/ 上限 /:language==='en'?/Extra usage: this month .* \/ limit /:/額外用量：本月 .* \/ 上限 /);
+    assert.match(html,/https:\/\/claude.ai\/settings\/usage/);
+    const disabled=a.c.usageExtras('claude',{...p,extraUsage:{...p.extraUsage,is_enabled:false}},NOW);
+    assert.match(disabled,language==='ja'?/追加利用：今は使えません（今月 USD\s*12\.34 \/ 上限 USD\s*50\.00）/:language==='en'?/Extra usage: currently unavailable \(this month USD\s*12\.34 \/ limit USD\s*50\.00\)/:/額外用量：目前無法使用（本月 USD\s*12\.34 \/ 上限 USD\s*50\.00）/);
+    const missing=a.c.usageExtras('claude',{...p,extraUsage:{is_enabled:false}},NOW);
+    assert.match(missing,language==='ja'?/追加利用：今は使えません/:language==='en'?/Extra usage: currently unavailable/:/額外用量：目前無法使用/);
+    assert.doesNotMatch(missing,/USD|今月|this month|本月|無効|disabled|未啟用/);
+  }
+  const a=app();
+  for(const [currency,used,limit,expected] of [['USD',0,0,/USD\s*0\.00/],['JPY',1234,5000,/JPY\s*1,234/],['KWD',1234,5000,/KWD\s*1\.234/]]){
+    assert.match(a.c.usageClaudeExtra({status:'ok',extraUsage:{is_enabled:true,currency,used_credits:used,monthly_limit:limit}}),expected);
+  }
+});
+test('Claude extra usage hides missing/invalid amounts, unavailable data and markup without affecting quota summaries',()=>{
+  const a=app(),valid={is_enabled:true,used_credits:1234,monthly_limit:5000,currency:'USD'};
+  for(const changes of [{is_enabled:'true'},{is_enabled:undefined},{currency:undefined},{currency:'usd'},{currency:'USD\n'},{currency:'ZZZ'},{currency:'<svg>'},{used_credits:undefined},{monthly_limit:null},{used_credits:-1},{monthly_limit:Infinity},{used_credits:NaN},{used_credits:'1234'}]){
+    const html=a.c.usageExtras('claude',{status:'ok',extraUsage:{...valid,...changes}},NOW);
+    assert.doesNotMatch(html,/追加利用|12\.34|50\.00|<svg>/);
+    assert.match(html,/リセットチケットはClaude/);
+  }
+  assert.equal(a.c.usageClaudeExtra({status:'unavailable',extraUsage:valid}),'');
+  assert.equal(a.c.usageClaudeExtra({status:'unavailable',extraUsage:{is_enabled:false}}),'');
+  const unsupported=app();vm.runInContext('Intl.supportedValuesOf = undefined',unsupported.c);
+  assert.equal(unsupported.c.usageClaudeExtra({status:'ok',extraUsage:valid}),'');
+  for(const changes of [{currency:'ZZZ'},{currency:'<svg>'},{monthly_limit:null},{used_credits:-1},{used_credits:NaN}]){
+    assert.equal(a.c.usageClaudeExtra({status:'ok',extraUsage:{...valid,...changes,is_enabled:false}}),'追加利用：今は使えません');
+  }
+  assert.equal(unsupported.c.usageClaudeExtra({status:'ok',extraUsage:{...valid,is_enabled:false}}),'追加利用：今は使えません');
+  const p={...snapshot.providers.codex,windows:[{id:'five_hour',label:'5時間枠',usedPercent:100,resetsAt:'2026-10-04T00:00:00Z'}]};
+  assert.equal(a.c.usageSummary('claude',{...p,extraUsage:valid},NOW),a.c.usageSummary('claude',p,NOW));
+});
 test('Retained usage limits show active credit priority in Japanese and Traditional Chinese',()=>{
   for(const language of ['ja','zh-TW']){
     const a=app(language),limit={ai:'codex',model:'gpt-6.1-sol',account:'work',hold:true,until:null,creditPriority:true};
@@ -53,6 +89,12 @@ test('Both provider headings keep their names after a decorative icon in availab
   }
   assert.doesNotMatch(a.c.usageHtml(null,NOW),/class="usage-icon usage-icon-/);
 });
+test('each reset ticket shows its own expiry beside its own button',()=>{
+  const a=app(),items=[{title:'Full reset',expiresAt:'2026-12-01T05:09:00+09:00',action:{token:'first'}},{title:'Full reset',expiresAt:'2026-12-02T07:39:00+09:00',action:{token:'second'}}];
+  const html=a.c.usageHtml({providers:{codex:{...snapshot.providers.codex,resetCredits:{count:2,items}}}},NOW);
+  assert.match(html,/リセットチケット：2枚</);
+  for(const item of items){const row=html.slice(html.indexOf('Full reset・期限 '+a.c.usageDate(item.expiresAt)));assert.match(row.slice(0,row.indexOf('</p>')),new RegExp('data-reset-token="'+item.action.token+'"'));}
+});
 test('account names in usage headings are escaped',()=>{
   const a=app(),html=a.c.usageHtml({providers:{codex:{...snapshot.providers.codex,accountName:'<img src=x onerror=alert(1)>'}}},NOW);
   assert.match(html,/Codex・&lt;img/);assert.doesNotMatch(html,/<img/);
@@ -73,7 +115,7 @@ test('Codex-only display adds tickets and grouped one-decimal balances after win
 });
 test('Extras escape all ticket text, omit missing or invalid data and do not add consuming controls',()=>{
   const a=app(),extra=a.c.usageExtras('codex',{resetCredits:{count:2,items:[{title:'<img src=x onerror=alert(1)>',expiresAt:'bad'},{title:'Second',expiresAt:null}]}});
-  assert.match(extra,/&lt;img/);assert.match(extra,/期限 未提供／Second・期限 未提供/);assert.doesNotMatch(extra,/<img|<button|<a |input|onclick/);
+  assert.match(extra,/&lt;img/);assert.match(extra,/期限 未提供<\/span>.*Second・期限 未提供<\/span>/);assert.doesNotMatch(extra,/<img|<button|<a |input|onclick/);
   assert.equal(a.c.usageExtras('codex',{}),'');assert.equal(a.c.usageExtras('codex',{resetCredits:{count:0,items:[]}}),'');
   for(const balance of ['SECRET','1e5','5\n',12,null])assert.equal(a.c.usageExtras('codex',{credits:{balance}}),'');
   const html=a.c.usageHtml({providers:{codex:{status:'unavailable',credits:{balance:'62500'},resetCredits:{count:1}}}},NOW);
@@ -270,14 +312,14 @@ test('Usage redraw and load preserve drawer position; focus never scrolls it',as
 });
 
 test('Fable上限中のAstra直行を詳細に1行で表示、期限後/オフでは表示しない', () => {
-  const a = app(), state = { hold: true, model: 'claude-fable-5-1', until: new Date(NOW + 3600000).toISOString(), untilSource: 'usage' };
+  const a = app(), state = { hold: true, model: 'claude-fable-5-2', until: new Date(NOW + 3600000).toISOString(), untilSource: 'usage' };
   const html = a.c.usageHtml({ ...snapshot, fableLimit: state }, NOW);
-  assert.match(html, /Fable 5.1 上限中.*自動で Astra へ/);
+  assert.match(html, /Fable 5.2 上限中.*自動で Astra へ/);
   // 統合後も上限案内と、取得済み/未取得の両方の識別アイコンを同時に残す。
   for (const ai of ['codex', 'claude']) assert.match(html, new RegExp(`usage-icon-${ai}`));
-  assert.equal((html.match(/Fable 5.1 上限中/g) || []).length, 1);
-  assert.doesNotMatch(a.c.usageHtml({ ...snapshot, fableLimit: state }, NOW + 3600000), /Fable 5.1 上限中/);
-  assert.doesNotMatch(a.c.usageHtml(snapshot, NOW), /Fable 5.1 上限中/);
+  assert.equal((html.match(/Fable 5.2 上限中/g) || []).length, 1);
+  assert.doesNotMatch(a.c.usageHtml({ ...snapshot, fableLimit: state }, NOW + 3600000), /Fable 5.2 上限中/);
+  assert.doesNotMatch(a.c.usageHtml(snapshot, NOW), /Fable 5.2 上限中/);
   assert.match(html, /Fableに戻す/);
   assert.match(a.c.usageHtml({ ...snapshot, fableLimit: { ...state, until: null, untilSource: 'unknown' } }, NOW), /解除日時不明・手動で解除するまで Astra/);
 });
@@ -395,4 +437,15 @@ test('Lost reset response blocks reuse until a successful read; manual retry is 
   const p=a.c.useResetTicket({...d,resetRetry:'true'});assert.match(prompt,/同じ受付番号/);
   vm.runInContext('usageVersion++;usageData={providers:{}}',a.c);resolve({outcome:'reset',usage:a.c.current});await p;
   assert.equal(Object.keys(vm.runInContext('usageData.providers',a.c)).length,0);
+});
+
+test('saved off-role Sonnet hold renders a manual clear button and sends its exact model and account',async()=>{
+ const a=app();let called;
+ a.c.confirm=()=>true;
+ a.c.api=async(url,body,headers)=>{called={url,body:JSON.parse(JSON.stringify(body)),headers:JSON.parse(JSON.stringify(headers))};return {limits:[],providers:{}};};
+ const entry={ai:'claude',model:'claude-sonnet-5-5',account:'default',hold:true,until:null};
+ const html=a.c.usageHtml({limits:[entry],providers:{}},NOW);
+ assert.match(html,/claude-sonnet-5-5・default 上限保持中/);assert.match(html,/解除日時不明/);assert.match(html,/data-limit-ai="claude" data-limit-model="claude-sonnet-5-5" data-limit-account="default"/);assert.match(html,/>保持を解除<\/button>/);
+ await a.c.clearModelLimit({limitAi:entry.ai,limitModel:entry.model,limitAccount:entry.account});
+ assert.deepEqual(called,{url:'/api/limits/clear',body:{ai:'claude',model:entry.model,account:'default'},headers:{'X-Hub':'1'}});
 });

@@ -24,7 +24,7 @@ test('利用率だけで作らず、正式上限だけで期限不明のv2保持
   const { e, file, record } = fixture();
   e.observe(snapshot([w('five_hour')])); assert.equal(e.active(), null);
   record(); assert.equal(e.needsRefresh(), false); assert.equal(e.active().validUntil, null);
-  const saved = JSON.parse(fs.readFileSync(file))['claude-fable-5-1'];
+  const saved = JSON.parse(fs.readFileSync(file))['claude-fable-5-2'];
   assert.equal(saved.version, 2); assert.equal(saved.hold, true); assert.equal(saved.untilSource, 'unknown');
   assert.equal(saved.lastLimitAt, saved.at);
 });
@@ -40,10 +40,10 @@ test('共有枠とFableモデル枠の100%以上だけを使い、最後の解�
   for (const id of ['five_hour', 'seven_day', 'model:0']) {
     const { e, record } = fixture(); record(); e.observe(snapshot([w(id)])); assert.equal(e.active().untilSource, 'usage');
   }
-  for (const label of ['Fable・週間枠', 'Fable 5.1・週間枠', 'fable 5.1・週間枠', 'Fable 5.1 (High)・週間枠']) {
+  for (const label of ['Fable・週間枠', 'Fable 5.2・週間枠', 'fable 5.2・週間枠', 'Fable 5.2 (High)・週間枠']) {
     const { e, record } = fixture(); record(); e.observe(snapshot([w('model:0', 100, NOW + 3600000, label)])); assert.equal(e.active().untilSource, 'usage', label);
   }
-  for (const [id, label] of [['model:0', 'Opus 5.5・週間枠'], ['model:0', 'Not Fable・週間枠'], ['model:0', 'Fableish・週間枠'], ['model:0', 'Opus / Fable・週間枠'], ['seven_day_opus', 'Fable 5.1・週間枠']]) {
+  for (const [id, label] of [['model:0', 'Opus 5.5・週間枠'], ['model:0', 'Not Fable・週間枠'], ['model:0', 'Fableish・週間枠'], ['model:0', 'Opus / Fable・週間枠'], ['seven_day_opus', 'Fable 5.2・週間枠']]) {
     const { e, record } = fixture(); record(); e.observe(snapshot([w(id, 100, NOW + 3600000, label)])); assert.equal(e.active().validUntil, null, label);
   }
   const { e, record } = fixture(); record(); e.observe(snapshot([w('five_hour'), w('seven_day', 101, NOW + 7200000)]));
@@ -82,12 +82,12 @@ test('再起動後は利用枠を取得せず既知・未知の保持を即利�
 test('v1は未来の期限と正式証拠後のcheckedAtが揃う場合だけv2へ移行', () => {
   const { file } = fixture(); fs.mkdirSync(path.dirname(file), { recursive: true });
   const old = { source: 'cli-limit', at: iso(NOW), validUntil: iso(NOW + 100), checkedAt: iso(NOW + 1) };
-  fs.writeFileSync(file, JSON.stringify({ 'claude-fable-5-1': old }));
+  fs.writeFileSync(file, JSON.stringify({ 'claude-fable-5-2': old }));
   const e = new LimitEvidence(file, { now: () => NOW }); assert.equal(e.active().version, 2);
-  e.observe(snapshot([w('five_hour')], NOW + 2)); assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-1'].version, 2);
+  e.observe(snapshot([w('five_hour')], NOW + 2)); assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-2'].version, 2);
   const v2 = { ...old, version: 2, hold: true, lastLimitAt: old.at, untilSource: 'usage', project: '', task: '', request: '' };
   for (const data of [{ ...v2, checkedAt: null }, { ...v2, project: undefined }, { ...v2, lastLimitAt: iso(NOW - 1) }, '{broken', { ...old, validUntil: null }, { ...old, validUntil: iso(NOW) }, { ...old, checkedAt: iso(NOW) }, { ...old, version: 2 }, { ...old, version: 3 }, { at: iso(NOW) }]) {
-    fs.writeFileSync(file, typeof data === 'string' ? data : JSON.stringify({ 'claude-fable-5-1': data }));
+    fs.writeFileSync(file, typeof data === 'string' ? data : JSON.stringify({ 'claude-fable-5-2': data }));
     const restored = new LimitEvidence(file, { now: () => NOW }); assert.equal(restored.active(), null); assert.equal(restored.needsRefresh(), false);
   }
 });
@@ -120,7 +120,7 @@ for (const action of ['unqueue', 'interrupt', 'shutdown']) {
     const runner = new ChatRunner({ beforeQueued: () => blocked });
     runner.run = () => { starts++; return { startedP: Promise.resolve(true) }; };
     runner.enqueue('test', 'case', { id: 'first' }); runner.enqueue('test', 'case', { id: 'follower' });
-    const pending = runner.sendQueued({ project: 'test', task: 'case', pdir, ai: 'claude', model: 'Fable 5.1', text: 'fixture', request: 'first' });
+    const pending = runner.sendQueued({ project: 'test', task: 'case', pdir, ai: 'claude', model: 'Fable 5.2', text: 'fixture', request: 'first' });
     const rejected = assert.rejects(pending, action === 'unqueue' ? /もう待っていません/ : /確認中に停止/);
     assert.equal(runner.busy('test', 'case').pending, true);
     if (action === 'unqueue') runner.unqueue('test', 'case', 'first');

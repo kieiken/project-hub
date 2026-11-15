@@ -5,7 +5,11 @@ module.exports = function createParallelEngine(ctx) {
 
   function licenseGuard(options, stage = 'start') {
     if(options.project&&options.task){const ctx=(getReqCtx()).getStore(),snapshot=ctx?.stopSnapshot,manual=ctx?.manualResume;
-      if(manual&&options.project===manual.project&&options.task===manual.task)stopControl.checkManual(options,manual.ticket);
+      if(stage==='accept'&&options.origin==='delegate'&&stopControl.held(options)){
+        const ticket=stopControl.delegateTicket(options,(getChats()).busy(options.project,options.task),ctx?.delegateTurn);
+        ctx.delegateResume={project:options.project,task:options.task,ticket};
+      }
+      else if(manual&&options.project===manual.project&&options.task===manual.task)stopControl.checkManual(options,manual.ticket);
       else stopControl.assert(options,options.stopTicket || (snapshot?{epoch:snapshot.epoch,task:snapshot.tasks[JSON.stringify([options.project,options.task])]?.epoch||0}:undefined));}
     const active = [...(getSessions()).list(), ...[...(getChats()).running].map(([key, run]) => {
       const [project, task] = key.split('\0'); return { project, task, ai: run.ai, running: true };

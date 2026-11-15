@@ -1,7 +1,7 @@
 'use strict';
 
 module.exports = function terminalioRoutes(ctx) {
-  const { send, lt, sessions, setUnread, launch, modelError, store, pickSpec, limitIdentity, rolesData, record } = ctx;
+  const { send, lt, sessions, setUnread, launch, modelError, store, pickSpec, limitIdentity, rolesData, record, accountFor } = ctx;
   return {
     stream: {
       matches: (req, url) => req.method === 'GET' && url.pathname === '/api/term/stream',
@@ -26,14 +26,17 @@ module.exports = function terminalioRoutes(ctx) {
         if (b.ai === 'agy' && (b.field === 'effort' || sessions.get(b.project, b.task, b.ai) && !sessions.get(b.project, b.task, b.ai).exited)) return send(res, 409, { error: lt('Agy のモデル変更は次の起動から使います。動いているAgyの終了後に選んでください') });
         if (!launch.AIS.includes(b.ai) || !['model', 'effort'].includes(b.field)) return send(res, 400, { error: lt('指定が正しくありません') });
         if (b.ai === 'grok' && b.field === 'effort' && b.value && !launch.EFFORT_FLAG.grok[b.value]) return send(res, 400, { error: lt('Grok の思考は 中・高・極高・MAX です') });
+        if (b.field === 'effort' && b.value && !launch.effortsFor(b.ai, pickSpec(store.readProject(b.project)?.tasks.find(t => t.id === b.task) || {}, b.ai).model).includes(b.value)) return send(res, 400, { error: lt('指定が正しくありません') });
         if (b.field === 'model') {
-          const invalidModel = modelError(b.ai, String(b.value || ''));
+          const current = sessions.get(b.project,b.task,b.ai);
+          const account = current && !current.exited ? current.account || 'default' : accountFor(b.project,b.task,b.ai);
+          const invalidModel = modelError(b.ai, String(b.value || ''), account);
           if (invalidModel) return send(res, 409, { error: invalidModel });
         }
         const t = store.updateTask(b.project, b.task, { [b.field]: typeof b.value === 'string' ? b.value : '' });
         if (!t) return send(res, 400, { error: lt('作業が見つかりません') });
         const spec = pickSpec(t, b.ai);
-        const cmd = launch.switchCommand(b.ai, b.field, spec[b.field]);
+        const cmd = launch.switchCommand(b.ai, b.field, spec[b.field], spec.model);
         const sent = Boolean(cmd) && sessions.type(b.project, b.task, b.ai, cmd);
         const session = sessions.get(b.project, b.task, b.ai); if (sent && session) { session[b.field] = spec[b.field]; if (b.field === 'model') session.limitSlot = limitIdentity(rolesData(), { ai: b.ai, model: session.model, role: session.role })?.limitSlot; }
         record('switch', b, { [b.field]: spec[b.field], sent });

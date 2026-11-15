@@ -7,18 +7,18 @@
 # 格式：[AI, 模型, 思考程度]；思考值 = 中 / 高 / 極高 / MAX / Ultra。
 
 models:                      # 各 AI 可選的模型
-  claude-code: [Opus 5.5, Fable 5.1]
+  claude-code: [Opus 5.5, Fable 5.2]
   codex:       [GPT-6.1-Sol]
 
 agents: ["範例負責人"]        # 虛構 Discord 負責人識別碼，請改成實際負責人。
 
 roles:
-  司令塔:       { main: [claude-code, Fable 5.1, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '規劃、分工與進度管理' }
+  司令塔:       { main: [claude-code, Fable 5.2, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '規劃、分工與進度管理' }
   調査:         { main: [claude-code, Opus 5.5, "高"],   backup: [codex, GPT-6.1-Sol, "高"], job: 蒐集資訊與摘要 }
   デザイン:     { main: [claude-code, Opus 5.5, "高"],   backup: [codex, GPT-6.1-Sol, "高"], job: '畫面、架構與視覺設計' }
   画像生成:     { main: [codex, GPT-6.1-Sol, "中"],     backup: ["人"],                     job: '生成圖片' }
   コーディング: { main: [codex, GPT-6.1-Sol, "高"],     backup: [claude-code, Opus 5.5, "高"], job: '程式開發' }
-  チェック:     { main: [claude-code, Fable 5.1, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '獨立審查（開發者仍須自行測試）' }
+  チェック:     { main: [claude-code, Fable 5.2, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '獨立審查（開發者仍須自行測試）' }
   文章:         { main: [claude-code, Opus 5.5, "中"],   backup: [codex, GPT-6.1-Sol, "中"], job: 說明文件與手冊 }
   最終確認:     { main: ["人"],                          backup: ["人"],                     job: 判斷是否完成 }
 

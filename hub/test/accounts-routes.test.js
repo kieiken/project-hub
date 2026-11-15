@@ -37,7 +37,7 @@ async function wait(pred, id) { const deadline = performance.now() + 15000; whil
 test.before(async () => {
   fs.mkdirSync(path.join(root, '_hub'), { recursive: true }); fs.mkdirSync(path.join(dir, '.ai/tasks'), { recursive: true }); fs.mkdirSync(home); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(dir, 'PROJECT.md'), '---\nname: Accounts fixture\nstatus: 進行中\nfolders: {}\nrelated: []\nphases: []\n---\n');
-  fs.writeFileSync(path.join(root, '_hub/roles.yaml'), 'models:\n  claude-code: [Fable 5.1, Opus 5.5]\n  codex: [GPT-6.1-Sol, Astra]\nroles:\n  司令塔: { main: [claude-code, Fable 5.1, 高], backup: [codex, Astra, 高] }\nswitch:\n  auto: true\n');
+  fs.writeFileSync(path.join(root, '_hub/roles.yaml'), 'models:\n  claude-code: [Fable 5.2, Opus 5.5]\n  codex: [GPT-6.1-Sol, Astra]\nroles:\n  司令塔: { main: [claude-code, Fable 5.2, 高], backup: [codex, Astra, 高] }\nswitch:\n  auto: true\n');
   for (const ai of ['claude', 'codex']) fs.writeFileSync(path.join(bin, ai), `#!${process.execPath}
 const fs=require('node:fs'),path=require('node:path');let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{
 const ai=${JSON.stringify(ai)},profile=process.env.CODEX_HOME||process.env.CLAUDE_CONFIG_DIR||'default';
@@ -151,17 +151,17 @@ test('Fable preflight and manual clear affect only their Claude account and reta
   const x = await add('claude', 'limited'), y = await add('claude', 'other'), z = await add('codex', 'backup'), one = task('司令塔'), two = task('司令塔');
   await select(one, 'claude', x.id); await select(two, 'claude', y.id); await select(one, 'codex', z.id);
   const now = new Date().toISOString(), evidence = { version: 2, source: 'cli-limit', hold: true, at: now, lastLimitAt: now, project: 'Accounts fixture', task: one, request: 'mock', validUntil: null, untilSource: 'unknown', checkedAt: null };
-  fs.writeFileSync(path.join(root, '_hub/limits.json'), JSON.stringify({ ['claude-fable-5-1:' + x.id]: evidence, ['claude-fable-5-1:' + y.id]: evidence }));
+  fs.writeFileSync(path.join(root, '_hub/limits.json'), JSON.stringify({ ['claude-fable-5-2:' + x.id]: evidence, ['claude-fable-5-2:' + y.id]: evidence }));
   const usage = await (await fetch(base + '/api/usage?project=Accounts%20fixture&task=' + one, { headers: { 'X-Hub': '1' } })).json(); assert.equal(usage.fableLimit.account, x.id);
   const cleared = await ok('/api/limits/fable/clear', { task: two }); assert.equal(cleared.fableLimit, null);
-  await ok('/api/chat/send', { task: one, ai: 'claude', model: 'claude-fable-5-1', text: 'account limit' });
-  await ok('/api/chat/send', { task: two, ai: 'claude', model: 'claude-fable-5-1', text: 'other account' });
+  await ok('/api/chat/send', { task: one, ai: 'claude', model: 'claude-fable-5-2', text: 'account limit' });
+  await ok('/api/chat/send', { task: two, ai: 'claude', model: 'claude-fable-5-2', text: 'other account' });
   await wait(() => replies(one).length === 1 && replies(two).length === 1);
   assert.equal(capture(one).ai, 'codex'); assert.equal(capture(one).profile, z.dir); assert.ok(capture(one).args.includes('gpt-6-astra'));
   assert.equal(capture(two).ai, 'claude'); assert.equal(capture(two).profile, y.dir);
   assert.equal(chat.read(dir, one).find(r => r.limitSwitch)?.limitSwitch.sourceAccount, x.id);
   await ok('/api/limits/fable/clear', { task: one });
-  await ok('/api/chat/send', { task: one, ai: 'claude', model: 'claude-fable-5-1', text: 'after clear' });
+  await ok('/api/chat/send', { task: one, ai: 'claude', model: 'claude-fable-5-2', text: 'after clear' });
   await wait(() => replies(one).length === 2); assert.equal(capture(one).ai, 'claude'); assert.equal(capture(one).profile, x.dir);
 });
 test('Fast permission alone never accelerates; task picks gate every launch and request fast is ignored', async () => {
@@ -239,9 +239,9 @@ test('Fable preflight Astra obeys task Fast; empty/new task metadata stays OFF',
   await ok('/api/acceleration', { codexAllowed: true });
   await ok('/api/acceleration/task', { task: one, on: true });
   const at = new Date().toISOString();
-  fs.writeFileSync(path.join(root, '_hub/limits.json'), JSON.stringify({ ['claude-fable-5-1:' + limited.id]: { version: 2, source: 'cli-limit', hold: true, at, lastLimitAt: at, project: 'Accounts fixture', task: one, request: 'mock', validUntil: null, untilSource: 'unknown', checkedAt: null } }));
+  fs.writeFileSync(path.join(root, '_hub/limits.json'), JSON.stringify({ ['claude-fable-5-2:' + limited.id]: { version: 2, source: 'cli-limit', hold: true, at, lastLimitAt: at, project: 'Accounts fixture', task: one, request: 'mock', validUntil: null, untilSource: 'unknown', checkedAt: null } }));
   for (const id of [one, two]) {
-    await ok('/api/chat/send', { task: id, ai: 'claude', model: 'claude-fable-5-1', text: 'mock preflight', fast: true });
+    await ok('/api/chat/send', { task: id, ai: 'claude', model: 'claude-fable-5-2', text: 'mock preflight', fast: true });
     await wait(() => replies(id).length === 1);
     assert.equal(capture(id).ai, 'codex');
     assert.ok(capture(id).args.includes('gpt-6-astra'));
@@ -291,4 +291,46 @@ test('account status HTTP refresh verifies Gemini while login Terminal remains o
 test('resume Terminal requires a matching live authentication marker', async () => {
   assert.equal((await post('/api/accounts/terminal',{ai:'agy',action:'login'})).status,409);
   assert.equal((await post('/api/accounts/terminal',{ai:'agy',action:'login'},{'X-Hub':''})).status,403);
+});
+
+test('Codexの候補と非表示をアカウント別に返し、切替先の候補外を会話・委任・Terminalで使わない', async () => {
+  const x = await add('codex', 'モデル一覧専用'), id = task();
+  const tools = require('../server').aiUpdates.tools;
+  const sol = {id:'gpt-6.1-sol',label:'GPT-6.1-Sol'}, luna = {id:'gpt-6-luna',label:'GPT-6-Luna'};
+  tools.saveCatalog('codex', {models:[sol],source:'fixture'});
+  tools.saveCatalog('codex', {models:[luna],source:'fixture'}, x.id);
+  await fetch(base + '/api/ai-tools'); // 本番と同じ一覧・CLI名の反映経路。
+  await select(id, 'codex', x.id);
+  const read = async () => (await (await fetch(base + '/api/state')).json());
+  let state = await read();
+  assert.deepEqual(state.codexModelCatalogs.default.models, [sol]);
+  assert.deepEqual(state.codexModelCatalogs[x.id].models, [luna]);
+  assert.ok(state.roles.models.codex.includes(sol.label)); assert.ok(state.roles.models.codex.includes(luna.label));
+  await ok('/api/models/hidden', {ai:'codex',account:x.id,model:luna.label,hidden:true});
+  state = await read(); assert.deepEqual(state.codexHiddenModels[x.id], [luna.label]);
+  assert.equal(state.codexHiddenModels.default, undefined);
+  assert.equal((await post('/api/models/hidden', {ai:'codex',account:x.id,model:sol.label,hidden:true})).status, 400);
+  assert.equal((await post('/api/models/hidden', {ai:'codex',account:'missing',model:luna.label,hidden:true})).status, 409);
+  assert.equal((await post('/api/ai-tools/models/refresh', {ai:'claude',account:x.id})).status, 400);
+  for (const route of ['/api/chat/send','/api/delegate']) {
+    const response = await post(route, {task:id,ai:'codex',model:sol.id,text:'mock rejected'});
+    assert.equal(response.status, 409); assert.match((await response.json()).error, /このモデルは選んだアカウント/);
+  }
+  for (const value of [sol.label, sol.id]) {
+    const response = await post('/api/term/switch', {task:id,ai:'codex',field:'model',value});
+    assert.equal(response.status, 409); assert.match((await response.json()).error, /このモデルは選んだアカウント/);
+  }
+  const key = sessions.key('Accounts fixture', id, 'codex');
+  sessions.map.set(key, {account:'default',exited:true}); // 終了した旧アカウントは次回の選択を妨げない。
+  try { await ok('/api/term/switch', {task:id,ai:'codex',field:'model',value:luna.label}); }
+  finally { sessions.map.delete(key); }
+  await ok('/api/term/switch', {task:id,ai:'codex',field:'model',value:''}); // 役割どおりへ戻す操作は維持。
+  await ok('/api/chat/send', {task:id,ai:'codex',model:luna.id,text:'mock spare model'});
+  await wait(() => replies(id).length === 1, id);
+  assert.equal(capture(id).profile, x.dir); assert.ok(capture(id).args.includes(luna.id));
+  await select(id, 'codex', 'default');
+  assert.equal((await post('/api/chat/send', {task:id,ai:'codex',model:luna.id,text:'mock wrong default'})).status, 409);
+  await ok('/api/chat/send', {task:id,ai:'codex',model:sol.id,text:'mock default model'});
+  await wait(() => replies(id).length === 2, id);
+  assert.equal(capture(id).profile, 'default'); assert.ok(capture(id).args.includes(sol.id));
 });

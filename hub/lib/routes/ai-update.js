@@ -17,7 +17,7 @@ module.exports = function ai_updateRoutes(ctx) {
         }
         if (url.pathname === '/api/ai-tools/update' || url.pathname === '/api/ai-tools/models/refresh') {
           try {
-            const result = await aiUpdates.single(b.ai, url.pathname.endsWith('/update') ? 'update' : 'models');
+            const result = await aiUpdates.single(b.ai, url.pathname.endsWith('/update') ? 'update' : 'models', b.account);
             applyModelCatalog();
             record(url.pathname.endsWith('/update') ? 'aiupdate' : 'aimodels', { ai: b.ai }, { added: result.models?.added ?? result.added ?? 0 });
             return send(res, 200, result);

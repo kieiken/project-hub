@@ -16,7 +16,7 @@ module.exports = function uiLocale(locale = 'ja') {
 module.exports.loadApp = context => {
   const publicDir = path.resolve(__dirname, '../../../hub/public');
   const index = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
-  for (const match of index.matchAll(/<script src="((?:role-settings|app(?:-[a-z]+)*)\.js)"><\/script>/g)) {
+  for (const match of index.matchAll(/<script src="((?:role-settings|role-tiers|app(?:-[a-z]+)*)\.js)"><\/script>/g)) {
     vm.runInContext(fs.readFileSync(path.join(publicDir, match[1]), 'utf8'), context, { filename: match[1] });
   }
 };

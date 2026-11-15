@@ -12,6 +12,7 @@
     create(box, latest, saved) {
       instances.get(box)?.dispose();
       let first = true, disposed = false, frame = null, touchY = null;
+      const paddingTop = box.style?.paddingTop;
       const size = () => [box.clientWidth, box.clientHeight, box.scrollHeight];
       let dimensions = size(), position;
       const changed = () => size().some((n, i) => n !== dimensions[i]);
@@ -46,7 +47,19 @@
       const restore = (position, force = false) => {
         if (disposed) return;
         const follow = force || position.follow, a = position.anchor;
-        if (follow) box.scrollTop = box.scrollHeight;
+        if (follow) {
+          // scrollHeight/scrollTop can round to whole CSS pixels while rows
+          // have fractional heights. Absorb that remainder above the history,
+          // so prepending older rows never moves the visible bottom by a pixel.
+          const last = box.lastElementChild;
+          if (last && paddingTop !== undefined) {
+            box.style.paddingTop = paddingTop;
+            const end = last.getBoundingClientRect().bottom - box.getBoundingClientRect().top - box.clientTop + box.scrollTop;
+            const remainder = Math.ceil(end) - end;
+            if (remainder) box.style.paddingTop = `${parseFloat(getComputedStyle(box).paddingTop) + remainder}px`;
+          }
+          box.scrollTop = box.scrollHeight;
+        }
         else if (a && box.contains(a.node)) {
           const rect = a.node.getBoundingClientRect();
           const offset = a.offset < 0 ? a.offset * rect.height / a.height : a.offset;
@@ -88,6 +101,7 @@
         dispose() {
           if (disposed) return;
           disposed = true; observer?.disconnect();
+          if (paddingTop !== undefined) box.style.paddingTop = paddingTop;
           if (frame !== null) cancelAnimationFrame(frame);
           for (const [event, listener] of Object.entries(listeners)) box.removeEventListener(event,listener);
           latest?.removeEventListener('click',toLatest);

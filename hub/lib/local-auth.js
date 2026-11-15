@@ -82,7 +82,7 @@ class LocalAuth {
   authenticated(req) {
     if (!this.file) return false;
     const header = req.headers['x-hub-token'];
-    if (equal(header, capability(this.token))) return true;
+    if (this.ownerAuthenticated(req)) return true;
     const url = new URL(req.url || '/', 'http://localhost');
     for (const [token, session] of this.sessions) {
       if (session.expires <= this.now()) { this.sessions.delete(token); continue; }
@@ -92,16 +92,19 @@ class LocalAuth {
     }
     return false;
   }
-  browserSession() {
+  ownerAuthenticated(req) { return Boolean(this.file && equal(req.headers['x-hub-token'], capability(this.token))); }
+  browserSession(reconnect = false) {
     for (const [token, session] of this.sessions) if (session.expires <= this.now()) this.sessions.delete(token);
     while (this.sessions.size >= 64) this.sessions.delete(this.sessions.keys().next().value);
     const token = crypto.randomBytes(32).toString('hex'), expires = this.now() + SESSION_MS;
     const resources = Object.fromEntries(RESOURCE_PATHS.map(route => [route, crypto.randomBytes(32).toString('hex')]));
     this.sessions.set(token, { expires, resources });
-    return { token, expires, resources };
+    // A hint for the UI only. It grants no API authority. Only owner-header
+    // document navigation can opt in; browser launch tickets cannot.
+    return { token, expires, resources, reconnect: reconnect === true };
   }
-  bootstrap() {
-    return `<script>sessionStorage.setItem(${JSON.stringify(SESSION_KEY)},${JSON.stringify(JSON.stringify(this.browserSession()))})</script>`;
+  bootstrap(reconnect = false) {
+    return `<script>sessionStorage.setItem(${JSON.stringify(SESSION_KEY)},${JSON.stringify(JSON.stringify(this.browserSession(reconnect)))})</script>`;
   }
   ping(challenge) {
     return /^[a-f0-9]{32,128}$/.test(challenge || '') ? { instance: this.instance, proof: mac(this.token, challenge, this.instance, this.port) } : { instance: this.instance };

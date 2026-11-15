@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),{spawn}=require('node:child_process');
 const {StopControl,terminate}=require('../lib/stop-control'),P=require('../lib/owned-processes'),{EmergencyStop}=require('../lib/emergency-stop'),{ChatRunner}=require('../lib/chat');
 const pause=ms=>new Promise(r=>setTimeout(r,ms)),scope={project:'fixture',task:'task'};
-function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'hub-emergency-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
+function fixture(t){const dir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'hub-emergency-')));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;}
 test('interrupting waits for a late durable close after process exit without terminating again',async()=>{
  const chats=new ChatRunner({stopControl:{}});let finish,calls=0;
  const run={options:scope,finishedP:new Promise(r=>finish=r),settledP:new Promise(()=>{})};

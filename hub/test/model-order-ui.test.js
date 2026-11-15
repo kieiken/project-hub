@@ -3,12 +3,18 @@
 process.env.HUB_LANG = 'ja';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 const ModelOrder=require('../public/model-order');
-const models={'claude-code':['Opus 5.5','Fable 5.1'],codex:['GPT-6.1-Sol','GPT-6-Astra'],agy:['Gemini 3.1 Pro (High)']};
+const models={'claude-code':['Opus 5.5','Fable 5.2'],codex:['GPT-6.1-Sol','GPT-6-Astra'],agy:['Gemini 3.1 Pro (High)']};
 const defaults=ModelOrder.ordered(models),mixed=[defaults[3],defaults[0],defaults[2],defaults[1],defaults[4]];
+function accountModels(f) {
+ f.run(`state.accounts=[{ai:'codex',id:'default',name:'既定'},{ai:'codex',id:'spare',name:'予備用'}];
+ state.roles.models.codex=['GPT-6.1-Sol','GPT-6-Luna'];state.cliFlags.codex={'GPT-6.1-Sol':'gpt-6.1-sol','GPT-6-Luna':'gpt-6-luna'};
+ state.codexModelCatalogs={default:{models:[{id:'gpt-6.1-sol',label:'GPT-6.1-Sol'}],source:'fixture'},spare:{models:[{id:'gpt-6-luna',label:'GPT-6-Luna'}],source:'fixture'}};
+ state.codexHiddenModels={};state.hiddenModels={};`);
+}
 function fixture() {
  const elements=new Map(),events={},calls=[],messages=[];let focus;
  const focusButtons=mixed.flatMap(id=>['up','down'].map(direction=>({disabled:false,dataset:{[direction==='up'?'moUp':'moDown']:id},focus:()=>focus={id,direction}})));
- const el=s=>{if(!elements.has(s))elements.set(s,{innerHTML:'',hidden:false,dataset:{},querySelectorAll:()=>focusButtons,setAttribute(){},addEventListener(){}});return elements.get(s);};
+ const el=s=>{if(!elements.has(s))elements.set(s,{innerHTML:'',value:'',hidden:false,dataset:{},querySelector:()=>null,querySelectorAll:()=>focusButtons,setAttribute(){},addEventListener(){}});return elements.get(s);};
  const document={querySelector:el,querySelectorAll:()=>[],addEventListener:(n,f)=>(events[n]||=[]).push(f)};
  const ctx=vm.createContext({document,window:{matchMedia:()=>({matches:false})},navigator:{userAgent:''},localStorage:{getItem:()=>null,setItem(){}},fetch:()=>new Promise(()=>{}),setInterval(){},clearInterval(){},setTimeout(){},clearTimeout(){},requestAnimationFrame(){},console,URLSearchParams,ModelOrder,ProjectOrder:require('../public/project-order'),confirm:()=>true});
  ctx.window.HubChatHistory = require('../public/chat-history');
@@ -19,10 +25,68 @@ function fixture() {
  run(`api=stubApi;toast=notice;loadAiTools=()=>{};loadCliModels=()=>{};loadChatgpt=()=>{};loadRemote=()=>{};loadLog=()=>{};loadChangelog=()=>{};state={museSupported:false,roles:{models:${JSON.stringify(models)},roles:[{name:'調査',main:{ai:'claude-code',model:'Opus 5.5',effort:'中'},backup:{ai:'codex',model:'GPT-6.1-Sol',effort:'高'}}],permissions:{},switch:{auto:false}},cliFlags:{claude:{'Opus 5.5':'claude-opus-5-5'},codex:{'GPT-6.1-Sol':'gpt-6.1-sol'}},modelOrder:[],hiddenModels:{codex:['GPT-6-Astra']},projects:[{id:'p',name:'見本',phases:[],tasks:[{id:'t',title:'作業',owner:'codex',model:'GPT-6.1-Sol',effort:'高',state:'実行中',steps:[]}]}],sessions:[],chatting:[],unread:[],efforts:['中','高'],root:'/isolated',agyAvailable:false};view={kind:'settings',project:'p'};`);
  return{ctx,run,el,calls,messages,events,focus:()=>focus};
 }
+test('アカウント切替で候補と表示設定を切り替え、旧モデルは利用不可として保持し役割を変えない',()=>{
+ const f=fixture();accountModels(f);const before=f.run('JSON.stringify(state.roles.roles)');
+ assert.deepEqual(JSON.parse(f.run('JSON.stringify(taskModels("codex",taskOf(proj("p"),"t")))')),['GPT-6.1-Sol']);
+ f.run('taskOf(proj("p"),"t").accounts={codex:"spare"}');
+ assert.deepEqual(JSON.parse(f.run('JSON.stringify(taskModels("codex",taskOf(proj("p"),"t"),"GPT-6.1-Sol"))')),['GPT-6-Luna']);
+ const chat=f.run('chatModelChoices(proj("p"),taskOf(proj("p"),"t"))');
+ assert.match(chat,/value="codex\|GPT-6\.1-Sol"[^>]*selected disabled/);assert.match(chat,/value="codex\|GPT-6-Luna"/);
+ const terminal=f.run('specSelect(proj("p"),taskOf(proj("p"),"t"),"codex",false)');
+ assert.match(terminal,/selected disabled value="GPT-6\.1-Sol"/);assert.match(terminal,/>GPT-6-Luna<\/option>/);
+ f.run('state.sessions=[{project:"p",task:"t",ai:"codex",running:true,account:"default"}]');
+ const live=f.run('specSelect(proj("p"),taskOf(proj("p"),"t"),"codex",true)');
+ assert.match(live,/>GPT-6\.1-Sol<\/option>/);assert.doesNotMatch(live,/GPT-6-Luna<\/option>|現在の指定・利用不可/);
+ f.run('state.codexHiddenModels.spare=["GPT-6-Luna"]');
+ assert.deepEqual(JSON.parse(f.run('JSON.stringify(taskModels("codex",taskOf(proj("p"),"t")))')),[]);
+ f.run('taskOf(proj("p"),"t").accounts.codex="default"');
+ assert.deepEqual(JSON.parse(f.run('JSON.stringify(taskModels("codex",taskOf(proj("p"),"t")))')),['GPT-6.1-Sol']);
+ assert.equal(f.run('JSON.stringify(state.roles.roles)'),before);
+ f.run('state.codexModelCatalogs.spare={models:[],source:""};taskOf(proj("p"),"t").accounts.codex="spare"');
+ assert.deepEqual(JSON.parse(f.run('JSON.stringify(taskModels("codex",taskOf(proj("p"),"t")))')),[]);
+});
+test('表示の保存と再取得は設定で選んだアカウントを送り、エラー後も保存値を保持する',async()=>{
+ const f=fixture();accountModels(f);f.run('codexModelAccount="spare"');
+ const html=f.run('modelOrderHtml()');assert.match(html,/id="codex-model-account"/);assert.match(html,/GPT-6\.1-Sol（このアカウントの候補外）/);
+ f.ctx.stubApi=async(route,b)=>{f.calls.push({route,b});if(route==='/api/models/hidden')return {hiddenModels:{},codexHiddenModels:{spare:['GPT-6-Luna']},modelOrder:[]};throw Error('fixture unavailable');};
+ f.run('api=stubApi');
+ await f.run('toggleModelVisibility({dataset:{mvAi:"codex",mv:"GPT-6-Luna"},checked:false})');
+ assert.equal(f.calls[0].b.account,'spare');assert.deepEqual(JSON.parse(f.run('JSON.stringify(state.codexHiddenModels)')),{spare:['GPT-6-Luna']});
+ await f.run('refreshCodexAccountModels()');assert.deepEqual(JSON.parse(JSON.stringify(f.calls[1].b)),{ai:'codex',account:'spare'});
+ assert.match(f.run('modelOrderNotice'),/fixture unavailable/);assert.equal(f.run('codexModelsPending'),false);
+ assert.deepEqual(JSON.parse(f.run('JSON.stringify(state.codexHiddenModels)')),{spare:['GPT-6-Luna']});
+});
+test('既定の表示保存は役割・新規開始・すぐ始める欄にも反映し、追加アカウントは共通欄を変えない',async t=>{
+ const os=require('node:os'),{ModelView}=require('../lib/model-view');
+ const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'hub-default-model-ui-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const view=new ModelView(path.join(root,'model-view.json')),f=fixture();accountModels(f);
+ f.run('state.codexModelCatalogs.default.models.push({id:"gpt-6-luna",label:"GPT-6-Luna"});codexModelAccount="default";state.initialPick={ai:"codex",model:"GPT-6.1-Sol",effort:"高"}');
+ f.ctx.stubApi=async(route,b)=>{assert.equal(route,'/api/models/hidden');return view.setHidden(b.ai,b.model,b.hidden,b.account);};f.run('api=stubApi');
+ const render=()=>[f.run('roleModelOptions("codex","GPT-6.1-Sol")'),f.run('initialPickHtml()'),f.run('quickControls({id:"fresh"})')];
+ for(const html of render())assert.match(html,/GPT-6-Luna/);
+ await f.run('toggleModelVisibility({dataset:{mvAi:"codex",mv:"GPT-6-Luna"},checked:false})');
+ for(const html of render())assert.doesNotMatch(html,/GPT-6-Luna/);
+ await f.run('toggleModelVisibility({dataset:{mvAi:"codex",mv:"GPT-6-Luna"},checked:true})');
+ for(const html of render())assert.match(html,/GPT-6-Luna/);
+ f.run('codexModelAccount="spare"');
+ await f.run('toggleModelVisibility({dataset:{mvAi:"codex",mv:"GPT-6-Luna"},checked:false})');
+ for(const html of render())assert.match(html,/GPT-6-Luna/);
+ assert.deepEqual(view.read().hidden.codex,[]);assert.deepEqual(view.read().codexHidden.spare,['GPT-6-Luna']);
+});
+test('作業のアカウント保存完了直後に会話候補を更新し、失敗時は選択と候補を戻す',async()=>{
+ const f=fixture();accountModels(f);f.run('view={kind:"work",project:"p",task:"t"}');
+ f.ctx.stubApi=async(route,b)=>{f.calls.push({route,b});if(f.ctx.fail)throw Error('save failed');return {accounts:{codex:'spare'}};};
+ f.run('api=stubApi');
+ const el={dataset:{p:'p',t:'t',ai:'codex'},value:'spare',disabled:false};f.ctx.picker=el;
+ await f.run('saveTaskAccount(picker)');
+ assert.match(f.el('#chat-ai').innerHTML,/value="codex\|GPT-6-Luna"/);assert.equal(f.run('taskOf(proj("p"),"t").accounts.codex'),'spare');
+ f.ctx.fail=true;el.value='default';await f.run('saveTaskAccount(picker)');assert.equal(el.value,'spare');
+ assert.equal(f.run('taskOf(proj("p"),"t").accounts.codex'),'spare');assert.match(f.el('#chat-ai').innerHTML,/value="codex\|GPT-6-Luna"/);
+});
 test('並べ替え後も新規開始はSol・高、保存済みの開始選択と役割担当を保持する',async()=>{
  const f=fixture(),roles=f.run('JSON.stringify(state.roles)');
  f.run('state.hiddenModels={codex:["GPT-6.1-Sol"]}');
- const fresh={id:'fresh'},saved={id:'saved',startSpec:{ai:'claude',model:'Fable 5.1',effort:'中'}};
+ const fresh={id:'fresh'},saved={id:'saved',startSpec:{ai:'claude',model:'Fable 5.2',effort:'中'}};
  f.ctx.fresh=fresh;f.ctx.saved=saved;
  const before=f.run('JSON.stringify([quickDraft(fresh),quickDraft(saved)])');
  await f.run(`saveModelOrder(${JSON.stringify(mixed)})`);

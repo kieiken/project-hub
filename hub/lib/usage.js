@@ -1,4 +1,5 @@
 'use strict';
+const { FABLE_MODEL } = require('./fable-model');
 const { lt } = require('./locale');
 // 契約CLIの状態を読み、確認済みの無料チケットだけ使用する。user prompt / thread / turn は送らず、秘密・生出力は公開しない。
 const { spawn } = require('node:child_process');
@@ -74,6 +75,17 @@ function codexWindows(data) {
   }
   return windows;
 }
+function claudeExtras(data) {
+  const extra = data.rate_limits?.extra_usage ?? data.extra_usage;
+  if (!extra || typeof extra !== 'object' || Array.isArray(extra) || typeof extra.is_enabled !== 'boolean') return {};
+  // Display only. Monthly overage allowances are not prepaid credit balances.
+  const safe = { is_enabled: extra.is_enabled };
+  for (const key of ['used_credits', 'monthly_limit', 'utilization']) {
+    if (percent(extra[key]) !== null) safe[key] = extra[key];
+  }
+  if (typeof extra.currency === 'string' && extra.currency.length === 3 && /^[A-Z]{3}$/.test(extra.currency)) safe.currency = extra.currency;
+  return { extraUsage: safe };
+}
 function claudeWindows(data) {
   if (!data || typeof data !== 'object') throw error('format');
   if (!data.subscription_type || data.rate_limits_available === false) throw error('subscription');
@@ -113,12 +125,12 @@ function readCli(ai, file, options = {}) {
   const timeoutMs = options.timeoutMs || 20000;
   const args = ai === 'claude' ? ['--print', '--input-format','stream-json','--output-format','stream-json','--verbose',
     '--safe-mode','--no-session-persistence','--strict-mcp-config','--mcp-config','{"mcpServers":{}}',
-    '--setting-sources','','--settings','{"disableAllHooks":true}','--disable-slash-commands','--tools','','--model','claude-fable-5-1'] :
+    '--setting-sources','','--settings','{"disableAllHooks":true}','--disable-slash-commands','--tools','','--model',FABLE_MODEL] :
     ['app-server','--listen','stdio://','-c','analytics.enabled=false', ...require('./launch').accountArgs(ai, options.account || 'default')];
   return new Promise((resolve, reject) => {
     let child;
-    try { const x = require('./launch').exeArgv(file, args); child = start(x.file, x.args, { stdio:['pipe','pipe','pipe'], cwd: os.tmpdir(), env: require('./launch').accountEnv(ai, options.account || 'default', options.env || process.env) }); }
-    catch { reject(error('start')); return; }
+    try { const x = require('./launch').resolveCli(file, args, options.env || process.env, ai); child = start(x.file, x.args, { stdio:['pipe','pipe','pipe'], cwd: os.tmpdir(), env: require('./launch').accountEnv(ai, options.account || 'default', options.env || process.env) }); }
+    catch (e) { reject(e.stage === 'mac-confirmation' ? e : error('start')); return; }
     let bytes = 0, buf = '', stopped = false, settled = false, value, failure, killTimer, consumeSent = false;
     const finish = () => {
       if (settled) return;
@@ -230,7 +242,7 @@ class Usage {
   }
   async targets(selection, only) {
     if (!this.accounts) return ['codex','claude'].map(ai => ({ ai, account: selection[ai] || 'default' }));
-    const rows = this.accounts.list().filter(r => ['codex','claude'].includes(r.ai));
+    const rows = this.accounts.list({ includeActivity: false }).filter(r => ['codex','claude'].includes(r.ai));
     const keys = new Set(rows.map(r => this.key(r.ai, r.id)));
     for (const key of new Set([...Object.keys(this.cache), ...this.visible.keys(), ...this.authCache.keys()])) {
       if (!keys.has(key)) { const [ai, account = 'default'] = key.split(':'); this.invalidate(ai, account); this.authBusy.delete(key); }
@@ -278,7 +290,7 @@ class Usage {
           if (!windows.length) throw error('unavailable');
           const plan = providerPlan(ai, data);
           if (revision === this.revision(key)) {
-            const extras = ai === 'codex' ? codexExtras(data) : {};
+            const extras = ai === 'codex' ? codexExtras(data) : claudeExtras(data);
             if (ai === 'codex') this.tickets.decorate(account, data, extras.resetCredits, revision);
             const creditCheck = this.creditRequested.has(key) ? creditStatus(ai, data) : null;
             this.cache[key] = { account, status: 'ok', windows, ...(plan ? { plan } : {}), ...extras,

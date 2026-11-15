@@ -25,7 +25,7 @@ module.exports = function terminalstartRoutes(ctx) {
         o = { ...o, ...backup }; ai = o.ai; spec = o; account = o.account;
       }
       if (aiTools.isOperating(ai) || (getRestartControl())?.committed) return send(res,409,{error:lt('AI の更新・モデル再取得が進行中です')});
-      const invalidModel = modelError(ai, spec.model);
+      const invalidModel = modelError(ai, spec.model, account);
       if (invalidModel) return send(res, 409, { error: invalidModel });
       if (sessions.list().some(r => r.project === p.id && r.task === t.id && sessions.get(r.project, r.task, r.ai)?.limitTransition && !sessions.get(r.project, r.task, r.ai)?.limitTransitionDone)) return send(res, 409, { error: lt('上限による交代の準備中です') });
       const cur = sessions.get(p.id, t.id, ai);
@@ -74,7 +74,7 @@ module.exports = function terminalstartRoutes(ctx) {
       const tgtLive = tgt && !tgt.exited;
       if (tgtLive && (tgt.account || 'default') !== account) return send(res, 409, { error: lt('交代先は別のアカウントで作業中です') });
       if (!tgtLive) {
-        const invalidModel = modelError(b.to, spec.model);
+        const invalidModel = modelError(b.to, spec.model, account);
         if (invalidModel) return send(res, 409, { error: invalidModel });
       }
       if (tgtLive && Date.now() - tgt.lastOut < 20000) return send(res, 409, { error: lt`${LABEL[b.to]} が作業中です。止まってから（入力待ちになってから）交代してください` });
@@ -113,8 +113,12 @@ module.exports = function terminalstartRoutes(ctx) {
       const spec = pickSpec(t, b.ai);
       if (b.ai === 'agy' && typeof b.model === 'string') spec.model = launch.modelLabel(b.ai, b.model);
       const account = requestAccount(p, t.id, b.ai, b.account);
-      const invalidModel = modelError(b.ai, spec.model);
+      const invalidModel = modelError(b.ai, spec.model, account);
       if (invalidModel) return send(res, 409, { error: invalidModel });
+      if (!DRY && b.ai === 'claude') {
+        const argv = launch.buildArgv({ ai: b.ai, cmd: permCmd(b.ai) });
+        launch.resolveCli(argv.command, argv.args, process.env, b.ai);
+      }
       const { dir } = startDir(p, t);
       const command = launch.buildCommand({ ai: b.ai, dir, prompt: taskPrompt(p, t, file, dir, 'terminal', { ai: b.ai, model: spec.model }), cmd: permCmd(b.ai), ...spec, account, fast: codexFastFor(p.id, t.id) });
       const terminal = accounts.terminalCommand(b.ai, account, command, launch.sq);

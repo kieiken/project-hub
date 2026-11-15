@@ -8,6 +8,7 @@ const { noLinks, exists } = require('./remove');
 const { lt } = require('./locale');
 const start = require('./start');
 const platforms = require('./platform');
+const { VIDEO, videoFrames } = require('./video-frames');
 const run = promisify(execFile), TEXT_LIMIT = 500000, PACKAGE_LIMIT = 256 * 1024 * 1024, FILE_LIMIT = 20000;
 const TEXT = /\.(txt|md|markdown|csv|tsv|json|jsonl|yaml|yml|xml|html|css|js|ts|py|log|rtf)$/i;
 const { PDF_SCRIPT } = platforms;
@@ -46,8 +47,8 @@ function readSafe(file, max = start.MAX) {
   } finally { fs.closeSync(fd); }
 }
 class FreetalkAttachments {
-  constructor(ft, { platform = platforms } = {}) { this.ft = ft; this.platform = platform; }
-  base(task) { this.ft.history.topic(task); const dir = path.join(this.ft.dir,'topics',task); noLinks(dir); return dir; }
+  constructor(ft, { platform = platforms, base, previewUrl, video = videoFrames } = {}) { this.ft = ft; this.platform = platform; this.attachmentBase = base; this.previewUrl = previewUrl; this.video = video; }
+  base(task) { if (this.attachmentBase) return this.attachmentBase(task); this.ft.history.topic(task); const dir = path.join(this.ft.dir,'topics',task); noLinks(dir); return dir; }
   derived(task, id) {
     if (!/^[a-f\d-]{36}$/.test(id)) throw Error(lt('添付ファイルの指定が正しくありません'));
     const dir = path.join(this.base(task),'.derived',id); noLinks(dir); return dir;
@@ -58,8 +59,7 @@ class FreetalkAttachments {
     const file = this.ft.upload(task,name,data);
     return this.prepare(task,file,generation);
   }
-  async fromPath(task, raw, generation) {
-    this.ft.checkGeneration(task,generation);
+  sourcePath(raw) {
     if (typeof raw !== 'string' || !path.isAbsolute(raw)) throw Error(lt('このファイルは添付できません'));
     let file = path.resolve(raw);
     // macOS標準の /var・/tmp の別名だけを正規化する。中のリンクは拒否する。
@@ -69,8 +69,25 @@ class FreetalkAttachments {
     noLinks(file);
     const allowed = [this.ft.home,os.tmpdir(),'/private/tmp'].filter(exists).map(x => fs.realpathSync(x));
     if (!allowed.some(dir => file.startsWith(dir + path.sep))) throw Error(lt('この場所のファイルは追加できません'));
-    if (!fs.lstatSync(file).isDirectory()) return this.upload(task,path.basename(file),readSafe(file),generation);
-    if (!/\.key$/i.test(file)) throw Error(lt('フォルダはKeynoteのパッケージだけ添付できます'));
+    return file;
+  }
+  async fromPath(task, raw, generation) {
+    this.ft.checkGeneration(task,generation);
+    const file=this.sourcePath(raw),st=fs.lstatSync(file);
+    if (st.isFile()) return this.upload(task,path.basename(file),readSafe(file),generation);
+    if (!st.isDirectory()) throw Error(lt('特殊なファイルは添付できません'));
+    if (!/\.key$/i.test(file)) {
+      // 参照先は保管・変換・後始末の対象にしない。自分の領域に記録だけを作る。
+      const id=randomUUID(),derived=this.derived(task,id);
+      const result={id,name:path.basename(file),kind:'file',media:'folder',storage:'reference',path:file,status:'ok',
+        message:lt('フォルダの参照です。コピーではなく元のフォルダを読みます。'),referencePaths:[file],generation};
+      try {
+        fs.mkdirSync(derived,{recursive:true});
+        this.ft.checkGeneration(task,generation);
+        fs.writeFileSync(path.join(derived,'attachment.json'),JSON.stringify(result)+'\n',{flag:'wx'});
+        return result;
+      } catch(e) { if(exists(derived))fs.rmSync(derived,{recursive:true});throw e; }
+    }
     const entries = []; let bytes = 0;
     const walk = (src, rel = '') => {
       noLinks(src); const st = fs.lstatSync(src);
@@ -113,6 +130,14 @@ class FreetalkAttachments {
           try { start.convertImage(file,result.imagePath); } catch { throw Error(lt('画像をPNGに変換できませんでした。画像を書き出し直して追加してください')); }
           result.referencePaths = [result.imagePath]; result.path = result.imagePath;
         }
+      } else if (VIDEO.test(file)) {
+        const video = await this.video(file,derived);
+        result.media = 'video'; result.status = 'partial'; result.message = video.message;
+        result.duration = video.duration; result.frames = video.frames;
+        result.imagePaths = [...video.frames.map(f=>f.path),...(video.subtitleSheet?.path?[video.subtitleSheet.path]:[])]; result.imagePath = result.imagePaths[0];
+        result.subtitleSheet = video.subtitleSheet;
+        result.transcriptStatus = video.transcript.status;
+        result.referencePaths = [file,video.manifest,...(video.transcript.path?[video.transcript.path]:[]),...result.imagePaths];
       } else if (/\.pdf$/i.test(file)) {
         try {
           const stdout = await this.platform.readPdfText(file, run);
@@ -147,7 +172,7 @@ class FreetalkAttachments {
         if(keynote){result.status='unsupported';result.message=lt('Keynoteの本文は読めません。PDFかPPTXに書き出して添付してください');}
       } else if (!TEXT.test(file)) { result.status='unsupported';result.message=lt('この形式の内容参照には対応していません'); }
       this.ft.checkGeneration(task,generation);
-      if(result.imagePath)result.url='/api/freetalk/attachment?'+new URLSearchParams({project:'freetalk',task,id});
+      if(result.imagePath)result.url=this.previewUrl ? this.previewUrl(task,id,result.imagePath) : '/api/freetalk/attachment?'+new URLSearchParams({project:'freetalk',task,id});
       fs.writeFileSync(path.join(derived,'attachment.json'),JSON.stringify(result)+'\n',{flag:'wx'});
       return result;
     } catch(e) {
@@ -159,7 +184,13 @@ class FreetalkAttachments {
   }
   descriptor(task,id) {
     const result=JSON.parse(readSafe(path.join(this.derived(task,id),'attachment.json'),1024*1024));
-    for(const file of [...result.referencePaths,result.imagePath].filter(Boolean)) {
+    if(result.storage==='reference') {
+      if(result.id!==id || result.kind!=='file' || result.media!=='folder' || result.name!==path.basename(result.path)
+        || result.imagePath || result.imagePaths || result.referencePaths?.length!==1 || result.referencePaths[0]!==result.path
+        || this.sourcePath(result.path)!==result.path || !fs.lstatSync(result.path).isDirectory())throw Error(lt('添付ファイルの指定が正しくありません'));
+      return result;
+    }
+    for(const file of [...result.referencePaths,result.imagePath,...(result.imagePaths||[])].filter(Boolean)) {
       if(!file.startsWith(this.base(task)+path.sep))throw Error(lt('添付ファイルの指定が正しくありません'));
       noLinks(file);if(!exists(file))throw Error(lt('添付ファイルが見つかりません'));
     }
@@ -168,11 +199,14 @@ class FreetalkAttachments {
   discard(task,result) {
     const derived=this.derived(task,result.id),original=path.join(this.base(task),result.id+'-'+result.name);
     if(exists(derived))fs.rmSync(derived,{recursive:true});
+    if(result.storage==='reference')return;
     noLinks(original);if(exists(original))fs.rmSync(original,{recursive:fs.lstatSync(original).isDirectory()});
   }
   images(task,ids) {
     if(!Array.isArray(ids)||ids.length>20)throw Error(lt('添付ファイルの指定が正しくありません'));
-    return ids.map(id=>this.descriptor(task,id).imagePath).filter(Boolean);
+    const images=ids.flatMap(id=>{const a=this.descriptor(task,id);return a.imagePaths || (a.imagePath?[a.imagePath]:[]);});
+    if(images.length>20)throw Error(lt('動画から抜き出した場面を含め、画像は1回20枚までです。添付を減らして送ってください'));
+    return images;
   }
   preview(task,id) {
     const file=this.descriptor(task,id).imagePath;

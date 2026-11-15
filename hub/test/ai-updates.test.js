@@ -11,7 +11,7 @@ function fixture(t) {
   const state = { busy: 0, date: new Date(2026, 9, 9, 6), versions: { codex: '0.1.0', agy: '1.0.0', claude: '2.0.0' }, latest: '0.2.0', fail: '', gate: null,
     installed: ['codex'], rows: [{ ai: 'codex', id: 'default' }], auth: { 'codex:default': 'logged-in' }, models: [{ slug: 'gpt-6.1-sol', display_name: 'GPT-6.1-Sol', visibility: 'list' }] };
   const calls = [], reads = [];
-  const tools = new AiTools({ root, home: path.join(root, 'home'), busy: () => state.busy,
+  const tools = new AiTools({ ready: (_ai, file) => file, root, home: path.join(root, 'home'), busy: () => state.busy,
     find: ai => state.installed.includes(ai) ? '/fixture/' + ai : '', methods: { codex: 'standalone', agy: 'native', claude: 'native' },
     latest: async ai => { calls.push([ai, 'latest']); if (state.gate) await state.gate; if (state.fail === 'latest') throw Error('SECRET'); return { version: ai === 'codex' ? state.latest : state.versions[ai], source: 'fixture' }; },
     run: async (file, args, opts) => {
@@ -88,12 +88,12 @@ test('Claude追加アカウントは同じenvと専用cacheを使い、既定cac
   const dir = path.join(f.accounts.location('claude', 'other'), 'cache', 'model-catalog'); fs.mkdirSync(dir, { recursive: true });
   f.tools.refreshClaude = async (file, timeout, env) => {
     assert.equal(env.FIXTURE_ACCOUNT, 'claude:other');
-    fs.writeFileSync(path.join(dir, 'fresh.json'), JSON.stringify({ catalog: { config: { models: [{ id: 'claude-fable-5-1', name: 'Fable 5.1', section: 'main' }] } } }));
+    fs.writeFileSync(path.join(dir, 'fresh.json'), JSON.stringify({ catalog: { config: { models: [{ id: 'claude-fable-5-2', name: 'Fable 5.2', section: 'main' }] } } }));
     return ['fable'];
   };
   await f.updates.tick();
   assert.equal(f.updates.status().tools.claude.modelsStatus, 'first');
-  assert.deepEqual(f.updates.status().tools.claude.modelDiff.added, ['claude-fable-5-1']);
+  assert.deepEqual(f.updates.status().tools.claude.modelDiff.added, ['claude-fable-5-2']);
 });
 test('Claudeのcache再書込なしの一致観測で未確認から変更なしへ戻り注意も消える', async t => {
   const f = fixture(t); f.state.installed = ['claude'];
@@ -103,7 +103,7 @@ test('Claudeのcache再書込なしの一致観測で未確認から変更なし
   const file = path.join(dir, 'catalog.json');
   fs.writeFileSync(file, JSON.stringify({ catalog: { config: { models: [
     { id: 'claude-opus-5-5', name: 'Opus 5.5', section: 'main' },
-    { id: 'claude-fable-5-1', name: 'Fable 5.1', section: 'main' },
+    { id: 'claude-fable-5-2', name: 'Fable 5.2', section: 'main' },
     { id: 'claude-hidden', name: 'Hidden', section: 'overflow' },
   ] } } }));
   const mtime = fs.statSync(file).mtimeMs;
@@ -125,7 +125,7 @@ test('Claudeのcache再書込なしの一致観測で未確認から変更なし
   const row = f.updates.status().tools.claude;
   assert.equal(row.modelsStatus, 'same'); assert.equal(row.notice, '');
   assert.equal(row.source, 'claude-cache');
-  assert.deepEqual(row.models.map(m => m.id), ['claude-opus-5-5', 'claude-fable-5-1']);
+  assert.deepEqual(row.models.map(m => m.id), ['claude-opus-5-5', 'claude-fable-5-2']);
   assert.equal(fs.statSync(file).mtimeMs, mtime);
   const saved = f.make().status().tools.claude;
   assert.equal(saved.modelsStatus, 'same'); assert.equal(saved.notice, '');

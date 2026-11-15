@@ -27,7 +27,7 @@ Usage.prototype.status = function(force, selection, options) {
 };
 const sha = f => fs.existsSync(f) ? crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') : null;
 function config(auto = true) {
-  fs.writeFileSync(rolesFile, `models:\n  claude-code: [Opus 5.5, Fable 5.1]\n  codex: [GPT-6.1-Sol, GPT-6-Astra]\nroles:\n  コーディング: { main: [codex, GPT-6.1-Sol, 高], backup: [claude-code, Opus 5.5, 高] }\n  司令塔: { main: [claude-code, Fable 5.1, 高], backup: [codex, GPT-6-Astra, 高] }\nswitch:\n  auto: ${auto}\n`);
+  fs.writeFileSync(rolesFile, `models:\n  claude-code: [Opus 5.5, Fable 5.2]\n  codex: [GPT-6.1-Sol, GPT-6-Astra]\nroles:\n  コーディング: { main: [codex, GPT-6.1-Sol, 高], backup: [claude-code, Opus 5.5, 高] }\n  司令塔: { main: [claude-code, Fable 5.2, 高], backup: [codex, GPT-6-Astra, 高] }\nswitch:\n  auto: ${auto}\n`);
   const stamp = new Date(Date.now() + 1000); fs.utimesSync(rolesFile, stamp, stamp);
   require('../lib/role-history').load(rolesFile); // Establish the normal journal before preservation assertions.
 }

@@ -35,7 +35,7 @@ for (const boundary of ['no-evidence', 'unknown-reset', 'restored', 'save-failed
       const original = 'original-' + marker;
       runner.send({ project: 'p', task: marker, pdir: dir, ai: 'codex', model: 'gpt-6-astra', requireModel: true, requiredModel: 'gpt-6-astra', text: 'old-card', perm: 'codex --fixture-codex-perm', limitSwitch: { [marker]: true, original }, request: marker });
       assert.equal(captured.ai, ['confirmed', 'unknown-reset', 'restored', 'save-failed'].includes(boundary) ? 'codex' : 'claude');
-      assert.equal(captured.requiredModel, ['confirmed', 'unknown-reset', 'restored', 'save-failed'].includes(boundary) ? 'gpt-6-astra' : 'claude-fable-5-1');
+      assert.equal(captured.requiredModel, ['confirmed', 'unknown-reset', 'restored', 'save-failed'].includes(boundary) ? 'gpt-6-astra' : 'claude-fable-5-2');
       if (!['confirmed', 'unknown-reset', 'restored', 'save-failed'].includes(boundary)) assert.match(captured.perm, /^claude /);
       assert.equal(Boolean(captured.limitSwitch?.preflight), ['confirmed', 'unknown-reset', 'restored', 'save-failed'].includes(boundary)); assert.doesNotMatch(captured.text, /old-card/);
     }
@@ -49,14 +49,14 @@ test('失敗した事前交代の再開は期限を再判定し、旧user行の�
   const runner = new chat.ChatRunner({ limitBackup: () => backup, limitPreflight: () => state.active() });
   let captured, runs = 0;
   runner.run = o => { captured = o; runs++; return { startedP: Promise.resolve(true) }; };
-  const o = { project: 'p', task: 'retry', pdir: dir, ai: 'claude', model: 'Fable 5.1', text: 'retry-original', request: 'same' };
+  const o = { project: 'p', task: 'retry', pdir: dir, ai: 'claude', model: 'Fable 5.2', text: 'retry-original', request: 'same' };
   runner.send(o); assert.equal(captured.ai, 'codex');
   chat.append(dir, 'retry', { role: 'assistant', request: 'same', error: 'fixture spawn failure', text: '' });
   now += 3600000; runner.send(o); assert.equal(captured.ai, 'claude'); assert.equal(captured.limitSwitch, undefined);
   assert.equal(chat.read(dir, 'retry').filter(r => r.role === 'user').length, 1);
   assert.equal(chat.read(dir, 'retry').filter(r => r.role === 'event' && r.limitSwitch).length, 1);
-  chat.append(dir, 'retry', { role: 'assistant', request: 'same', ai: 'claude', model: 'Fable 5.1', text: 'done' });
-  const result = runner.send(o); assert.equal(runs, 2); assert.equal(result.ai, 'claude'); assert.equal(result.model, 'Fable 5.1'); assert.equal(result.limitSwitch, undefined);
+  chat.append(dir, 'retry', { role: 'assistant', request: 'same', ai: 'claude', model: 'Fable 5.2', text: 'done' });
+  const result = runner.send(o); assert.equal(runs, 2); assert.equal(result.ai, 'claude'); assert.equal(result.model, 'Fable 5.2'); assert.equal(result.limitSwitch, undefined);
 });
 
 for (const invalidation of ['expired', 'manual-clear']) {
@@ -70,7 +70,7 @@ for (const invalidation of ['expired', 'manual-clear']) {
     state.record({}); state.observe(full(NOW + 1, NOW + 100));
     const runner = new chat.ChatRunner({ dirOf: () => dir, limitPreflight: () => state.active(),
       onLimit: o => state.record(o), limitBackup: () => ({ ...backup, perm }) });
-    const o = { project: 'p', task: 'retry', pdir: dir, dir, ai: 'claude', model: 'Fable 5.1', text: 'original', request: 'same', perm: process.execPath + ' fable.cjs' };
+    const o = { project: 'p', task: 'retry', pdir: dir, dir, ai: 'claude', model: 'Fable 5.2', text: 'original', request: 'same', perm: process.execPath + ' fable.cjs' };
     const idle = async () => {
       for (let i = 0; i < 200; i++) { if (!runner.busy('p', 'retry')) return; await new Promise(r => setTimeout(r, 10)); }
       assert.fail('fake CLI did not finish');

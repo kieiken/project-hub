@@ -3,7 +3,7 @@ process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const chat = require('../lib/chat');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-queue-edit-'));
+const tmp = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-queue-edit-'));
 const root = path.join(tmp, 'workspace'), dir = path.join(root, 'Product', 'Queue'), bin = path.join(tmp, 'bin');
 const key = { project: 'Queue', task: 'queue' };
 let server, base;
@@ -135,17 +135,33 @@ test('human stop while amend or redo awaits exit preserves the instruction witho
 });
 
 const revise = (item, extra = {}) => post('/api/chat/queue/edit', { id:item.id, text:item.text, expectedText:item.text, expectedItem:JSON.stringify(item), ai:item.ai, model:item.model, ...extra });
+test('changing queued AI preserves empty role-default effort across save and handoff',async()=>{
+ const hub=require('../server');
+ for(const effort of ['',undefined]){
+  const item={id:'empty-effort',ai:'codex',model:'GPT-6.1-Sol',text:'use CLI default',effort};
+  hub.chats.setQueue(key.project,key.task,[item],true);
+  const response=await revise(queue()[0],{ai:'claude',model:'claude-opus-5-5'});
+  assert.equal(response.status,200,await response.clone().text());
+  const saved=queue()[0];assert.equal(saved.effort,'');
+  assert.equal(new chat.ChatRunner({dirOf:()=>dir}).queue(key.project,key.task)[0].effort,'');
+  const options=hub.chats.queuedOptions({project:key.project},saved);
+  assert.equal(options.effort,'');
+  const turn=chat.buildTurn({...options,meta:{},rows:[],basePrompt:'fixture'});
+  assert.ok(!turn.args.includes('--effort'));
+ }
+});
+
 test('model-only and combined edits are atomic, preserve other instructions, and reject stale metadata and old clients',async()=>{
  assert.equal((await send({})).status,200);const id=await add('model only'),other=await add('other');
  const hub=require('../server'),old=queue()[0];hub.chats.setQueue(key.project,key.task,queue().map(x=>x.id===id?{...x,requireModel:true,requiredModel:'gpt-6.1-sol',shown:x.text}:x),true);
  const before=queue()[0],taskBefore=fs.readFileSync(path.join(dir,'.ai/tasks/queue.md'),'utf8');
- let r=await revise(before,{ai:'claude',model:'claude-fable-5-1'});assert.equal(r.status,200,await r.clone().text());
- const saved=queue()[0];assert.equal(saved.text,'model only');assert.equal(saved.ai,'claude');assert.equal(saved.model,'Fable 5.1');assert.equal(saved.account,'default');assert.match(saved.perm,/^claude /);assert.equal(saved.requiredModel,'claude-fable-5-1');assert.equal(saved.requireModel,true);assert.equal(saved.role,before.role);assert.equal(saved.limitSlot,undefined);assert.equal(queue()[1].id,other);assert.equal(fs.readFileSync(path.join(dir,'.ai/tasks/queue.md'),'utf8'),taskBefore);
+ let r=await revise(before,{ai:'claude',model:'claude-fable-5-2'});assert.equal(r.status,200,await r.clone().text());
+ const saved=queue()[0];assert.equal(saved.text,'model only');assert.equal(saved.ai,'claude');assert.equal(saved.model,'Fable 5.2');assert.equal(saved.account,'default');assert.match(saved.perm,/^claude /);assert.equal(saved.requiredModel,'claude-fable-5-2');assert.equal(saved.requireModel,true);assert.equal(saved.role,before.role);assert.equal(saved.limitSlot,undefined);assert.equal(queue()[1].id,other);assert.equal(fs.readFileSync(path.join(dir,'.ai/tasks/queue.md'),'utf8'),taskBefore);
  assert.deepEqual(new chat.ChatRunner({dirOf:()=>dir}).queue(key.project,key.task),queue());
  const bytes=fs.readFileSync(queueFile(),'utf8');
  assert.equal((await revise(before,{text:'stale'})).status,409);assert.equal((await edit(id,'legacy overwrite','model only')).status,409);
  assert.equal((await post('/api/chat/send',{fromQueue:id,expectedItem:JSON.stringify(before),mode:'amend'})).status,409);
- for(const value of [{ai:'codex',model:'claude-fable-5-1'},{ai:'dot',model:'auto'},{ai:'claude',model:'removed-model'}])assert.equal((await revise(saved,value)).status,409);
+ for(const value of [{ai:'codex',model:'claude-fable-5-2'},{ai:'dot',model:'auto'},{ai:'claude',model:'removed-model'}])assert.equal((await revise(saved,value)).status,409);
  assert.equal(fs.readFileSync(queueFile(),'utf8'),bytes);
  r=await revise(saved,{ai:'codex',model:'gpt-6.1-sol',text:'combined edit'});assert.equal(r.status,200);assert.equal(queue()[0].shown,'combined edit');assert.equal(queue()[0].requiredModel,'gpt-6.1-sol');
  const o=hub.chats.queuedOptions({project:key.project},queue()[0]);assert.equal(o.ai,'codex');assert.equal(o.model,'GPT-6.1-Sol');assert.equal(o.text,'combined edit');assert.equal(old.ai,'codex');
@@ -176,9 +192,9 @@ test('queue attachment removal is staged by ID, survives reload, and never delet
 test('edited AI and pinned model reach the real isolated amend launch, with edit/start locks intact',async()=>{
  fs.copyFileSync(path.join(bin,'codex'),path.join(bin,'claude'));fs.chmodSync(path.join(bin,'claude'),0o755);
  assert.equal((await send({})).status,200);const id=await add('FOLLOW-UP model changed');
- assert.equal((await revise(queue().find(x=>x.id===id),{ai:'claude',model:'claude-fable-5-1'})).status,200);await ownedReady();
+ assert.equal((await revise(queue().find(x=>x.id===id),{ai:'claude',model:'claude-fable-5-2'})).status,200);await ownedReady();
  const r=await amend(id);assert.equal(r.status,200,await r.clone().text());const rows=chat.read(dir,key.task),row=rows.filter(x=>x.role==='user').at(-1);
- assert.equal(row.to,'claude');assert.equal(row.model,'Fable 5.1');assert.match(row.text,/FOLLOW-UP model changed/);assert.equal((await revise({...row,id,text:'stale'})).status,404);
+ assert.equal(row.to,'claude');assert.equal(row.model,'Fable 5.2');assert.match(row.text,/FOLLOW-UP model changed/);assert.equal((await revise({...row,id,text:'stale'})).status,404);
  await wait(()=>!require('../server').chats.busy(key.project,key.task));
 });
 
@@ -195,11 +211,30 @@ test('automation, integration and read-only queue instructions reject both draft
 test('same-AI model changes retain the selected account, and a new AI uses its own account, command and supported effort',async()=>{
  assert.equal((await send({})).status,200);const id=await add('metadata edge'),hub=require('../server'),launch=require('../lib/launch');
  const created=await post('/api/accounts',{ai:'claude',name:'fixture profile'});assert.equal(created.status,200);const account=(await created.json()).account.id;
- const baseItem={...queue().find(x=>x.id===id),ai:'claude',model:'Fable 5.1',account,effort:'Ultra',requireModel:true,requiredModel:'claude-fable-5-1',role:'チェック',limitSlot:'main'};
+ const baseItem={...queue().find(x=>x.id===id),ai:'claude',model:'Fable 5.2',account,effort:'Ultra',requireModel:true,requiredModel:'claude-fable-5-2',role:'チェック',limitSlot:'main'};
  hub.chats.setQueue(key.project,key.task,[baseItem],true);
  assert.equal((await revise(baseItem,{ai:'claude',model:'claude-opus-5-5'})).status,200);let saved=queue()[0];assert.equal(saved.account,account);assert.equal(saved.requiredModel,'claude-opus-5-5');assert.equal(saved.role,'チェック');assert.equal(saved.limitSlot,'main');
  // Catalog injection is fixture-only; no Grok command, auth or network is used.
  launch.setDiscoveredModels({grok:{models:[{label:'fixture-grok',id:'fixture-grok-id'}]}});
  try{assert.equal((await revise(saved,{ai:'grok',model:'fixture-grok-id'})).status,200);saved=queue()[0];assert.equal(saved.account,'default');assert.equal(saved.effort,'高');assert.match(saved.perm,/^grok /);assert.equal(saved.requiredModel,'fixture-grok-id');assert.equal(saved.role,'チェック');assert.equal(saved.limitSlot,'main');}
  finally{launch.setDiscoveredModels({});}
+});
+
+test('queue model edits reject candidates outside the pinned account without changing the saved instruction',async()=>{
+ const hub=require('../server'),launch=require('../lib/launch'),tools=hub.aiUpdates.tools;
+ const created=await post('/api/accounts',{ai:'codex',name:'model fixture'});assert.equal(created.status,200);
+ const account=(await created.json()).account.id;
+ tools.saveCatalog('codex',{models:[{id:'gpt-6.1-sol',label:'GPT-6.1-Sol'}],source:'fixture'});
+ tools.saveCatalog('codex',{models:[{id:'gpt-6-luna',label:'GPT-6-Luna'}],source:'fixture'},account);
+ launch.setDiscoveredModels(tools.catalog());
+ const item={id:'account-candidate-edit',ai:'codex',model:'GPT-6-Luna',account,text:'saved request',effort:'高'};
+ hub.chats.setQueue(key.project,key.task,[item],true);
+ const before=fs.readFileSync(queueFile(),'utf8');
+ try{
+  const denied=await revise(item,{ai:'codex',model:'gpt-6.1-sol'});assert.equal(denied.status,409);
+  assert.match((await denied.json()).error,/選んだアカウントの候補にありません/);
+  assert.equal(fs.readFileSync(queueFile(),'utf8'),before);
+  const allowed=await revise(item,{ai:'codex',model:'gpt-6-luna'});assert.equal(allowed.status,200,await allowed.clone().text());
+  assert.equal(queue()[0].account,account);assert.equal(queue()[0].model,'GPT-6-Luna');
+ }finally{launch.setDiscoveredModels({});}
 });

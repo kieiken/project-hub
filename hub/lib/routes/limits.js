@@ -7,7 +7,7 @@ module.exports = function limitsRoutes(ctx) {
       matches: (req, url) => req.method === 'POST' && url.pathname === '/api/limits/clear',
       handle(req, res, url, b) {
         if (req.method === 'POST' && url.pathname === '/api/limits/clear') {
-          const models = limitModels();
+          const models = limitEvidence.clearableModels(limitModels());
           for(const [ai,ids] of Object.entries(getDiscussion().limitModels()))models[ai]=[...new Set([...(models[ai]||[]),...ids])];
           if (!models[b.ai]?.includes(b.model)) return send(res, 400, { error: lt('上限の指定が正しくありません') });
           try { const selection = usageSelection(url, b); const account = b.account || selection[b.ai] || 'default'; accounts.get(b.ai, account); limitEvidence.clear(account, b.model,models); }

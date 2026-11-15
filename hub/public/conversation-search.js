@@ -65,6 +65,7 @@
       const f = focus;
       if (!f || f.archiveId || f.project !== project || f.task !== task) return;
       focus = null; if (Date.now() > f.until) return;
+      box.hubFlushRows?.();
       let index = same(rows[f.row], f) ? f.row : rows.findIndex(r => same(r, f));
       if (index < 0) { toast(text(MISSING)); return; }
       // Map by order among messages with the same time and role (data-at/data-role on .m).
@@ -112,9 +113,15 @@
   }
   function summary(data) {
     const s = data.stats;
+    const reasons = {off:'オフ', 'no-key':'キー未設定', excluded:'送信できる候補が不足', limit:'月上限に到達',
+      'budget-unavailable':'利用記録を確認できません', timeout:'時間切れ', rejected:'キーが拒否されました',
+      'invalid-response':'応答を確認できません', unavailable:'通信などを確認できません', cancelled:'中断'};
+    const jev = data.rerank ? (data.rerank.used ? ' ／ Jevで対象候補を並べ替えました' :
+      ' ／ Jev未使用：' + (reasons[data.rerank.reason] || '確認できません')) : '';
+
     return text(data.total ? '候補' : '一致する候補はありません') + (data.total ? ' ' + data.total + text('件') : '') + ' ／ ' + s.sources + text('ファイルを確認') +
       (s.limited ? text('。上限に達したため全範囲ではありません。検索語を絞ってください。') : '') +
-      (s.skipped || s.skippedRows ? text('。読取・検証できない範囲：') + (s.skipped || 0) + text('ファイル、') + (s.skippedRows || 0) + text('行（未検索）') : '');
+      (s.skipped || s.skippedRows ? text('。読取・検証できない範囲：') + (s.skipped || 0) + text('ファイル、') + (s.skippedRows || 0) + text('行（未検索）') : '') + text(jev);
   }
   async function page(version, offset = 0, delay = 50) {
     const id = job, mode = resultMode;
@@ -125,6 +132,7 @@
       if (data.status === 'running') { notice(text('検索中…') + ' ' + (data.stats.sources || 0) + text('ファイルを確認（全範囲は未完了）')); poll = setTimeout(() => page(version, offset, Math.min(delay * 2, 300)), delay); return; }
       running = false; el('stop').hidden = true;
       if (data.status !== 'done') { notice(text('検索を完了できませんでした。結果は未確定です。検索語を絞って、もう一度検索してください。')); return; }
+      if (data.rerank && typeof jevSettingsLoaded !== 'undefined') jevSettingsLoaded = false; // Refresh local usage when settings are next drawn.
       results(data, offset > 0); lastSummary = summary(data); notice(lastSummary); hasResults = true;
     } catch (e) { if (active(version)) { stop(); notice(UI.message(e.message)); el('more').disabled = false; } }
   }

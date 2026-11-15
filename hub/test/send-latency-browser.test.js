@@ -37,7 +37,7 @@ test('送信確認を受付前に描画し、成功・順番待ち・拒否で�
    window.__statusAtSubmit={text:document.querySelector('#chat-send-status').textContent,visible:!document.querySelector('#chat-send-status').hidden,busy:Boolean(chatBusy)};
   });
   const status=await page.evaluate(()=>window.__statusAtSubmit);
-  assert.equal(status.text,'送信を確認しています…');assert.equal(status.visible,true);assert.equal(status.busy,false);
+  assert.equal(status.text,'送信前の確認・受付結果を待っています…');assert.equal(status.visible,true);assert.equal(status.busy,false);
   // Wait across a paint while the server has not accepted the request.
   await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));
   assert.equal(await page.locator('#chat-send-status').isVisible(),true);

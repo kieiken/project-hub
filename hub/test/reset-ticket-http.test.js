@@ -17,7 +17,7 @@ const request=async()=>{const s=await read();return{ai:'codex',account:'default'
 test.before(async()=>{
   fs.mkdirSync(path.join(root,'Product','Fixture','.ai/tasks'),{recursive:true});fs.mkdirSync(path.join(root,'_hub'),{recursive:true});
   fs.writeFileSync(path.join(root,'Product','Fixture','PROJECT.md'),'---\nname: Fixture\nstatus: 進行中\nfolders: {}\nphases: []\n---\n');
-  fs.writeFileSync(path.join(root,'_hub','roles.yaml'),'models:\n  claude-code: [Fable 5.1, Opus 5.5]\n  codex: [GPT-6.1-Sol, Astra]\nroles: {}\nswitch:\n  auto: true\n');
+  fs.writeFileSync(path.join(root,'_hub','roles.yaml'),'models:\n  claude-code: [Fable 5.2, Opus 5.5]\n  codex: [GPT-6.1-Sol, Astra]\nroles: {}\nswitch:\n  auto: true\n');
   Object.assign(process.env,{HUB_ROOT:root,HUB_AI_HOME:path.join(tmp,'home'),HUB_DRY_RUN:'1',HUB_PORT:String(54000+Math.floor(Math.random()*1000)),PATH:'/usr/bin:/bin'});
   ({server}=require('../server'));await new Promise(r=>server.listen(Number(process.env.HUB_PORT),'127.0.0.1',r));base='http://127.0.0.1:'+server.address().port;
 });

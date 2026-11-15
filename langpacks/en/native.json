@@ -51,7 +51,5 @@
   "<p>アプリの更新が途中で止まっています。前の版を保存したまま起動を止めました。</p>": "<p>The app update stopped partway. Startup was stopped with the previous version kept.</p>",
   "<p>前の版は ${0} に残っています。Finderで［アプリケーション］へ戻してください。</p>": "<p>The previous version is kept at ${0}. Move it back to [Applications] in Finder.</p>",
   "音声入力ボタンを押した時に、話した内容を入力欄へ入れるためにマイクを使います。": "Uses the microphone to put what you say into the input box when you press the voice input button.",
-  "話した内容を日本語の文字にします。音声はAppleなどの音声認識サービスで処理される場合があります。": "Turns what you say into Japanese text. Audio may be processed by speech recognition services such as Apple's.",
-  "画面を開けません": "Cannot open the window",
-  "<p>接続先の制限を準備できませんでした。</p>": "<p>Could not prepare the connection restrictions.</p>"
+  "話した内容を日本語の文字にします。音声はAppleなどの音声認識サービスで処理される場合があります。": "Turns what you say into Japanese text. Audio may be processed by speech recognition services such as Apple's."
 }

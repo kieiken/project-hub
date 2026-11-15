@@ -1,7 +1,7 @@
 'use strict';
 
 module.exports = function model_settingsRoutes(ctx) {
-  const { send, saveCliModels, record, launch, modelView, rolesData, modelError, roles, ROLES_FILE, lt } = ctx;
+  const { send, saveCliModels, record, launch, modelView, rolesData, modelError, roles, ROLES_FILE, lt, accounts, aiTools } = ctx;
   return {
     cli: {
       matches: (req, url) => url.pathname === '/api/cli-models',
@@ -19,7 +19,14 @@ module.exports = function model_settingsRoutes(ctx) {
       handle(req, res, url, b) {
         if (url.pathname === '/api/models/hidden') {
           if (!['claude-code', 'codex', 'agy', 'grok'].includes(b.ai) || typeof b.model !== 'string' || !b.model) return send(res, 400, { error: lt('形式が違います') });
-          return send(res, 200, { ok: true, ...modelView.setHidden(b.ai, b.model, Boolean(b.hidden)) });
+          if (b.account !== undefined) {
+            try {
+              if (b.ai !== 'codex' || typeof b.account !== 'string') throw Error(lt('アカウントの指定が正しくありません'));
+              accounts.get('codex', b.account);
+              if (!aiTools.accountCatalog('codex', b.account).models.some(row => row.label === b.model)) throw Error(lt('このアカウントのモデルを一覧から選んでください'));
+            } catch (e) { return send(res, e.status || 400, { error: e.message }); }
+          }
+          return send(res, 200, { ok: true, ...modelView.setHidden(b.ai, b.model, Boolean(b.hidden), b.account) });
         }
         if (url.pathname === '/api/special-mode') {
           const r = modelView.setSpecial(b);

@@ -98,10 +98,13 @@ test('license settings show the unavailable reason and hide registration while r
 test('Windows sandbox refusal reaches the caller as a Japanese reason before workspace access or execution', () => {
   const { WorkspaceSandbox } = require('../lib/workspace-sandbox');
   const unexpected = () => assert.fail('must stop before workspace or spawn');
-  for (const name of ['win32', 'linux']) {
-    const sandbox = new WorkspaceSandbox({ readFiles: [] }, { platform: platforms.forPlatform(name), workspace: unexpected, spawn: unexpected });
+  // Windows without Codex CLI and Git for Windows: nothing on the fixture PATH, no native call.
+  const missing = () => { throw Object.assign(Error('missing'), { code: 'ENOENT' }); };
+  const windows = require('../lib/platform/win32').create({ native: { call: unexpected }, fs: { statSync: missing }, env: {} });
+  for (const platform of [windows, platforms.forPlatform('linux')]) {
+    const sandbox = new WorkspaceSandbox({ readFiles: [] }, { platform, workspace: unexpected, spawn: unexpected });
     assert.throws(() => sandbox.run('fixture'), e => e.code === 'command_sandbox_unavailable' && e.status === 403 &&
-      (name === 'win32' ? /Windowsでは未対応/.test(e.message) : e.message === 'command_sandbox_unavailable'));
+      (platform.name === 'win32' ? /Codex CLIの隔離実行/.test(e.message) : e.message === 'command_sandbox_unavailable'));
   }
 });
 

@@ -72,7 +72,7 @@ test('実機Claude session/weekly/usageは入力待ちの元AI終了後に一度
     const f = setup(); f.append({ type: 'assistant', error: 'rate_limit', isApiErrorMessage: true, message: { model: '<synthetic>', content: [{ type: 'text', text }] } });
     await f.supervisor.tick(); await f.supervisor.tick(); assert.deepEqual(f.trace, ['kill', 'handoff']);
     assert.ok(f.state.active('work', 'claude-opus-5-5'));
-    if (text.includes('session limit')) assert.ok(f.state.active('work', 'claude-fable-5-1'));
+    if (text.includes('session limit')) assert.ok(f.state.active('work', 'claude-fable-5-2'));
   }
 });
 test('実機Codex task_complete上限は同一開始印・cwdのrolloutから検知し入力待ちでも一度交代する', async () => {
@@ -97,5 +97,5 @@ test('交代先なしでも正式上限を記録し、元AIを終了/交代さ�
   f.append({ type: 'assistant', error: 'rate_limit', message: { content: [{ type: 'text', text: "You've hit your session limit · resets 3pm (Asia/Tokyo)" }] } });
   let records = 0; const record = f.state.record.bind(f.state); f.state.record = o => { records++; record(o); };
   await f.supervisor.tick(); await f.supervisor.tick(); assert.equal(records, 1); assert.deepEqual(f.trace, []); assert.equal(f.s.exited, false);
-  assert.ok(f.state.active('work', 'claude-opus-5-5')); assert.ok(f.state.active('work', 'claude-fable-5-1'));
+  assert.ok(f.state.active('work', 'claude-opus-5-5')); assert.ok(f.state.active('work', 'claude-fable-5-2'));
 });

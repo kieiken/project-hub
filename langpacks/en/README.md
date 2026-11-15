@@ -21,3 +21,7 @@ In 4.126.42, the chat send button uses the existing translations for `Send` / `S
 Known product limits: template interpolation values are not translated automatically. Some Muse status/action labels remain Japanese. Muse result toasts that call `UI.text` can use the new entries, but pending notices, saved event text and error toasts that bypass translation still show the original Japanese. The earlier send-button failure in the Traditional Chinese suite is resolved by the 4.126.42 product fix; test expectations are unchanged.
 
 For 4.126.44, six sidebar search entries were added and the compact search form uses this pack. Existing translations are preserved; verifiedWith is 4.126.44.
+
+For 4.126.96, 42 UI entries and 39 backend entries were added for screens and messages added or reworded since 4.126.44, including the new settings layout, video attachments and the data location picker. The strict UI scan and backend tests pass; verifiedWith is 4.126.96.
+
+For 4.126.98, added 94 UI and 90 backend entries for tier routing, Token units/cache hit rate/tool calls, bulk review, settings and current instructions. Tier screens and review prompts now use translation helpers. Existing translations and native entries are preserved. Automated checks do not certify every screen or packaged Mac/Windows display.

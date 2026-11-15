@@ -44,12 +44,12 @@ test('Reset alone clears only the target account models; fresh 100% can restore 
   for(const outcome of ['reset','nothingToReset','noCredit','alreadyRedeemed']) {
     let now=NOW;
     const limits=new ModelLimits(path.join(dir,outcome+'.json'),{now:()=>now});
-    limits.record({ai:'codex',model:'gpt-6.1-sol',account:'default',limitError:'limit'});limits.record({ai:'codex',model:'gpt-6.1-sol',account:'work',limitError:'limit'});limits.record({ai:'claude',model:'claude-fable-5-1'});
+    limits.record({ai:'codex',model:'gpt-6.1-sol',account:'default',limitError:'limit'});limits.record({ai:'codex',model:'gpt-6.1-sol',account:'work',limitError:'limit'});limits.record({ai:'claude',model:'claude-fable-5-2'});
     now++;
     const u=setup({now:()=>now,observe:s=>limits.observe(s),onReset:account=>{limits.clearAccount('codex',account);now++;},consume:async(file,o)=>{o.consume.beforeSend();return{outcome};}});
     await u.status();const r=await u.useReset('default',token(u),{confirmed:true});assert.equal(r.outcome,outcome);
     for(const model of ['gpt-6.1-sol','gpt-6-astra'])assert.equal(Boolean(limits.active('default',model)),outcome!=='reset');
-    assert.ok(limits.active('work','gpt-6.1-sol'));assert.ok(limits.active('default','claude-fable-5-1'));
+    assert.ok(limits.active('work','gpt-6.1-sol'));assert.ok(limits.active('default','claude-fable-5-2'));
     if(outcome==='reset') {now+=31000;u.read=async(ai,file,{account})=>{const d=data(account);d.rateLimits.primary.usedPercent=100;return d;};await u.status(true);assert.ok(limits.active('default','gpt-6.1-sol'));}
   }
 });

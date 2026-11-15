@@ -138,7 +138,7 @@ test('Chinese prompts keep the model rules, compressed rule file and path refere
   const project = store.readProject('日本語名稱');
   const task = project.tasks[0];
   const prompt = taskPrompt(project, task, store.taskFile(project.id, task.id), project.dir);
-  assert.match(prompt, /不要(?:自行)?在背景啟動 codex/);
+  assert.match(prompt, /(?:不要(?:自行)?|不得)在背景啟動 codex/);
   assert.match(prompt, /目前自動切換已關閉/);
   assert.match(prompt, /指揮＝Codex/);
   assert.ok(!prompt.includes('undefined＝'));
@@ -153,7 +153,7 @@ test('Chinese prompts keep the model rules, compressed rule file and path refere
   const resumed = instructions.select(prompt, { ai: 'codex', sid: 'test', resume: true, meta: { rulesSent: { codex: { sid: 'test', hash: part.hash, turns: 1 } } } });
   assert.equal(resumed.short, true);
   assert.match(resumed.prefix, /完整內容：台帳/);
-  assert.match(full, /## 請使用者複製後傳送的文字/);
+  assert.match(full, /## 要讓人複製的文字與位置/);
   for (const text of [full, part.fixed, resumed.fixed]) {
     assert.ok(text.includes(instructions.SEND_TEXT_RULE));
     assert.match(text, /只將本文放入獨立的 ```text 區塊/);

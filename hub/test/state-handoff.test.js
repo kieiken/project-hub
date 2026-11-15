@@ -93,7 +93,8 @@ test.before(async () => {
   const file = require.resolve('../server');
   licenseModule.License = HandoffLicense;
   const interval=global.setInterval;
-  global.setInterval=(fn,ms,...args)=>{if(ms===15000&&String(fn).includes('maintainEnabled'))bodyTick=fn;return interval(fn,ms,...args);};
+  // Tests invoke this callback explicitly; a real tick could overlap a mocked permit.
+  global.setInterval=(fn,ms,...args)=>{if(ms===15000&&String(fn).includes('maintainEnabled')){bodyTick=fn;return interval(()=>{},ms);}return interval(fn,ms,...args);};
   try {
     if (process.env.HUB_PERF_BASELINE_FILE) {
       // Measurement only: compile the unchanged old state branch beside the new

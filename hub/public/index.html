@@ -48,7 +48,7 @@
 </section>
 </template>
 
-<div class="mobile-information"><button id="mobile-info" class="mobile-strip" type="button" aria-label="情報と操作を開く" aria-expanded="false" aria-controls="mobile-work-info" data-ui>▼</button><span id="mobile-badges"></span></div>
+<div class="mobile-information"><button id="mobile-info" class="mobile-strip" type="button" aria-label="情報と操作を開く" aria-expanded="false" aria-controls="mobile-work-info" data-ui>▼</button><span id="mobile-badges"></span><span id="mobile-unfinished"></span></div>
 <div class="app">
   <nav class="list" id="list" aria-label="プロジェクトと作業" data-ui></nav>
   <div class="sidebar-resize" id="sidebar-resize" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="list" aria-valuemin="180" aria-valuemax="480" aria-valuenow="240" aria-label="プロジェクト一覧の幅を調整" title="ドラッグまたは左右キーで一覧の幅を調整" data-ui></div>
@@ -75,6 +75,7 @@
 <script src="model-order.js"></script>
 <script src="special-mode.js"></script>
 <script src="role-settings.js"></script>
+<script src="role-tiers.js"></script>
 <script src="speech-input.js"></script>
 <script src="ideas.js"></script>
 <link rel="stylesheet" href="extensions-ui.css">
@@ -89,7 +90,9 @@
 <script src="app-chat.js"></script>
 <script src="app-terminal.js"></script>
 <script src="app-settings-ai.js"></script>
+<script src="app-settings-layout.js"></script>
 <script src="app-settings.js"></script>
+<script src="app-token-usage.js"></script>
 <script src="app-actions.js"></script>
 <script src="app.js"></script>
 <script src="conversation-search.js"></script>

@@ -157,7 +157,7 @@ test('Gemini role validation pins model and high effort, saves only roles and te
     }
     const instructions = require('../lib/instructions');
     assert.match(instructions.templates({roles:[...data.roles,{name:'コーディング',main:{ai:'agy',model:model.label,effort:'高'}}]}), /agy・gemini-3.1-pro-high/);
-    const defaults={roles:[{name:'チェック',main:{ai:'claude-code',model:'Fable 5.1'}},{name:'コーディング',main:{ai:'codex',model:'GPT-6.1-Sol'}}]};
+    const defaults={roles:[{name:'チェック',main:{ai:'claude-code',model:'Fable 5.2'}},{name:'コーディング',main:{ai:'codex',model:'GPT-6.1-Sol'}}]};
     assert.equal(instructions.templates(defaults),instructions.TEMPLATES);
   } finally { roles.setModelCatalog({}); fs.rmSync(root,{recursive:true,force:true}); }
 });

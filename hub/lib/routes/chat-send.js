@@ -1,14 +1,18 @@
 'use strict';
 
 module.exports = function chatsendRoutes(ctx) {
-  const { DELEGATE_COMPLETED_ERROR, assertWorkspaceIdle, chat, chatEnded, chats, getDiscussion, extensions, freetalk, freetalkAttachments, fs, holdStoppedQueue, getIdeaDispatch, ideas, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, lt, modelError, modelPolicy, modelView, permCmd, pickSpec, queueActions, queueEdit, queueEditable, record, startCreditCheck, refreshLimitEvidence, removalReview, reqCtx, requestAccount, roles, rolesData, send, sessions, specialMode, start, startDir, stopControl, store, taskHistory, taskPrompt, verifyIntegrationReviewSend, getWebchat, webchatActive } = ctx;
+  const { DELEGATE_COMPLETED_ERROR, assertWorkspaceIdle, chat, chatEnded, chats, getDiscussion, extensions, freetalk, freetalkAttachments, projectAttachments, fs, holdStoppedQueue, getIdeaDispatch, ideas, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, lt, modelError, modelPolicy, modelView, permCmd, pickSpec, queueActions, queueEdit, queueEditable, record, startCreditCheck, refreshLimitEvidence, removalReview, reqCtx, requestAccount, roles, rolesData, send: respond, sessions, specialMode, start, startDir, stopControl, store, taskHistory, taskPrompt, verifyIntegrationReviewSend, getWebchat, webchatActive } = ctx;
 
   async function handleSend(req, res, url, b) {
+      const timing = require('../send-timing').sendTiming(record, b);
+      const send = (res, code, body) => { timing.response(code); return respond(res, code, body); };
+      try {
       const snapshot=reqCtx.getStore().stopSnapshot;
       let stopTicket={epoch:snapshot.epoch,task:snapshot.tasks[JSON.stringify([b.project,b.task])]?.epoch||0},manualResume=false;
       try{stopControl.assert(b,stopTicket);}catch(e){
         try{
-          if(b.fromQueue||b.mode||b.automation||!b.manualStopTicket||b.manualStopTicket.epoch!==stopTicket.epoch||b.manualStopTicket.task!==stopTicket.task)throw e;
+          if(b.fromQueue||b.mode||b.automation||!b.manualStopTicket)throw e;
+          if(b.manualStopTicket.epoch!==stopTicket.epoch||b.manualStopTicket.task!==stopTicket.task)throw Error('停止状態が更新されています。画面を読み直し、内容を確認してもう一度送ってください');
           stopControl.checkManual(b,stopTicket);manualResume=true;reqCtx.getStore().manualResume={project:b.project,task:b.task,ticket:stopTicket};
         }catch(refused){return send(res,409,{error:refused.message});}
       }
@@ -77,7 +81,7 @@ module.exports = function chatsendRoutes(ctx) {
         catch(e){record('question-display-record-error',{project:p.id,task:b.task},{error:e.message});}
       };
       if (b.ai === 'chatgpt' && b.model === 'auto') {
-        if (b.fromQueue || b.mode || b.images?.length) return send(res, 400, { error: lt('自動Chatへの依頼は本文だけを送ってください。画像は添付できません') });
+        if (b.fromQueue || b.mode || b.images?.length || b.attachmentDraft?.attachments?.some(a=>a.media==='video'||/^[a-f\d-]{36}$/i.test(a.id||''))) return send(res, 400, { error: lt('自動Chatへの依頼は本文だけを送ってください。画像は添付できません') });
         try {
           const t = store.readTask(file), answerQuestion = typeof b.answerQuestion === 'string' ? b.answerQuestion : t.question;
           await chats.withStrictHandoff(()=>(getWebchat()).availability(p,t));await resumeManual();
@@ -104,13 +108,15 @@ module.exports = function chatsendRoutes(ctx) {
       const spec = pickSpec(t, b.ai);
       const account = requestAccount(p, t.id, b.ai, b.account);
       const model = launch.modelLabel(b.ai, b.model || spec.model);
-      const invalidModel = modelError(b.ai, model);
+      const invalidModel = modelError(b.ai, model, account);
       if (invalidModel) return send(res, 409, { error: invalidModel });
       // Only a direct, idle send overlaps the first unchanged handoff scan.
       // Queue/replacement/manual-resume paths retain their existing preflight.
       const earlyCreditCheck = !fromQueue && !b.mode && !manualResume && !chats.busy(p.id, b.task)
         ? startCreditCheck({ project: p.id, task: t.id, role: t.role, ai: b.ai, account, model }) : undefined;
+      timing.mark('validated');
       try{await chats.assertHandoffReadyAsync(p.id,b.task);if(!manualResume)stopControl.assert(b,stopTicket);}catch(e){return send(res,409,{error:e.message,delivery:'not-sent'});}
+      timing.mark('handoffReady');
       const busy = chats.busy(p.id, b.task);
       // redo: 取り消してやり直す ／ amend: 追加説明（一緒にやる）／ queue: 終わったら次に（interrupt は前の呼び名）
       const want = b.mode === 'interrupt' ? 'redo' : b.mode;
@@ -120,17 +126,18 @@ module.exports = function chatsendRoutes(ctx) {
       if(fromQueue){try{verifyIntegrationReviewSend({...fromQueue,project:p.id,task:t.id,request:fromQueue.id,mode:'queued'});}catch(e){return send(res,409,{error:e.message});}}
       const { dir, note } = fromQueue?.isolatedReview ? (assertWorkspaceIdle(p,t,Boolean(mode)),{dir:isolatedReviewDir(p,t)}) : startDir(p, t, Boolean(mode));
       if (b.ai === 'grok' && b.effort === 'Ultra') return send(res, 400, { error: lt('Grok の思考は 中・高・極高・MAX です') });
-      const effort = fromQueue?.integrationAssignment ? fromQueue.effort : b.ai === 'agy' ? '高' : roles.EFFORTS.includes(b.effort) ? b.effort : spec.effort;
+      const effort = launch.normalizeEffort(b.ai, fromQueue?.delegationEffort || fromQueue?.integrationAssignment ? fromQueue.effort : b.ai === 'agy' ? '高' : roles.EFFORTS.includes(b.effort) ? b.effort : spec.effort);
       let topicImages=[];
       if(p.kind==='freetalk' && !fromQueue && b.images?.length) {
         try { freetalk.checkGeneration(t.id,b.generation);topicImages=freetalkAttachments.images(t.id,b.images); }
         catch(e){return send(res,409,{error:e.message});}
       }
       let attachmentDraft;
-      try { attachmentDraft = fromQueue?.attachmentDraft || queueEdit.accept(p, t.id, b.attachmentDraft, text, freetalkAttachments); }
+      try { attachmentDraft = fromQueue?.attachmentDraft || queueEdit.accept(p, t.id, b.attachmentDraft, text, freetalkAttachments, projectAttachments); }
       catch (e) { return send(res, 400, { error: e.message }); }
       const basePrompt = fromQueue?.isolatedReview?integrationReviewPrompt(p,t):taskPrompt(p, t, file, dir, 'chat', undefined, fromQueue || {}) + lt(' ここは会話画面。人からの依頼に答え、区切りで作業ファイルを更新すること。');
       await resumeManual();
+      timing.mark('prepared');
       // 受付時の質問だけを消す。起動待ち中に来た新しい質問には触れない。
       const answerQuestion = typeof b.answerQuestion === 'string' ? b.answerQuestion : t.question;
       const acceptAnswer = () => {
@@ -145,9 +152,16 @@ module.exports = function chatsendRoutes(ctx) {
         if(!Array.isArray(b.projectImages)||b.projectImages.length>10)return send(res,400,{error:'添付画像の情報を確認してください'});
         try{projectImages=b.projectImages.map(id=>{const f=start.imageFile(p,id);if(!fs.existsSync(f))throw Error('添付画像が見つかりません');return id;});}catch(e){return send(res,400,{error:e.message});}
       }
+      if(p.kind!=='freetalk') {
+        try {
+          topicImages=fromQueue?.images || queueEdit.imagePaths(attachmentDraft?.attachments || []);
+          // Keep the existing image-only client compatible; videos always use trusted task descriptors.
+          if(!fromQueue && !attachmentDraft && projectImages)topicImages=projectImages.map(id=>start.imageFile(p,id,true));
+        } catch(e) { return send(res,400,{error:e.message}); }
+      }
       // 追加：今の作業が終わったら続けて行う
       if (mode === 'queue') {
-        const it = chats.enqueue(p.id, t.id, { ai: b.ai, account, model, effort, role: t.role, text, attachmentDraft, ...(projectImages?{projectImages}:{}), images: p.kind==='freetalk' ? topicImages : [], perm: permCmd(b.ai) });
+        const it = chats.enqueue(p.id, t.id, { ai: b.ai, account, model, effort, role: t.role, text, attachmentDraft, ...(projectImages?{projectImages}:{}), images: topicImages, perm: permCmd(b.ai) });
         if (p.kind === 'freetalk') freetalk.nameTopic(t.id, text);
         record('chatqueue', { project: p.id, task: t.id, ai: b.ai }, { model });
         return send(res, 200, { ok: true, queued: true, id: it.id, queue: chats.queue(p.id, t.id).length, answeredQuestion: acceptAnswer() });
@@ -172,7 +186,7 @@ module.exports = function chatsendRoutes(ctx) {
         const onEnd = row => { if (!fromQueue?.isolatedReview && row.asks && row.asks.length) store.updateTask(p.id, t.id, { state: '返事待ち', question: row.asks.map(a => a.question).filter(Boolean).join(' / ').slice(0, 300) || lt('選んでください') }); chatEnded(p.id, t.id); };
         let replacement;
         if (busy?.pending && (mode === 'redo' || mode === 'amend')) {
-          replacement = chats.replacePending(p.id, t.id, text, mode, p.kind === 'freetalk' ? topicImages : undefined);
+          replacement = chats.replacePending(p.id, t.id, text, mode, topicImages);
           await replacement.finished;
           stopControl.assert({project:p.id,task:t.id},stopTicket);
         }
@@ -182,13 +196,16 @@ module.exports = function chatsendRoutes(ctx) {
           refreshCreditBeforeStart = await refreshLimitEvidence({ project: p.id, task: t.id, role: t.role, ai: b.ai, account, model }, earlyCreditCheck);
           if(p.kind==='freetalk' && b.images?.length)freetalk.checkGeneration(t.id,b.generation);
           if ((chats.stops.get(chats.key(p.id, t.id)) || 0) !== stopVersion) throw Error(lt('利用枠の確認中に停止されました。AIは開始していません'));
+          timing.mark('quotaReady');
         }
-        const options={ refreshCreditBeforeStart, stopTicket, project: p.id, task: t.id, pdir: p.dir, dir, ai: b.ai, account, model, effort, origin: fromQueue?.origin, readIndex: fromQueue?.readIndex, integrationAssignment:fromQueue?.integrationAssignment, limitPolicy:fromQueue?.limitPolicy, isolatedReview:fromQueue?.isolatedReview, integrationReviewRequest:fromQueue?.integrationReviewRequest, readOnly:fromQueue?.readOnly, readDirs:fromQueue?.readDirs, images: p.kind==='freetalk' && b.ai==='codex' ? fromQueue?.images || topicImages : [], role: fromQueue ? fromQueue.role || '' : t.role, limitSlot: fromQueue?.limitSlot, limitSwitch: fromQueue?.limitSwitch, request: fromQueue?.id||stopWaiting?.id, requireModel: Boolean(fromQueue?.requireModel), requiredModel: fromQueue?.requiredModel, text, shown: amendQueue ? text : fromQueue?.shown || text, mode: mode || (fromQueue ? 'queued' : undefined), basePrompt, policy: modelPolicy(p, t), perm: permCmd(b.ai), onEnd };
+        const options={ refreshCreditBeforeStart, stopTicket, project: p.id, task: t.id, pdir: p.dir, dir, ai: b.ai, account, model, effort, origin: fromQueue?.origin, delegationEffort: fromQueue?.delegationEffort, readIndex: fromQueue?.readIndex, integrationAssignment:fromQueue?.integrationAssignment, limitPolicy:fromQueue?.limitPolicy, isolatedReview:fromQueue?.isolatedReview, integrationReviewRequest:fromQueue?.integrationReviewRequest, readOnly:fromQueue?.readOnly, readDirs:fromQueue?.readDirs, images: b.ai==='codex' ? fromQueue?.images || topicImages : [], role: fromQueue ? fromQueue.role || '' : t.role, limitSlot: fromQueue?.limitSlot, limitSwitch: fromQueue?.limitSwitch, request: fromQueue?.id||stopWaiting?.id, requireModel: Boolean(fromQueue?.requireModel), requiredModel: fromQueue?.requiredModel, text, shown: amendQueue ? text : fromQueue?.shown || text, mode: mode || (fromQueue ? 'queued' : undefined), basePrompt, policy: modelPolicy(p, t), perm: permCmd(b.ai), onEnd };
         const r = switchAdvance ? await chats.launchAdvance({...switchAdvance,liveRun:busy},options) : replacement
           ? await chats.sendQueued(replacement.options)
           : await (fromQueue ? chats.sendQueued.bind(chats) : chats.send.bind(chats))(options);
         if(!r)throw Error('待ち指示は取り消されました。中断した依頼の記録を確認してください');
+        timing.mark('admitted');
         if (!(await r.started)) throw Error(lt('AIを起動できませんでした。CLIの導入状態を確認してください。作業の状態と質問は変更していません'));
+        timing.mark('spawned');
         if (p.kind === 'freetalk') freetalk.nameTopic(t.id, text);
         const answeredQuestion = delegated || fromQueue?.isolatedReview ? null : acceptAnswer();
         if (delegated && !fromQueue?.isolatedReview) {
@@ -204,6 +221,7 @@ module.exports = function chatsendRoutes(ctx) {
         return send(res, 200, { ok: true, model: r.model, effort: r.effort, note: r.limitSwitch?.preflight ? lt`${r.limitSwitch.from} 上限保持中のため ${r.model} で開始しました。` : note, resume: r.resume, answeredQuestion });
       } catch (e) { return send(res, 409, { error: String(e.message || e),...(stopWaiting?{queued:true,id:stopWaiting.id}:{}) }); }
       } finally { if (fromQueue) queueActions.delete(queueKey); }
+      } finally { timing.finish(); }
     }
 
   return {

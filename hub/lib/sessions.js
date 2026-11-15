@@ -6,7 +6,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const platforms = require('./platform');
-const { childEnv, accountEnv, agyAccountError, exeArgv } = require('./launch');
+const { childEnv, accountEnv, agyAccountError, resolveCli } = require('./launch');
 
 let pty = null;
 try { pty = require('node-pty'); } catch (e) { pty = null; }
@@ -65,7 +65,7 @@ class Sessions {
     let proc;
     const gateOptions={project,task,ai,dir};this.startGate?.(gateOptions);
     try {
-      const argv = exeArgv(exe, args); // Windows の npm シム（.cmd）は本体に展開する
+      const argv = resolveCli(exe, args, fullEnv, ai); // Windows の npm シム（.cmd）は本体に展開する
       proc = this.pty.spawn(argv.file, argv.args, { name: 'xterm-256color', cols: cols || 100, rows: rows || 30, cwd: dir, env: fullEnv });
     } catch (e) {
       this.endGate?.(gateOptions);

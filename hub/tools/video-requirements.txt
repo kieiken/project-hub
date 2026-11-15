@@ -1,0 +1,3 @@
+# Choose only the backend supported on this platform. Models are not installed here.
+mlx-whisper==0.4.3 ; sys_platform == "darwin" and (platform_machine == "arm64" or platform_machine == "aarch64")
+faster-whisper==1.2.1 ; sys_platform != "darwin" or (platform_machine != "arm64" and platform_machine != "aarch64")

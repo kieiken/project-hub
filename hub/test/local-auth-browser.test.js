@@ -29,3 +29,22 @@ test('remote iPhone login, absent and expired local sessions receive no local ca
   assert.equal(b.context.HubLocalAuth.url('/api/chat/stream'),'/api/chat/stream');
  }
 });
+test('native reconnect hint survives expiry without extending credentials or enabling browser/remote recovery',async()=>{
+ const expired={token:'a'.repeat(64),expires:Date.now()-1,reconnect:true};
+ const a=browser('http://127.0.0.1:4545',expired);
+ assert.equal(a.context.HubLocalAuth.canReconnect,true);
+ await a.context.fetch('/api/state');assert.equal(a.calls[0].options,undefined);
+ for(const b of [browser(),browser('https://hub.tailnet.ts.net',expired),browser('http://127.0.0.1:4545',null)]) assert.equal(b.context.HubLocalAuth.canReconnect,false);
+});
+test('local mutation count protects uploads and drops back to zero after response or rejection without retrying',async()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../public/local-auth.js'),'utf8');
+ let finish,fail,calls=0;
+ const context={URL,Headers,Date,location:new URL('http://127.0.0.1:4545/'),sessionStorage:{getItem:()=>null},fetch:()=>{calls++;return new Promise((resolve,reject)=>{finish=resolve;fail=reject;});}};
+ context.window=context;vm.runInNewContext(source,context);
+ const p=context.fetch('/api/upload',{method:'POST',body:'file'});
+ assert.equal(context.HubLocalAuth.pendingWrites,1);finish({status:401});await p;
+ assert.equal(context.HubLocalAuth.pendingWrites,0);assert.equal(calls,1);
+ const q=context.fetch({url:'http://127.0.0.1:4545/api/upload',method:'POST'});
+ assert.equal(context.HubLocalAuth.pendingWrites,1);fail(Error('network'));await assert.rejects(q,/network/);
+ assert.equal(context.HubLocalAuth.pendingWrites,0);assert.equal(calls,2);
+});

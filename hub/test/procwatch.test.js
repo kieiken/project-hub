@@ -114,3 +114,32 @@ test('scan on linux reads /proc cwd',async()=>{
  assert.deepEqual(l.map(x=>[x.pid,x.ai,x.project]),[[2001,'codex','p1'],[2002,'codex','p1'],[2003,'claude',null]]);
  assert.equal(l[2].cwd,'');
 });
+
+test('Windows background watcher never enumerates native processes, including direct scan',async()=>{
+ let calls=0;const logs=[];
+ const platformApi={name:'win32',listProcesses:async()=>{calls++;return [];}};
+ const w=pw.create({platformApi,log:m=>logs.push(m)});
+ try {
+  w.start();w.start();
+  assert.deepEqual(await w.scan(),[]);
+  assert.deepEqual(await w.scan(),[]);
+  assert.equal(calls,0);
+  assert.ok(logs.length>0);
+  assert.ok(logs.every(m=>m.includes('Windows')));
+  assert.equal(w.hasAncestor(123,()=>true),false);
+ } finally {w.stop();}
+});
+
+test('Windows adapter passed through platform option also disables the watcher',async()=>{
+ let calls=0;
+ const w=pw.create({platform:{name:'win32',listProcesses:async()=>{calls++;return [];}},log:()=>{}});
+ try {w.start();await w.scan();assert.equal(calls,0);} finally {w.stop();}
+});
+
+test('supported platform adapters continue to scan when background watcher starts',async()=>{
+ for(const name of ['darwin','linux']) {
+  let calls=0;
+  const w=pw.create({platformApi:{name,listProcesses:async()=>{calls++;return [];}},log:()=>{}});
+  try {w.start();w.start();await Promise.resolve();assert.equal(calls,1);} finally {w.stop();}
+ }
+});

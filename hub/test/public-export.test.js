@@ -4,6 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const { excluded, selected, inspect } = require('../../scripts/export-public');
 const entry = (name, text) => ({ name, content: Buffer.from(text) });
+const introductionNames = ['README.en.md',
+  'docs/screenshots/conversation-v4.126.85-usage.png', 'docs/screenshots/queued-instructions-v4.126.85-usage.png',
+  'docs/project-hub/structure-map-v2-reader-ja.png', 'docs/project-hub/structure-map-v2-reader-en.png', 'docs/project-hub/structure-map-v2-reader-zh-TW.png'];
 const publicNames = ['README.zh-TW.md', 'CONTRIBUTING.zh-TW.md', 'THIRD_PARTY_NOTICES.zh-TW.md',
   'docs/idea-ledger.md', 'docs/idea-ledger-verification.md',
   '.github/PULL_REQUEST_TEMPLATE/zh-TW.md', '.github/workflows/macos-app.yml'];
@@ -136,11 +139,22 @@ test('A committed new-language folder exports only pack data and repository test
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const write = (name, value) => { const file = path.join(directory, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
   const source = path.resolve(__dirname, '../..');
-  for (const name of [...publicNames.filter(name => !name.startsWith('.github/PULL')), 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
+  for (const name of [...introductionNames, ...publicNames.filter(name => !name.startsWith('.github/PULL')), 'README.md', 'CONTRIBUTING.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
     'scripts/export-public.js', 'scripts/public.gitignore', '.github/ISSUE_TEMPLATE/feedback.md', '.github/ISSUE_TEMPLATE/bug_report.md', '.github/ISSUE_TEMPLATE/config.yml',
     '.github/pull_request_template.md', 'hub/package.json', 'hub/CHANGELOG.md', 'hub/server.js', 'hub/mcp.js', 'hub/public/index.html', 'hub/lib/langpack.js', 'hub/lib/locale.js', 'hub/lib/version-check.js']) {
     write(name, fs.readFileSync(path.join(source, name)));
   }
+  for (const readme of ['README.md', 'README.en.md', 'README.zh-TW.md']) {
+    const md = fs.readFileSync(path.join(source, readme), 'utf8');
+    for (const m of md.matchAll(/\]\(([^)]+)\)/g)) {
+      const target = m[1].split('#')[0];
+      if (target && !/^[a-z]+:/.test(target)) write(target, fs.readFileSync(path.join(source, target)));
+    }
+  }
+  // This documentation-only fixture represents the published source, not the unreleased app.
+  const fixtureVersion = fs.readFileSync(path.join(source, 'README.md'), 'utf8').match(/^ソース版：(\d+\.\d+\.\d+)（/m)[1];
+  const fixturePackage = JSON.parse(fs.readFileSync(path.join(source, 'hub/package.json'), 'utf8'));
+  fixturePackage.version = fixtureVersion; write('hub/package.json', JSON.stringify(fixturePackage));
   write('langpacks/en/pack.json', JSON.stringify({ id: 'en', name: 'Test English', verifiedWith: '4.109.1', dateLocale: 'en-US' }));
   write('langpacks/en/ui.json', '{}'); write('langpacks/en/backend.json', '{"messages":{},"labels":{}}');
   write('langpacks/en/docs/README.md', 'Test documentation'); write('langpacks/en/templates/project/.ai/rules.md', 'Test rules');
@@ -152,7 +166,22 @@ test('A committed new-language folder exports only pack data and repository test
   const result = execFileSync(process.execPath, ['scripts/export-public.js'], { cwd: directory, encoding: 'utf8', timeout: 30000 });
   assert.match(result, /inspection: 0 findings/);
   const output = path.join(directory, 'public-release/ProjectHub');
+  for (const name of introductionNames) assert.ok(fs.existsSync(path.join(output, name)), name);
+  for (const readme of ['README.md', 'README.en.md', 'README.zh-TW.md']) {
+    for (const m of fs.readFileSync(path.join(output, readme), 'utf8').matchAll(/\]\(([^)]+)\)/g)) {
+      const target = m[1].split('#')[0];
+      if (target && !/^[a-z]+:/.test(target)) assert.ok(fs.existsSync(path.join(output, target)), readme + ': ' + target);
+    }
+  }
   for (const name of ['pack.json', 'ui.json', 'backend.json', 'docs/README.md', 'templates/project/.ai/rules.md', 'test/fixture.test.js']) assert.ok(fs.existsSync(path.join(output, 'langpacks/en', name)), name);
   for (const name of ['ui.css', 'install.js', 'docs/theme.js']) assert.equal(fs.existsSync(path.join(output, 'langpacks/en', name)), false, name);
   assert.equal(fs.existsSync(path.join(output, 'langpacks/fr')), false);
+});
+
+ test('Trilingual introduction overlay includes its exact assets without changing source selection', () => {
+  for (const name of introductionNames) { assert.equal(selected(name, true), true, name); assert.equal(excluded(name), false, name); }
+  for (const name of ['docs/project-hub/structure-map-v2-model.mjs', 'docs/project-hub/structure-map-v2-build.mjs',
+    'docs/project-hub/structure-map-v2-localize.mjs', 'docs/project-hub/structure-map-v2-reader-ja.svg',
+    'docs/project-hub/structure-map-v2-engineering-zh-TW.png', 'docs/screenshots/unreviewed.png']) assert.equal(selected(name, true), false, name);
+  assert.equal(selected('hub/server.js', true), false);
 });

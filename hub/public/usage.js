@@ -66,8 +66,28 @@ function usageCreditBalance(value) {
   const tenths = BigInt(whole) * 10n + BigInt(fraction[0] || '0') + (fraction[1] >= '5' ? 1n : 0n);
   return (tenths / 10n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + (tenths % 10n).toString();
 }
+function usageClaudeExtra(provider) {
+  const extra = provider?.extraUsage;
+  if (provider?.status !== 'ok') return '';
+  if (typeof extra?.is_enabled !== 'boolean') return '';
+  const unavailable = extra.is_enabled === false ? UI.text('追加利用：今は使えません') : '';
+  if (typeof extra.currency !== 'string' || extra.currency.length !== 3 || !/^[A-Z]{3}$/.test(extra.currency) ||
+      ![extra.used_credits, extra.monthly_limit].every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0)) return unavailable;
+  try {
+    // Claude Code get_usage defines amounts in currency minor units (USD cents).
+    // Unknown codes must not inherit Intl's default of two decimal places.
+    if (typeof Intl.supportedValuesOf !== 'function' || !Intl.supportedValuesOf('currency').includes(extra.currency)) return unavailable;
+    const money = new Intl.NumberFormat(UI.dateLocale, { style: 'currency', currency: extra.currency, currencyDisplay: 'code' });
+    const unit = 10 ** money.resolvedOptions().maximumFractionDigits;
+    if (extra.is_enabled === false) return UI.template`追加利用：今は使えません（今月 ${money.format(extra.used_credits / unit)} / 上限 ${money.format(extra.monthly_limit / unit)}）`;
+    return UI.template`追加利用：今月 ${money.format(extra.used_credits / unit)} / 上限 ${money.format(extra.monthly_limit / unit)}`;
+  } catch { return unavailable; }
+}
 function usageExtras(ai, provider, now = Date.now()) {
-  if (ai === 'claude') return UI.html('<div class="usage-extras"><p>リセットチケットはClaudeの設定画面で確認・使用できます。</p><p><a class="btn plain usage-reset-link" href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer">利用状況を開く</a></p><p class="small">ブラウザーのアカウントを確認してください。使用後はHubで再確認し、必要なら上限の保持を解除してください。</p></div>');
+  if (ai === 'claude') {
+    const extra = usageClaudeExtra(provider);
+    return UI.template`<div class="usage-extras">${extra ? `<p>${esc(extra)}</p>` : ''}${UI.html('<p>リセットチケットはClaudeの設定画面で確認・使用できます。</p><p><a class="btn plain usage-reset-link" href="https://claude.ai/settings/usage" target="_blank" rel="noopener noreferrer">利用状況を開く</a></p><p class="small">ブラウザーのアカウントを確認してください。使用後はHubで再確認し、必要なら上限の保持を解除してください。</p>')}</div>`;
+  }
   if (ai !== 'codex') return '';
   const lines = [], reset = provider.resetCredits, credits = provider.credits;
   const account = provider.account || 'default', busy = usageResetBusy.has(account);
@@ -79,11 +99,13 @@ function usageExtras(ai, provider, now = Date.now()) {
     return UI.template`<p class="usage-reset-row"><span>${esc(title)}</span> <button class="btn plain" type="button" data-reset-account="${esc(account)}" data-reset-token="${esc(action.token)}" data-reset-retry="${action.retry === true}"${usageResetBusy.size || usageClearing || usageLoading || stale || expired || usageResetUncertain.has(action.token) ? ' disabled' : ''}>${UI.text(action.retry ? 'もう一度確認して使う' : '使う')}</button></p>`;
   };
   if (reset?.count > 0) {
-    const details = (reset.items || []).map(item => UI.template`${item.title}・期限 ${usageDate(item.expiresAt)}`).join('／');
-    lines.push(UI.template`リセットチケット：${reset.count}枚${details ? `（${details}）` : ''}`);
+    lines.push(UI.template`リセットチケット：${reset.count}枚`);
     for (const item of reset.items || []) {
-      if (item.action) controls.push(button(item.action, item.title, item.expiresAt));
-      else if (item.expiresAt && Date.parse(item.expiresAt) <= now) controls.push(UI.html('<p class="small">期限切れのチケットは使えません。</p>'));
+      // Each ticket keeps its own expiry beside its own button.
+      const label = UI.template`${item.title}・期限 ${usageDate(item.expiresAt)}`;
+      if (item.action) controls.push(button(item.action, label, item.expiresAt));
+      else controls.push(UI.template`<p class="usage-reset-row"><span>${esc(label)}</span></p>`);
+      if (!item.action && item.expiresAt && Date.parse(item.expiresAt) <= now) controls.push(UI.html('<p class="small">期限切れのチケットは使えません。</p>'));
     }
     if (reset.action) controls.push(button(reset.action, UI.text('無料チケットを1枚使う'), null));
   }
@@ -113,7 +135,7 @@ function creditExceptionHtml(p,e){
 function usageHtml(data, now = Date.now()) {
   const state = data?.fableLimit;
   const held = state?.hold && (state.until === null || Date.parse(state.until) > now);
-  const legacyNote = held ? UI.template`<p class="note">Fable 5.1 上限中・${state.until === null ? UI.text('解除日時不明・手動で解除するまで Astra') : esc(usageDate(state.until)) + UI.text('まで（自動で Astra へ）')} <button id="usage-fable-clear" type="button"${usageClearing ? ' disabled' : ''}>Fableに戻す</button></p>` : '';
+  const legacyNote = held ? UI.template`<p class="note">Fable 5.2 上限中・${state.until === null ? UI.text('解除日時不明・手動で解除するまで Astra') : esc(usageDate(state.until)) + UI.text('まで（自動で Astra へ）')} <button id="usage-fable-clear" type="button"${usageClearing ? ' disabled' : ''}>Fableに戻す</button></p>` : '';
   const limitNote = Array.isArray(data?.limits) ? data.limits.filter(e => e.hold && (e.until === null || Date.parse(e.until) > now)).map(e => UI.template`<p class="note">${esc(e.model)}・${esc(e.account)} ${UI.text('上限保持中')}${e.creditPriority === true ? '・' + UI.text('既存クレジットを優先中') : ''}・${e.until === null ? UI.text('解除日時不明') : esc(usageDate(e.until))} <button type="button" data-limit-ai="${esc(e.ai)}" data-limit-model="${esc(e.model)}" data-limit-account="${esc(e.account)}"${usageClearing ? ' disabled' : ''}>${UI.text('保持を解除')}</button></p>`).join('') + (data.limits.length ? UI.template`<p class="small">${data.limits.some(e => e.creditPriority === true) ? UI.text('クレジット優先中の担当は継続します。残高を確認できなくなったら保存した交代先へ、両側上限なら待機します。') : UI.text('保存した役割分担に従って交代します。両方が上限中なら待機します。')}</p>` : '') : legacyNote;
   const providers = Array.isArray(data?.accountProviders) ? data.accountProviders : Object.entries(data?.providers || {}).map(([ai,p]) => ({ ai, ...p }));
   if (!providers.length) return limitNote + UI.template`<p class="note">${data ? UI.text('表示できるログイン中のアカウントはありません。') : UI.text('確認中…')}</p>`;

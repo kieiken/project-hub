@@ -24,3 +24,13 @@ test('繁体字のチケット操作とClaude案内を翻訳し、アカウン�
   const expired=a.c.usageExtras('codex',{...p,resetCredits:{count:1,items:[{title:'Expired',expiresAt:new Date(NOW-1).toISOString()}]}},NOW);
   assert.match(expired,/已過期的票券無法使用/);
 });
+test('Claude追加利用は本月の金額と上限・利用できない状態を繁体字で表示する',()=>{
+  const a=app('zh-TW'),p={status:'ok',extraUsage:{is_enabled:true,used_credits:1234,monthly_limit:5000,currency:'USD'}};
+  const html=a.c.usageExtras('claude',p,NOW);
+  assert.match(html,/額外用量：本月 USD\s*12\.34 \/ 上限 USD\s*50\.00/);
+  assert.doesNotMatch(html,/追加利用|今月/);
+  const disabled=a.c.usageExtras('claude',{...p,extraUsage:{...p.extraUsage,is_enabled:false}},NOW);
+  assert.match(disabled,/額外用量：目前無法使用（本月 USD\s*12\.34 \/ 上限 USD\s*50\.00）/);
+  const missing=a.c.usageExtras('claude',{...p,extraUsage:{is_enabled:false}},NOW);
+  assert.match(missing,/額外用量：目前無法使用/);assert.doesNotMatch(missing,/USD|本月|追加利用|未啟用/);
+});

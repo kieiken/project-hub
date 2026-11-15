@@ -45,7 +45,7 @@ test('Claude monthly allowance never authorizes priority, and configuration alon
     creditPolicy: () => ({ preferCredits: true, checkCredits: { claude: true } }),
     creditState: () => ({ availability: 'unknown', extraUsageEnabled: true, monthlyLimitReached: false, checkedAt: new Date(NOW).toISOString() }) });
   state.observe(full('claude', [win('five_hour')]));
-  assert.ok(state.forRequest({ ai: 'claude', model: 'Fable 5.1' }));
+  assert.ok(state.forRequest({ ai: 'claude', model: 'Fable 5.2' }));
 });
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-model-limits-')); let now = NOW;
@@ -54,7 +54,7 @@ function fixture() {
 const slot = (ai, model, effort = '高') => ({ ai, model, effort });
 const row = (name, main, backup) => ({ name, main, backup });
 const config = () => ({ switch: { auto: true }, roles: [
-  row('司令塔', slot('claude-code', 'Fable 5.1'), slot('codex', 'GPT-6-Astra')),
+  row('司令塔', slot('claude-code', 'Fable 5.2'), slot('codex', 'GPT-6-Astra')),
   row('調査', slot('claude-code', 'Opus 5.5'), slot('codex', 'GPT-6.1-Sol')),
   row('画像生成', slot('codex', 'GPT-6.1-Sol', '中'), slot('agy', AGY_FIXTURE.label)),
   row('コーディング', slot('codex', 'GPT-6.1-Sol'), slot('claude-code', 'Opus 5.5')),
@@ -62,7 +62,7 @@ const config = () => ({ switch: { auto: true }, roles: [
 test('共有5hrは両Claude、Codex契約枠は両Codexを別アカウントで保持する', () => {
   const { state, advance } = fixture();
   state.observe(full('claude', [win('five_hour')], 'work'));
-  assert.ok(state.active('work', 'claude-fable-5-1')); assert.ok(state.active('work', 'claude-opus-5-5')); assert.equal(state.active(), null);
+  assert.ok(state.active('work', 'claude-fable-5-2')); assert.ok(state.active('work', 'claude-opus-5-5')); assert.equal(state.active(), null);
   state.observe(full('codex', [win('codex:primary')]));
   assert.equal(state.active('default', 'gpt-6.1-sol').source, 'usage-100'); assert.ok(state.active('default', 'gpt-6-astra'));
   advance(3600000); assert.equal(state.active('work', 'claude-opus-5-5'), null);
@@ -101,24 +101,24 @@ test('将来設定されたCodexモデルにも共有枠を適用する', () => 
 test('共有正式CLI上限と別インスタンスの個別解除をアカウントごとに保存して読める', () => {
   const { state } = fixture();
   state.record({ ai: 'claude', model: 'Opus 5.5', account: 'work', limitError: "You've reached your 5-hour limit." });
-  assert.ok(state.active('work', 'claude-fable-5-1')); assert.equal(state.active(), null);
+  assert.ok(state.active('work', 'claude-fable-5-2')); assert.equal(state.active(), null);
   const second = new ModelLimits(state.file, { now: () => NOW }); second.clear('work', 'claude-opus-5-5');
-  assert.equal(state.active('work', 'claude-opus-5-5'), null); assert.ok(state.active('work', 'claude-fable-5-1'));
+  assert.equal(state.active('work', 'claude-opus-5-5'), null); assert.ok(state.active('work', 'claude-fable-5-2'));
   state.record({ ai: 'codex', model: 'GPT-6.1-Sol', limitError: "You've hit your usage limit." });
   assert.ok(second.active('default', 'gpt-6-astra')); assert.ok(second.active('default', 'gpt-6.1-sol'));
 });
 
 test('実機session limitは同じアカウントの両Claudeを保持し、再起動・個別解除を維持する', () => {
-  for (const model of ['Fable 5.1', 'Opus 5.5']) {
+  for (const model of ['Fable 5.2', 'Opus 5.5']) {
     const { state } = fixture();
     state.record({ ai: 'claude', model, account: 'work', limitError: "You've hit your session limit · resets 3pm (Asia/Tokyo)" });
     const restored = new ModelLimits(state.file, { now: () => NOW });
-    for (const flag of ['claude-fable-5-1', 'claude-opus-5-5']) {
+    for (const flag of ['claude-fable-5-2', 'claude-opus-5-5']) {
       assert.equal(restored.active('work', flag)?.source, 'cli-limit');
       assert.equal(restored.active('work', flag)?.validUntil, null); assert.equal(restored.active('default', flag), null);
     }
     restored.clear('work', 'claude-opus-5-5');
-    assert.equal(state.active('work', 'claude-opus-5-5'), null); assert.ok(state.active('work', 'claude-fable-5-1'));
+    assert.equal(state.active('work', 'claude-opus-5-5'), null); assert.ok(state.active('work', 'claude-fable-5-2'));
   }
 });
 test('Codex実機task_completeのerror.messageだけを正式上限として検知する', () => {

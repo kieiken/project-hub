@@ -29,6 +29,19 @@ test('images: multiple and image-only canonical references copy ORIGINAL bytes, 
  const f=fixture(t),a=f.image(),gif=Buffer.from('R0lGODdhAgACAIEAAFpujAAAAAAAAAAAACwAAAAAAgACAAAIBgABCAQQEAA7','base64'),b=f.image(gif,'gif');
  for(const modern of [false,true]){const q=f.q(a.block+'\n'+start.imageFile(f.p,b.id,true),modern?{projectImages:[a.id,b.id]}:{});f.seed([q]);const r=f.transfer.transfer(f.body(q)),i=f.ideas.read('P').items[r.id];assert.equal(i.images.length,2);assert.deepEqual(f.ideas.image('P',i.images[0].id).bytes,PNG);assert.deepEqual(f.ideas.image('P',i.images[1].id).bytes,gif);assert.deepEqual(fs.readFileSync(b.file),gif);}
 });
+test('current image queues and edited queues retreat only with body-owned image paths',t=>{
+ const f=fixture(t),a=f.image(),b=f.image(),qe=require('../lib/queue-edit');
+ for(const edited of [false,true]) {
+  let attachments=[a,b].map(x=>({id:x.id,path:start.imageFile(f.p,x.id,true)}));
+  const initial={text:'current image queue',attachments},q=f.q(qe.format(initial.text,attachments),{attachmentDraft:initial,projectImages:[a.id,b.id],images:qe.imagePaths(attachments)});
+  if(edited){const draft=qe.draft(f.p,'main',q);attachments=draft.attachments.slice(1);q.attachmentDraft={text:'edited queue',attachments};q.text=qe.format('edited queue',attachments);q.images=qe.imagePaths(attachments);q.projectImages=attachments.map(x=>x.id);}
+  f.seed([q]);const r=f.transfer.transfer(f.body(q));assert.equal(r.complete,true);assert.equal(f.ideas.read('P').items[r.id].images.length,edited?1:2);assert.deepEqual(f.chats.queue('P','main'),[]);
+ }
+ for(const images of [['/foreign/image.png'],[a.file,'/freetalk/topic/image.png'],'invalid']) {
+  const q=f.q(a.block,{images});f.seed([q]);assert.throws(()=>f.transfer.transfer(f.body(q)),/旧添付情報/);assert.deepEqual(f.chats.queue('P','main'),[q]);
+ }
+ const q=f.q('video\n\n参照ファイル・画像（絶対パス）：\n/video.mov',{images:[a.file]});f.seed([q]);assert.throws(()=>f.transfer.transfer(f.body(q)),/画像以外/);assert.deepEqual(f.chats.queue('P','main'),[q]);
+});
 for(const [label,bytes,code] of [['oversized',largePNG(),'image-dimensions'],['corrupt',PNG.subarray(0,8),'image-decode']])for(const later of [false,true])test('image rejection '+label+(later?' after valid image':' first')+': no fence, original remains editable/cancellable/startable after restart',t=>{
  const f=fixture(t),good=f.image(),bad=start.saveImage(f.p,'rejected.png',bytes),ids=[...(later?[good.id]:[]),bad.id],q=f.q('原文を保全\n\n参照画像（絶対パス）：\n'+ids.map(id=>start.imageFile(f.p,id,true)).join('\n'),{projectImages:ids}),other=f.q('他の待ち指示'),b=f.body(q);
  f.seed([q,other]);f.seed([other],'other');const settings=U.hash(f.ideas.read('P').settings);

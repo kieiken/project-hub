@@ -7,6 +7,7 @@ const { Store } = require('../lib/store'), chat = require('../lib/chat');
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'hub-freetalk-http-')));
 const root = path.join(tmp,'root'), home = path.join(tmp,'home'), bin = path.join(tmp,'bin');
 fs.mkdirSync(bin); fs.mkdirSync(path.join(root,'_hub'),{recursive:true});
+fs.writeFileSync(path.join(root,'_hub/remote.json'),JSON.stringify({host:'fixture.tailnet.ts.net'}));
 fs.copyFileSync(path.join(__dirname,'../../docs/project-hub/templates/_hub/roles.yaml'),path.join(root,'_hub/roles.yaml'));
 // 契約CLIには触らず、入力とcwdだけ返す偽物。
 fs.writeFileSync(path.join(bin,'codex'), `#!${process.execPath}
@@ -152,6 +153,49 @@ test('添付HTTP：画像は話題サムネとCodex -i、別話題・リンク�
  assert.equal((await post('/api/chat/send',{project:'freetalk',task:a.id,generation:1,ai:'codex',model:'GPT-6.1-Sol',text:'invalid',images:[image.id]})).status,409);
  const external=path.join(tmp,'outside.png');fs.writeFileSync(external,png);fs.unlinkSync(image.path);fs.symlinkSync(external,image.path);assert.equal((await fetch(base+image.url)).status,404);assert.deepEqual(fs.readFileSync(external),png);
 });
+test('動画HTTP：長さに応じた画像と時刻付き本文・音声なしの案内をCodexまで渡し、破損動画を拒否',async t=>{
+ const platform=require('../lib/platform'),search=[process.env.PATH,'/opt/homebrew/bin','/usr/local/bin'].join(path.delimiter),ffmpeg=platform.findExecutable('ffmpeg',search);
+ if(!ffmpeg||!platform.findExecutable('ffprobe',search))return t.skip('ローカルffmpegなし。実動画HTTPは未確認');
+ const topic=await(await post('/api/freetalk/topic')).json(),task=topic.id,source=path.join(tmp,'phone.mov');
+ require('node:child_process').execFileSync(ffmpeg,['-nostdin','-v','error','-f','lavfi','-i','testsrc2=size=128x72:rate=8:duration=2','-c:v','libx264','-threads','1',source],{stdio:'pipe',timeout:15000});
+ const upload=data=>fetch(base+'/api/task/upload?'+new URLSearchParams({project:'freetalk',task,name:'phone.mov',generation:1}),{method:'POST',headers:{'X-Hub':'1'},body:data});
+ const uploaded=await upload(fs.readFileSync(source));assert.equal(uploaded.status,200);const video=await uploaded.json();
+ assert.equal(video.status,'partial');assert.equal(video.media,'video');assert.equal(video.frames.length,require('../lib/video-frames').frameCount(video.duration));assert.equal(video.frames.length,4);assert.equal(video.subtitleSheet.status,'done');assert.equal(video.imagePaths.length,5);assert.ok(video.imagePaths.includes(video.subtitleSheet.path));
+ assert.equal(video.transcriptStatus,'absent');assert.match(video.message,/音声トラックがありません/);
+ assert.equal(video.referencePaths.some(file=>path.basename(file)==='transcript.txt'),false);assert.equal(fs.existsSync(path.join(path.dirname(video.referencePaths[1]),'transcript.txt')),false);
+ const manifest=fs.readFileSync(video.referencePaths[1],'utf8');assert.match(manifest,/音声トラックがありません/);assert.match(manifest,/\[00:00\]/);
+ assert.equal((await fetch(base+video.url)).status,200);assert.equal((await fetch(base+video.url.replace(task,a.id))).status,404);
+ const qe=require('../lib/queue-edit'),text=qe.format('この動画を見てください',[video]);
+ const sent=await post('/api/chat/send',{project:'freetalk',task,generation:1,ai:'codex',model:'GPT-6.1-Sol',text,images:[video.id],attachmentDraft:{text:'この動画を見てください',attachments:[{id:video.id}]}});
+ assert.equal(sent.status,200,await sent.text());await wait(()=>chat.read(pdir,task).some(x=>x.role==='assistant'));
+ const response=JSON.parse(chat.read(pdir,task).find(x=>x.role==='assistant').text),images=[];
+ for(let i=0;i<response.args.length;i++)if(response.args[i]==='-i')images.push(response.args[i+1]);
+ assert.deepEqual(images,video.imagePaths);assert.ok(response.input.includes(video.referencePaths[1]));assert.ok(response.input.includes(video.imagePaths.at(-1)));assert.match(response.input,/音声トラックがありません/);
+ assert.equal((await upload(Buffer.from('invalid'))).status,409);
+});
+test('動画HTTP：長い動画の16場面と画像4枚を送信でき、合計21枚は拒否する',async t=>{
+ const platform=require('../lib/platform'),search=[process.env.PATH,'/opt/homebrew/bin','/usr/local/bin'].join(path.delimiter),ffmpeg=platform.findExecutable('ffmpeg',search);
+ if(!ffmpeg||!platform.findExecutable('ffprobe',search))return t.skip('ローカルffmpegなし。実動画HTTPは未確認');
+ const topic=await(await post('/api/freetalk/topic')).json(),task=topic.id,source=path.join(tmp,'long.mov');
+ require('node:child_process').execFileSync(ffmpeg,['-nostdin','-v','error','-f','lavfi','-i','color=c=blue:size=128x72:rate=1:duration=240','-vf',"drawbox=x=0:y=50:w=iw:h=ih:color=white:t=fill:enable='gte(t,120)'",'-c:v','libx264','-threads','1',source],{stdio:'pipe',timeout:15000});
+ const upload=async(name,data)=>{
+  const r=await fetch(base+'/api/task/upload?'+new URLSearchParams({project:'freetalk',task,name,generation:1}),{method:'POST',headers:{'X-Hub':'1'},body:data});
+  assert.equal(r.status,200,await r.clone().text());return r.json();
+ };
+ const video=await upload('long.mov',fs.readFileSync(source)),stills=[],png=fs.readFileSync(path.join(__dirname,'../public/icon.png'));
+ assert.equal(video.imagePaths.length,16);
+ assert.equal(video.frames.length,15);assert.equal(video.subtitleSheet.status,'done');assert.equal(video.imagePaths.at(-1),video.subtitleSheet.path);
+ for(let i=0;i<5;i++)stills.push(await upload('still-'+i+'.png',png));
+ const qe=require('../lib/queue-edit'),accepted=[video,...stills.slice(0,4)],expected=[...video.imagePaths,...stills.slice(0,4).map(x=>x.path)];
+ assert.deepEqual(qe.imagePaths(accepted),expected);assert.equal(expected.length,20);
+ assert.throws(()=>qe.imagePaths([video,...stills]),/20枚/);
+ const send=attachments=>post('/api/chat/send',{project:'freetalk',task,generation:1,ai:'codex',model:'GPT-6.1-Sol',text:qe.format('まとめて確認',attachments),images:attachments.map(x=>x.id),attachmentDraft:{text:'まとめて確認',attachments:attachments.map(x=>({id:x.id}))}});
+ const rejected=await send([video,...stills]);assert.equal(rejected.status,409);assert.match(await rejected.text(),/20枚/);assert.equal(chat.read(pdir,task).some(x=>x.role==='assistant'),false);
+ const sent=await send(accepted);assert.equal(sent.status,200,await sent.text());await wait(()=>chat.read(pdir,task).some(x=>x.role==='assistant'));
+ const response=JSON.parse(chat.read(pdir,task).find(x=>x.role==='assistant').text),images=[];
+ for(let i=0;i<response.args.length;i++)if(response.args[i]==='-i')images.push(response.args[i+1]);
+ assert.deepEqual(images,expected);
+});
 test('正規HTTP：A実行中にBも開始し、二重開始・掃除・移行・整理を拒否して話題別に終了する',async()=>{
  const topics=[await(await post('/api/freetalk/topic')).json(),await(await post('/api/freetalk/topic')).json()];
  const sentinels=['parallel-sentinel-a','parallel-sentinel-b'];
@@ -261,14 +305,22 @@ test('生成画像は終了行に保存し、freetalkでもMacと認証済みス
   assert.equal((await fetch(url)).status,200);
   for(const how of ['open','finder']) assert.equal((await post('/api/reveal',{project:'freetalk',task:a.id,path:file,how,app:true})).status,200);
   assert.equal((await post('/api/reveal',{project:'FreeTalk',task:a.id,path:file,how:'info'})).status,409);
-  const headers={'X-Forwarded-Host':'fixture.tailnet.ts.net','X-Forwarded-For':'100.64.0.7'};
+  // Match the current proxy admission tuple, using only the isolated fixture.
+  const host='fixture.tailnet.ts.net';
+  const headers={Host:host,'X-Forwarded-Host':host,'X-Forwarded-Proto':'https','Tailscale-User-Login':['fixture','example.com'].join('@'),'X-Forwarded-For':'100.64.0.7'};
+  // Use http.request: fetch does not preserve the proxy's Host header.
+  const proxy=(url,options={})=>new Promise((resolve,reject)=>{
+    const req=require('node:http').request(url,{method:options.method||'GET',headers:{...headers,...options.headers}},res=>{
+      const chunks=[];res.on('data',x=>chunks.push(x));res.on('end',()=>resolve(new Response(Buffer.concat(chunks),{status:res.statusCode,headers:res.headers})));
+    });req.on('error',reject);req.end(options.body);
+  });
   assert.equal((await post('/api/remote',{enabled:true,passcode:'fixture-image-pass'})).status,200);
-  assert.equal((await fetch(url,{headers})).status,401);
-  const login=await post('/api/login',{passcode:'fixture-image-pass'},{'X-Hub':'1',...headers});assert.equal(login.status,200);
-  const auth={'X-Hub':'1',...headers,Cookie:login.headers.get('set-cookie').split(';')[0]};
-  const remote=await post('/api/reveal',{project:'freetalk',task:a.id,path:file,how:'info'},auth);
+  const denied=await proxy(url);assert.equal(denied.status,401,await denied.text());
+  const login=await proxy(base+'/api/login',{method:'POST',headers:{'X-Hub':'1','Content-Type':'application/json'},body:JSON.stringify({passcode:'fixture-image-pass'})});assert.equal(login.status,200);
+  const auth={'X-Hub':'1',Cookie:login.headers.get('set-cookie').split(';')[0]};
+  const remote=await proxy(base+'/api/reveal',{method:'POST',headers:{...auth,'Content-Type':'application/json'},body:JSON.stringify({project:'freetalk',task:a.id,path:file,how:'info'})});
   assert.equal(remote.status,200);assert.equal((await remote.json()).remote,true);
-  const response=await fetch(url,{headers:auth});assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/png');
+  const response=await proxy(url,{headers:auth});assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/png');
   assert.deepEqual(Buffer.from(await response.arrayBuffer()),fs.readFileSync(file));
 });
 
@@ -352,4 +404,23 @@ test('Muse in freetalk: exchange limit stays unblocked and follow-up recovery ne
   assert.equal(await pending(),null);assert.equal(sends,2);assert.equal(checks,2);
   assert.equal((await(await post('/api/muse/reconcile',reconcile,headers)).json()).notice,result.notice);
   assert.equal(checks,2);assert.equal(sends,2);
+});
+
+test('フォルダHTTP：参照で受け付け、元の場所と説明を偽CLIへ送り、20件の上限を保つ',async()=>{
+ assert.equal((await(await post('/api/freetalk/ensure')).json()).ready,true);
+ const topic=await(await post('/api/freetalk/topic')).json(),task=topic.id,source=path.join(home,'Gate database HTTP');fs.mkdirSync(source);fs.writeFileSync(path.join(source,'sentinel.txt'),'unchanged');
+ const r=await post('/api/task/attach',{project:'freetalk',task,generation:1,paths:[source]});assert.equal(r.status,200);const body=await r.json(),folder=body.attachments[0];
+ assert.equal(folder.path,source);assert.equal(folder.storage,'reference');assert.equal(folder.media,'folder');assert.deepEqual(body.paths,[source]);assert.match(fs.readFileSync(store.taskFile('freetalk',task),'utf8'),/フォルダを渡した（参照・コピーなし）/);
+ assert.equal((await post('/api/task/attach',{project:'freetalk',task,generation:1,paths:Array(21).fill(source)})).status,409);
+ const text=require('../lib/queue-edit').format('folder HTTP sentinel',[folder]);
+ const send={project:'freetalk',task,generation:1,ai:'codex',model:'GPT-6.1-Sol',effort:'高',text,images:[folder.id],attachmentDraft:{text:'folder HTTP sentinel',attachments:[folder]}};
+ assert.equal((await post('/api/chat/send',{...send,generation:99})).status,409);assert.equal(fs.readFileSync(path.join(source,'sentinel.txt'),'utf8'),'unchanged');
+ const sent=await post('/api/chat/send',send);assert.equal(sent.status,200,await sent.text());await wait(()=>chat.read(pdir,task).some(x=>x.role==='assistant'));
+ const response=JSON.parse(chat.read(pdir,task).find(x=>x.role==='assistant').text);assert.ok(response.input.includes(source));assert.match(response.input,/コピーではなく元のフォルダ/);assert.equal(response.args.includes('-i'),false);assert.equal(fs.readFileSync(path.join(source,'sentinel.txt'),'utf8'),'unchanged');
+});
+test('フォルダHTTP：添付の一括失敗では作成した記録だけを捨て、元のフォルダは保持する',async()=>{
+ assert.equal((await(await post('/api/freetalk/ensure')).json()).ready,true);
+ const topic=await(await post('/api/freetalk/topic')).json(),task=topic.id,source=path.join(tmp,'batch folder');fs.mkdirSync(source);fs.writeFileSync(path.join(source,'sentinel.txt'),'retained');
+ const r=await post('/api/task/attach',{project:'freetalk',task,generation:1,paths:[source,path.join(tmp,'missing-folder')]});assert.equal(r.status,409);
+ assert.deepEqual(fs.readdirSync(path.join(home,'Documents/freetalk/topics',task,'.derived')),[]);assert.equal(fs.readFileSync(path.join(source,'sentinel.txt'),'utf8'),'retained');
 });

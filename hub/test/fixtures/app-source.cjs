@@ -20,7 +20,7 @@ function loadApp(context, dir = publicDir) {
 function readApp(dir = publicDir) {
   const functions = new Map();
   for (const name of scripts(dir).filter(n => n !== 'app.js')) {
-    const context = vm.createContext({});
+    const context = vm.createContext({document:{addEventListener(){}},setInterval(){},setTimeout(){}});
     vm.runInContext(fs.readFileSync(path.join(dir, name), 'utf8'), context, { filename: name });
     functions.set(name, context);
   }

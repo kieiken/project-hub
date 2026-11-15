@@ -100,7 +100,7 @@ function excerpt(text, words) {
   for (let i = 0; i < chars.length && !found; i += 100) if (words.some(w => normalize(chars.slice(i, i + 180).join('')).includes(w))) { at = Math.max(0, i - 30); found = true; }
   return (at ? '…' : '') + chars.slice(at, at + 280).join('') + (at + 280 < chars.length ? '…' : '');
 }
-function search({ root, query, mode = 'simple' }) {
+function search({ root, query, mode = 'simple', prepareJev = false }) {
   if (!['simple', 'detailed'].includes(mode)) throw Error('mode');
   const phrase = normalize(query.trim()), words = [...new Set(phrase.split(/\s+/).filter(Boolean))];
   const stats = { bytes: 0, scannedBytes: 0, archiveBytes: 0, historyDirectories: 0, manifests: 0, sources: 0, skipped: 0, skippedRows: 0, limited: false }, hits = new Map();
@@ -141,7 +141,56 @@ function search({ root, query, mode = 'simple' }) {
       } catch { stats.skipped++; }
     }
   }
-  return { hits: [...hits.values()].sort(compare), stats };
+  const sorted = [...hits.values()].sort(compare);
+  let jevCandidates = [];
+  if (prepareJev) try { jevCandidates = rerankCandidates(root, sorted, mode); } catch { /* Optional preparation cannot fail local search. */ }
+  return { hits: sorted, stats, ...(prepareJev ? { jevCandidates } : {}) };
+}
+// A fresh, bounded read of selected sources only. The ordinary visible-text
+// cache is never accepted as evidence that a snippet can be sent externally.
+function rerankCandidates(root, hits, mode) {
+  const { sanitize, norm, grams } = require('./jev-search-privacy'), groups = new Map(), result = [];
+  const stats = { bytes: 0, skippedRows: 0 }, maxBytes = 16 * 1024 * 1024;
+  hits.slice(0, 20).forEach((hit, index) => {
+    if (hit.role !== 'assistant') return;
+    const key = JSON.stringify([hit.project, hit.task, hit.archiveId]);
+    if (!groups.has(key)) groups.set(key, []); groups.get(key).push({ hit, index });
+  });
+  const prepared = [], relevant = new Set(), human = new Set(), titles = [];
+  for (const group of groups.values()) try {
+    const h = group[0].hit, t = topic(root, h.project, h.task);
+    if (t.freetalk || (mode === 'simple' && h.archiveId)) continue;
+    const source = h.archiveId ? archived(t, h.archiveId) : current(t);
+    // Two fresh passes share a strict budget. Never read unrelated sources.
+    if (regular(source.file).size + stats.bytes > maxBytes / 2) continue;
+    const pending = [], skippedBefore = stats.skippedRows;
+    read(source, (row, index, signature) => {
+      if (signature !== h.signature) throw Error('changed');
+      const match = group.find(c => c.hit.row === index);
+      if (!match || row.role !== 'assistant') return;
+      const text = visible(row);
+      if (hash(JSON.stringify([row.role, row.at, text])) !== match.hit.rowHash) throw Error('changed');
+      if (row.images?.length || row.attachments?.length || row.files?.length) return;
+      const clean = sanitize(text, { titles: [t.projectName, t.taskName] });
+      if (clean) pending.push({ index: match.index, text: clean });
+    }, stats);
+    if (stats.skippedRows !== skippedBefore) return [];
+    prepared.push({ source, signature: h.signature, pending }); titles.push(t.projectName, t.taskName);
+    for (const c of pending) for (const g of grams(norm(c.text))) relevant.add(g);
+  } catch { return []; /* No partial external payload from changed sources. */ }
+  // As in the evaluated policy, human overlap checks span every selected source,
+  // not only the file holding the AI reply. Retain relevant ngrams only.
+  for (const {source,signature} of prepared) try {
+    const skippedBefore = stats.skippedRows;
+    read(source, row => {
+      if (row.role === 'user') for (const g of grams(norm(visible(row)))) if (relevant.has(g)) human.add(g);
+    }, stats);
+    if (stamp(regular(source.file)) !== signature || stats.skippedRows !== skippedBefore) return [];
+  } catch { return []; }
+  for (const {pending} of prepared) for (const c of pending) {
+    const text = sanitize(c.text, {human,titles}); if (text) result.push({ index:c.index,text });
+  }
+  return result.sort((a, b) => a.index - b.index);
 }
 function context({ root, hit, mode = 'simple' }) {
   if (!['simple', 'detailed'].includes(mode) || (mode === 'simple' && hit.archiveId)) throw Error('mode');
@@ -161,4 +210,4 @@ function execute(data){
   catch { parentPort.postMessage({ type: 'failed' }); }
 }
 if(parentPort){if(workerData?.persistent)parentPort.on('message',execute);else execute(workerData);}
-module.exports = { visible, normalize, LIMITS, search, cacheInfo:()=>({bytes:cacheBytes,entries:archiveCache.size,limit:CACHE_BYTES}) };
+module.exports = { visible, normalize, LIMITS, search, rerankCandidates, cacheInfo:()=>({bytes:cacheBytes,entries:archiveCache.size,limit:CACHE_BYTES}) };

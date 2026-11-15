@@ -60,6 +60,7 @@ function worker(dir){
    if(req.options.stopSafety){const c=req.options.stopSafety,d=strictRead(c.dir,'state.json');
      if(d?.version!==1||!Number.isSafeInteger(d.epoch)||d.epoch<0||typeof d.all!=='boolean'||!d.tasks||typeof d.tasks!=='object'||Array.isArray(d.tasks)||Object.entries(d.tasks).some(([k,t])=>!t||k!==JSON.stringify([t.project,t.task])||typeof t.project!=='string'||typeof t.task!=='string'||!Number.isSafeInteger(t.epoch)||t.epoch<0||typeof t.held!=='boolean'||t.autoHeld!==undefined&&typeof t.autoHeld!=='boolean')||d.restartIds!==undefined&&(!Array.isArray(d.restartIds)||d.restartIds.some(id=>typeof id!=='string'||!id||id.length>80)))throw Error('停止記録を確認できないため開始しません');
      const t=d.tasks[JSON.stringify([req.options.project,req.options.task])];
+     if(c.ticket?.manual===true&&strictRead(c.dir,'armed')?.instance!==c.instance)throw Error('再起動前の手動再開からは開始しません');
      if(!d||fs.existsSync(path.join(c.dir,'intent.json'))||d.all||t?.held||t?.autoHeld&&c.ticket?.manual!==true||d.epoch!==c.ticket?.epoch||(t?.epoch||0)!==c.ticket?.task)throw Error('停止後の依頼は開始しません');}
    cli=spawn(req.turn.command,req.turn.args,{cwd:req.options.dir,env:process.env,detached:true,windowsHide:true,stdio:['pipe','pipe','pipe']});}catch(e){end(1,null,e.message);return;}
  timer=setInterval(()=>{const c=read(dir,'cancel.json');if(c&&c.n!==lastCancel){lastCancel=c.n;try{stop(c.signal);}catch{}}},25);let lastCancel=0;
@@ -106,26 +107,46 @@ function start(root,serverId,options,turn,meta,rows,env){
  for(const [name,source]of PLATFORM_SOURCE)fs.writeFileSync(path.join(dir,'platform',name),source,{mode:0o600});
  const clean={};for(const [k,v]of Object.entries(options))if(k!=='env'&&typeof v!=='function')clean[k]=v;
  atomic(dir,'request.json',{options:clean,turn,meta,rows});const owner=claim(dir,serverId);
+ // Reuse the owner's existing authentication, adding only turn provenance for
+ // this CLI. Neither header contents nor the caller token enter request.json.
+ if(env.HUB_DELEGATE_TURN){
+   const headers=fs.readFileSync(env.HUB_HEADERS,'utf8').split(/\r?\n/).filter(line=>line&&!/^X-Hub-Delegate-Turn:/i.test(line));
+   const file=path.join(dir,'delegate-headers.txt');fs.writeFileSync(file,headers.join('\n')+'\nX-Hub-Delegate-Turn: '+env.HUB_DELEGATE_TURN+'\n',{mode:0o600,flag:'wx'});
+   env={...env,HUB_HEADERS:file};delete env.HUB_DELEGATE_TURN;
+ }
  const p=spawn(process.execPath,[path.join(dir,'worker.cjs'),'--worker',dir],{env,detached:true,windowsHide:true,stdio:'ignore'});p.unref();if(p.pid){let identity;try{identity=require('./owned-processes').capture(p.pid);}catch{}atomic(dir,'launch.json',{supervisorPid:p.pid,identity});}
  const child=new SpoolChild(dir,owner);p.once('error',e=>atomic(dir,'exit.json',{code:1,error:e.message}));return child;
 }
-// Display-only shortcut for proven, finished runs. Directory changes catch
-// atomic receipts immediately; in-place edits are rechecked within 60 seconds.
-// Action/adoption callers use pending(root) and failure(dir), never this cache.
-const displayVerified=new Map(),DISPLAY_MAX_AGE=60000;
-function directoryStamp(dir){try{const s=fs.lstatSync(dir,{bigint:true});return s.isDirectory()?['dev','ino','mtimeNs','ctimeNs','mode','uid','gid','nlink'].map(k=>String(s[k])).join(':'):null;}catch{return null;}}
+// Display-only, restart-persistent proof stamps. No action/adoption caller
+// imports them into `verified`; strict validation still hashes current contents.
+// Directory changes are immediate; file ctime/identity/permissions are checked
+// at most 60 seconds apart, and on the first scan after importing a proof.
+const displayVerified=new Map(),displayChecked=new Map(),DISPLAY_MAX_AGE=60000;
+function directoryStamp(dir,identityOnly=false){try{const s=fs.lstatSync(dir,{bigint:true});fs.accessSync(dir,fs.constants.R_OK|fs.constants.X_OK);return s.isDirectory()?(identityOnly?['dev','ino','mode','uid','gid']:['dev','ino','mtimeNs','ctimeNs','mode','uid','gid','nlink']).map(k=>String(s[k])).join(':'):null;}catch{return null;}}
+function displayStamp(dir){const d=directoryStamp(dir),f=verificationStamp(dir);return d&&f?digest(d+':'+f):null;}
+const displayVerifier=digest(WORKER_SOURCE);
+function importDisplayCache(root,cache){
+ if(cache?.version!==1||cache.verifier!==displayVerifier||cache.root!==directoryStamp(root,true)||!Array.isArray(cache.entries))return;
+ for(const entry of cache.entries){
+  if(!Array.isArray(entry)||entry.length!==2)continue;
+  const [name,stamp]=entry;
+  if(typeof name==='string'&&name!=='.'&&name!=='..'&&name===path.basename(name)&&!/[\\/\x00-\x1f]/.test(name)&&typeof stamp==='string'&&/^[a-f0-9]{64}$/.test(stamp)){const dir=path.join(root,name);displayVerified.set(dir,stamp);displayChecked.delete(dir);}
+ }
+}
+function exportDisplayCache(root){return {version:1,verifier:displayVerifier,root:directoryStamp(root,true),entries:[...displayVerified].filter(([dir])=>path.dirname(dir)===root).map(([dir,stamp])=>[path.basename(dir),stamp])};}
 function displayFinished(dir,fresh){
- const now=Date.now(),stamp=directoryStamp(dir),hit=displayVerified.get(dir);
- if(!fresh&&stamp&&hit&&hit.dirStamp===stamp&&hit.proof===verified.get(dir)&&now>=hit.at&&now-hit.at<DISPLAY_MAX_AGE)return true;
- displayVerified.delete(dir);
+ const now=Date.now(),dirStamp=directoryStamp(dir),hit=displayChecked.get(dir);
+ if(!fresh&&dirStamp&&hit&&hit.dirStamp===dirStamp&&hit.proof===displayVerified.get(dir)&&now>=hit.at&&now-hit.at<DISPLAY_MAX_AGE)return true;
+ const stamp=displayStamp(dir);
+ if(!fresh&&stamp&&displayVerified.get(dir)===stamp){displayChecked.set(dir,{dirStamp,proof:stamp,at:now});return true;}
+ displayVerified.delete(dir);displayChecked.delete(dir);
  if(failure(dir)||!read(dir,'finished.json'))return false;
- const proof=verified.get(dir);
- if(proof&&stamp&&directoryStamp(dir)===stamp)displayVerified.set(dir,{dirStamp:stamp,proof,at:now});
+ if(verified.get(dir)&&stamp&&displayStamp(dir)===stamp){displayVerified.set(dir,stamp);displayChecked.set(dir,{dirStamp,proof:stamp,at:now});}
  return true;
 }
 function pending(root,{display=false,freshDirs=new Set()}={}){
  const dirs=fs.existsSync(root)?fs.readdirSync(root,{withFileTypes:true}).filter(e=>e.isDirectory()).map(e=>path.join(root,e.name)):[],present=new Set(dirs);
- for(const cache of [verified,displayVerified])for(const d of cache.keys())if(path.dirname(d)===root&&!present.has(d))cache.delete(d);
+ for(const cache of [verified,displayVerified,displayChecked])for(const d of cache.keys())if(path.dirname(d)===root&&!present.has(d))cache.delete(d);
  return dirs.filter(d=>display? !displayFinished(d,freshDirs.has(d))&&(failure(d)||!read(d,'finished.json')&&fs.existsSync(path.join(d,'request.json'))) : failure(d)||!read(d,'finished.json')&&fs.existsSync(path.join(d,'request.json')));
 }
 function adopt(dir,serverId){if(failure(dir))throw Error('会話の保存失敗が未解決です。自動では再処理しません');return new SpoolChild(dir,claim(dir,serverId));}
@@ -144,4 +165,4 @@ function recover(dir,serverId,token,row){
  }finally{fs.rmdirSync(lock);}
 }
 if(require.main===module&&process.argv[2]==='--worker')worker(process.argv[3]);
-module.exports={strictRead,start,adopt,pending,read,atomic,claim,SpoolChild,failure,evidence,digest,completion,recover};
+module.exports={importDisplayCache,exportDisplayCache,strictRead,start,adopt,pending,read,atomic,claim,SpoolChild,failure,evidence,digest,completion,recover};

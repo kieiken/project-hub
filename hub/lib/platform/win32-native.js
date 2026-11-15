@@ -17,6 +17,10 @@ using System.Security.Principal;
 using System.Security.AccessControl;
 using Microsoft.Win32.SafeHandles;
 public static class HubWindows {
+  public sealed class PrivateDirectoryAclException : Exception {
+    public readonly string Reason;
+    public PrivateDirectoryAclException(string reason) : base(reason) { Reason=reason; }
+  }
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
   struct Entry {
     public uint size, usage, pid; public UIntPtr heap; public uint module, threads, ppid;
@@ -142,9 +146,9 @@ public static class HubWindows {
     var replace=FileSystemRights.Delete|FileSystemRights.DeleteSubdirectoriesAndFiles|FileSystemRights.ChangePermissions|FileSystemRights.TakeOwnership;
     for(var parent=Directory.GetParent(full);parent!=null;parent=parent.Parent) {
       var acl=Directory.GetAccessControl(parent.FullName);
-      if(!trusted.Contains(acl.GetOwner(typeof(SecurityIdentifier)).Value)) throw new Exception("update_parent_owner");
+      if(!trusted.Contains(acl.GetOwner(typeof(SecurityIdentifier)).Value)) throw new PrivateDirectoryAclException("PRIVATE_DIRECTORY_PARENT_OWNER");
       foreach(FileSystemAccessRule rule in acl.GetAccessRules(true,true,typeof(SecurityIdentifier)))
-        if((rule.PropagationFlags&PropagationFlags.InheritOnly)==0&&rule.AccessControlType==AccessControlType.Allow&&(rule.FileSystemRights&replace)!=0&&!trusted.Contains(rule.IdentityReference.Value)) throw new Exception("update_parent_acl");
+        if((rule.PropagationFlags&PropagationFlags.InheritOnly)==0&&rule.AccessControlType==AccessControlType.Allow&&(rule.FileSystemRights&replace)!=0&&!trusted.Contains(rule.IdentityReference.Value)) throw new PrivateDirectoryAclException("PRIVATE_DIRECTORY_PARENT_ACL");
     }
     if(create) {
       var acl=new DirectorySecurity(); acl.SetOwner(sid); acl.SetAccessRuleProtection(true,false);
@@ -152,11 +156,11 @@ public static class HubWindows {
       Directory.SetAccessControl(full,acl);
     }
     var actual=Directory.GetAccessControl(full);
-    if(!actual.AreAccessRulesProtected||actual.GetOwner(typeof(SecurityIdentifier)).Value!=sid.Value) throw new Exception("update_acl");
+    if(!actual.AreAccessRulesProtected||actual.GetOwner(typeof(SecurityIdentifier)).Value!=sid.Value) throw new PrivateDirectoryAclException("PRIVATE_DIRECTORY_ACL");
     var rules=actual.GetAccessRules(true,true,typeof(SecurityIdentifier));
-    if(rules.Count!=1) throw new Exception("update_acl");
+    if(rules.Count!=1) throw new PrivateDirectoryAclException("PRIVATE_DIRECTORY_ACL");
     var only=(FileSystemAccessRule)rules[0];
-    if(only.IdentityReference.Value!=sid.Value||only.AccessControlType!=AccessControlType.Allow||(only.FileSystemRights&FileSystemRights.FullControl)!=FileSystemRights.FullControl) throw new Exception("update_acl");
+    if(only.IdentityReference.Value!=sid.Value||only.AccessControlType!=AccessControlType.Allow||(only.FileSystemRights&FileSystemRights.FullControl)!=FileSystemRights.FullControl) throw new PrivateDirectoryAclException("PRIVATE_DIRECTORY_ACL");
     ValidateDirectory(full,binding,false);
     return true;
   }
@@ -207,6 +211,7 @@ public static class HubWindowsLicense {
   [DllImport("kernel32.dll")] static extern ulong GetTickCount64();
   static readonly UTF8Encoding Utf8=new UTF8Encoding(false,true);
   static string Target(string account) {
+    if(account=="jev-api-key-v1") return "ProjectHub.Jev.v1/api-key";
     if(account==null||!System.Text.RegularExpressions.Regex.IsMatch(account,@"\Adevice-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\z")) throw new Exception("secret_account_invalid");
     return "ProjectHub.License.v1/"+account;
   }
@@ -236,14 +241,15 @@ public static class HubWindowsLicense {
   }
   public static bool Put(string account,string value) {
     string target=Target(account);
-    // Serialize check+create across Hub processes; existing/corrupt keys must
-    // never be overwritten. No enterprise roaming and no machine-wide DPAPI.
+    // Serialize across Hub processes. Device identities are create-only;
+    // explicit Jev registration can replace only the dedicated Jev target.
+    // No enterprise roaming and no machine-wide DPAPI.
     string mutexName="Local\\ProjectHub.License."+BitConverter.ToString(Hash(target+WindowsIdentity.GetCurrent().User.Value)).Replace("-","");
     using(var mutex=new System.Threading.Mutex(false,mutexName)) {
       bool held=false;
       try {
         held=mutex.WaitOne(10000); if(!held) throw new Exception("secret_busy");
-        if(Get(account)!=null) throw new Exception("secret_exists");
+        if(account!="jev-api-key-v1"&&Get(account)!=null) throw new Exception("secret_exists");
         if(String.IsNullOrEmpty(value)) throw new Exception("secret_empty");
         byte[] plain=Utf8.GetBytes(value),blob;
         try { blob=System.Security.Cryptography.ProtectedData.Protect(plain,Entropy(account),System.Security.Cryptography.DataProtectionScope.CurrentUser); }
@@ -261,6 +267,19 @@ public static class HubWindowsLicense {
     }
   }
   public static double Elapsed() { return GetTickCount64()/1000.0; }
+  public static bool JevStatus() {
+    IntPtr ptr;
+    if(!Read(Target("jev-api-key-v1"),1,0,out ptr)) {
+      if(Marshal.GetLastWin32Error()==1168) return false;
+      throw new Exception("secret_read_failed");
+    }
+    CredFree(ptr); return true;
+  }
+  public static string JevGet() { return Get("jev-api-key-v1"); }
+  public static bool PutJev(string value) {
+    if(value==null||!System.Text.RegularExpressions.Regex.IsMatch(value,@"\A[\x21-\x7e]{16,1024}\z")) throw new Exception("secret_invalid");
+    return Put("jev-api-key-v1",value);
+  }
   public static void Watch(System.Web.Script.Serialization.JavaScriptSerializer json,string id) {
     object gate=new object();
     Microsoft.Win32.PowerModeChangedEventHandler handler=(sender,args)=> {
@@ -300,8 +319,11 @@ public static class HubNativeProgram {
         case "private-directory": value=HubWindows.PrivateDirectory((string)r["path"],(bool)r["create"]); break;
         case "rename": value=HubWindows.Rename((string)r["from"],(string)r["to"]); break;
         case "file": value=HubWindows.FlushFile((string)r["path"]); break;
-        case "secret-get": value=HubWindowsLicense.Get((string)r["account"]); break;
-        case "secret-put": value=HubWindowsLicense.Put((string)r["account"],(string)r["value"]); break;
+        case "secret-get": if((string)r["account"]=="jev-api-key-v1") throw new Exception("secret_account_invalid"); value=HubWindowsLicense.Get((string)r["account"]); break;
+        case "secret-put": if((string)r["account"]=="jev-api-key-v1") throw new Exception("secret_account_invalid"); value=HubWindowsLicense.Put((string)r["account"],(string)r["value"]); break;
+        case "jev-get": value=HubWindowsLicense.JevGet(); break;
+        case "jev-status": value=HubWindowsLicense.JevStatus(); break;
+        case "jev-put": value=HubWindowsLicense.PutJev((string)r["value"]); break;
         case "machine-hint": value=HubWindowsLicense.MachineHint(); break;
         case "clock": value=HubWindowsLicense.Elapsed(); break;
         case "watch": HubWindowsLicense.Watch(json,id); return 0;
@@ -318,7 +340,8 @@ public static class HubNativeProgram {
       Console.WriteLine(json.Serialize(new { ok=true,id=id,value=value })); return 0;
     } catch(Exception e) {
       var win32=e as System.ComponentModel.Win32Exception;
-      Console.WriteLine(json.Serialize(new { ok=false,id=id,error="NATIVE_OPERATION_FAILED",win32=win32==null?0:win32.NativeErrorCode })); return 1;
+      var acl=e as HubWindows.PrivateDirectoryAclException;
+      Console.WriteLine(json.Serialize(new { ok=false,id=id,error=acl==null?"NATIVE_OPERATION_FAILED":acl.Reason,win32=win32==null?0:win32.NativeErrorCode })); return 1;
     }
   }
 }
@@ -401,28 +424,29 @@ function create(options = {}) {
     const id = crypto.randomUUID();
     return { id, opts: { input: JSON.stringify({ ...data, action, id }), encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] } };
   }
-  function decode(output, id, failed = false) {
+  function decode(output, id, failed = false, action) {
     let result;
     try { result = JSON.parse(String(output).replace(/^\uFEFF/, '').trim()); }
     catch (error) { throw broken(error); }
     if (result?.id !== id || typeof result.ok !== 'boolean' || failed && result.ok) throw broken(Error('Windows補助の応答を確認できません'));
     if (!result.ok) throw Object.assign(Error('Windows native確認失敗'), { code: 'windows_native_failed', stage: 'native-call',
-      reasonCode: [2,3,5,6,32,33,50,80,87,112,183,267,1314].includes(result.win32) ? 'WIN32_' + result.win32 : 'NATIVE_OPERATION_FAILED' });
+      reasonCode: action === 'private-directory' && result.win32 === 0 && ['PRIVATE_DIRECTORY_ACL','PRIVATE_DIRECTORY_PARENT_OWNER','PRIVATE_DIRECTORY_PARENT_ACL'].includes(result.error)
+        ? result.error : [2,3,5,6,32,33,50,80,87,112,183,267,1314].includes(result.win32) ? 'WIN32_' + result.win32 : 'NATIVE_OPERATION_FAILED' });
     return result.value;
   }
-  function failure(error, id) {
+  function failure(error, id, action) {
     // A timeout/signal is ambiguous even if stdout contains an apparent success.
     if (error.killed || error.signal || error.code === 'ETIMEDOUT') return broken(error);
-    if (error.stdout) try { decode(error.stdout, id, true); } catch (cause) { return cause; }
+    if (error.stdout) try { decode(error.stdout, id, true, action); } catch (cause) { return cause; }
     return broken(error);
   }
   return {
     call(action, data = {}) {
       const file = ensure(), { id, opts } = request(action, data);
       let output;
-      try { output = run(file, [], opts); } catch (error) { throw failure(error, id); }
+      try { output = run(file, [], opts); } catch (error) { throw failure(error, id, action); }
       ensure();
-      return decode(output, id);
+      return decode(output, id, false, action);
     },
     asyncCall(action, data = {}, callback) {
       const file = ensure(), { id, opts } = request(action, data);
@@ -431,8 +455,8 @@ function create(options = {}) {
       const finish = (error, value) => { if (!done) { done = true; callback(error, value); } };
       try {
         child = asyncRun(file, [], opts, (error, stdout) => {
-          if (error) return finish(failure(Object.assign(error, { stdout }), id));
-          try { ensure(); finish(null, decode(stdout, id)); } catch (cause) { finish(cause); }
+          if (error) return finish(failure(Object.assign(error, { stdout }), id, action));
+          try { ensure(); finish(null, decode(stdout, id, false, action)); } catch (cause) { finish(cause); }
         });
         watchers.add(child);
         child.once('close', () => { watchers.delete(child); if (closed) { try { close(); } catch (e) { finish(e); } } });

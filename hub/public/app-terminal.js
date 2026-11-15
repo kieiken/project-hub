@@ -7,12 +7,14 @@ function specSelect(p, t, ai, live) {
     const s = specOf(t,ai), models = shownModels('agy',s.model), selected = live ? agyModelLabel(sessOf(p.id,t.id,ai)?.model || s.model) : s.model;
     return UI.template`<span class="spec"><select data-act="model" data-ai="agy" data-p="${esc(p.id)}" data-t="${esc(t.id)}" aria-label="モデル" ${live ? 'disabled' : ''}><option value="" ${selected ? '' : 'selected'}>モデルを選んでください</option>${selected && !models.includes(selected) ? UI.template`<option selected disabled value="${esc(selected)}">${esc(selected)}（利用不可）</option>` : ''}${models.map(m => UI.template`<option value="${esc(m)}" ${m === selected ? 'selected' : ''}>${esc(modelOptionLabel(ai,m))}</option>`).join('')}</select><select aria-label="思考" hidden disabled><option>高</option></select></span>`;
   }
-  const key = AI_KEY[ai], models = state.roles.models[key] || [], s = specOf(t, ai);
+  const key = AI_KEY[ai], active = live && ai === 'codex' ? sessOf(p.id,t.id,ai) : null;
+  const scope = active ? { ...t, accounts: { ...t.accounts, codex: active.account || 'default' } } : t;
+  const models = taskModels(key, scope, t.model), s = specOf(t, ai);
   const missing = t.model && !models.includes(t.model);
   const k = `data-p="${esc(p.id)}" data-t="${esc(t.id)}"${live ? ` data-ai="${ai}"` : ''}`;
-  return UI.template`<span class="spec" title="${live ? UI.template`変えると ${AI_LABEL[ai]} に切り替えを伝えます` : UI.template`次に始める時の ${AI_LABEL[ai]} のモデルと思考（空なら役割の設定）`}">
-    <select data-act="model" ${k} aria-label="モデル"><option value="" ${t.model ? '' : 'selected'}>モデル：役割どおり（${esc(s.model || '—')}）</option>${missing ? UI.template`<option selected disabled value="${esc(t.model)}">${esc(t.model)}（現在の指定・利用不可）</option>` : ''}${shownModels(key, t.model).map(m => UI.template`<option ${t.model === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
-    <select data-act="effort" ${k} aria-label="思考"><option value="" ${t.effort ? '' : 'selected'}>思考：役割どおり（${esc(s.effort || '—')}）</option>${effortsFor(ai).map(e => UI.template`<option ${t.effort === e ? 'selected' : ''}${UI.valueAttribute(e)}>${esc(UI.label(e))}</option>`).join('')}</select></span>`;
+  return UI.template`<span class="spec" data-model-ai="${ai}" title="${live ? UI.template`変えると ${AI_LABEL[ai]} に切り替えを伝えます` : UI.template`次に始める時の ${AI_LABEL[ai]} のモデルと思考（空なら役割の設定）`}">
+    <select data-act="model" ${k} aria-label="モデル"><option value="" ${t.model ? '' : 'selected'}>モデル：役割どおり（${esc(s.model || '—')}）</option>${missing ? UI.template`<option selected disabled value="${esc(t.model)}">${esc(t.model)}（現在の指定・利用不可）</option>` : ''}${models.map(m => UI.template`<option ${t.model === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
+    <select data-act="effort" ${k} aria-label="思考"><option value="" ${t.effort ? '' : 'selected'}>思考：役割どおり（${esc(s.effort || '—')}）</option>${effortsFor(ai, s.model, t.accounts?.codex).map(e => UI.template`<option ${t.effort === e ? 'selected' : ''}${UI.valueAttribute(e)}>${esc(UI.label(e))}</option>`).join('')}</select></span>`;
 }
 
 function loadXterm() {
@@ -48,6 +50,7 @@ async function attach(project, task, ai) {
 }
 
 function closePanes() {
+  $('#msgs')?.hubCancelRows?.();
   chatScroller?.dispose(); chatScroller = null;
   if (chatES) { chatES.close(); chatES = null; }
   discussionUIInstance?.close();

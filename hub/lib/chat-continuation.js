@@ -2,16 +2,20 @@
 // This is a receipt for interrupted work, not another task or an AI retry queue.
 const fs=require('node:fs'),path=require('node:path');
 const safe=require('./safe-file');
+const {lt}=require('./locale');
+const active=e=>['open','waiting','resuming'].includes(e.status);
+const dismissed=e=>e?.status==='dismissed';
 const file=(pdir,task)=>path.join(pdir,'.ai','chat',`${task}.unfinished.json`);
 const nonempty=s=>typeof s==='string'&&Boolean(s.trim());
-const statuses=new Set(['open','waiting','resuming','continued','cancelled','resolved']);
+const statuses=new Set(['open','waiting','resuming','continued','cancelled','resolved','dismissed']);
 function read(pdir,task){
  const saved=safe.read(file(pdir,task));if(!saved)return {version:1,entries:{},advances:{}};
  const d=JSON.parse(saved.text);
  if(d?.version!==1||!d.entries||!d.advances||typeof d.entries!=='object'||typeof d.advances!=='object'||Array.isArray(d.entries)||Array.isArray(d.advances))throw Error('未完の依頼の記録を照合してください');
  for(const [id,e] of Object.entries(d.entries)){
   if(!nonempty(id)||!e||e.id!==id||!statuses.has(e.status)||!nonempty(e.updated)||
-   e.status==='resolved'&&(!nonempty(e.resolution?.evidence)||!nonempty(e.resolution?.at)||e.updated!==e.resolution.at))throw Error('未完の依頼の記録を照合してください');
+   e.status==='resolved'&&(!nonempty(e.resolution?.evidence)||!nonempty(e.resolution?.at)||e.updated!==e.resolution.at)||
+   dismissed(e)&&(!nonempty(e.dismissal?.reason)||e.dismissal?.by!=='owner'||!nonempty(e.dismissal?.at)||e.updated!==e.dismissal.at))throw Error('未完の依頼の記録を照合してください');
  }
  return d;
 }
@@ -25,7 +29,7 @@ function entry(s,row,reason,status='open'){return {id:s.turn,status,original:s.t
  remaining:'未確認。元の依頼と途中成果を照合してから再開する',source:s,updated:new Date().toISOString()};}
 function record(d,s,row,reason,status){const id=s.entryId||s.turn,old=d.entries[id];
  if(!old)d.entries[id]={...entry(s,row,reason,status),id};
- else{if(old.status!=='cancelled')Object.assign(old,{status,reason,updated:new Date().toISOString()});old.interruptions||=[];if(!old.interruptions.some(x=>x.source.turn===s.turn))old.interruptions.push({source:s,partial:row?.text||'',reason});}
+ else{if(old.status!=='cancelled'&&!dismissed(old))Object.assign(old,{status,reason,updated:new Date().toISOString()});old.interruptions||=[];if(!old.interruptions.some(x=>x.source.turn===s.turn))old.interruptions.push({source:s,partial:row?.text||'',reason});}
 }
 function compose(mode,original,text){return mode==='redo'
  ? `（人が前の指示を取り消しました。途中で変えたファイルがあれば、必要に応じて元に戻してから、この新しい指示だけを行ってください）\n${text}`
@@ -66,14 +70,34 @@ function verifyStopped(a){
  const groups=new Set([...observed,...added].map(p=>p.pgid).filter(n=>Number.isSafeInteger(n)&&n>1));
  if(rows.some(p=>pids.has(p.pid)||groups.has(p.pgid)&&require('./owned-processes').sameOwner(p,identity)))throw Error('前のAIまたは子プロセスが残っています。待ち指示は開始していません');
 }
-function resolve(pdir,task,{id,expectedUpdated,evidence}){
+function closeMetadata(pdir,task,e,context){
+ if(!context.taskMissing)return {};
+ // The route supplies this context, never the request body. A receipt copied
+ // from another project/task must not become eligible just because its task is absent.
+ if(e.source?.project!==context.project||e.source?.task!==task||typeof e.source?.pdir!=='string'||path.resolve(e.source.pdir)!==path.resolve(pdir))
+  throw Error(lt('未完の依頼の記録を照合してください'));
+ return {taskMissing:true};
+}
+function resolve(pdir,task,{id,expectedUpdated,evidence},context={}){
  if(typeof evidence!=='string'||!evidence.trim()||evidence.length>4000)throw Error('完了を確認した成果と参照を記録してください');
- return update(pdir,task,d=>{const e=nonempty(id)&&Object.hasOwn(d.entries,id)?d.entries[id]:null;if(!e)throw Error('未完の依頼が見つかりません');if(!nonempty(expectedUpdated)||e.updated!==expectedUpdated)throw Error('未完の記録が変わりました。読み直して確認してください');if(e.status==='cancelled')throw Error('取り消した依頼です');e.status='resolved';e.resolution={evidence:evidence.trim(),at:new Date().toISOString()};e.updated=e.resolution.at;}).entries[id];
+ return update(pdir,task,d=>{const e=nonempty(id)&&Object.hasOwn(d.entries,id)?d.entries[id]:null;if(!e)throw Error('未完の依頼が見つかりません');if(!nonempty(expectedUpdated)||e.updated!==expectedUpdated)throw Error('未完の記録が変わりました。読み直して確認してください');if(e.status==='cancelled'||dismissed(e))throw Error('取り消した依頼です');const metadata=closeMetadata(pdir,task,e,context);e.status='resolved';e.resolution={evidence:evidence.trim(),at:new Date().toISOString(),...metadata};e.updated=e.resolution.at;}).entries[id];
+}
+function pending(pdir,task){return Object.values(read(pdir,task).entries).filter(active);}
+function summary(pdir,task){try{return {unfinishedCount:pending(pdir,task).length};}catch(e){return {unfinishedCount:0,unfinishedError:e.message};}}
+function dismiss(pdir,task,{id,expectedUpdated},context={}){
+ return update(pdir,task,d=>{
+  const e=nonempty(id)&&Object.hasOwn(d.entries,id)?d.entries[id]:null;
+  if(!e)throw Error(lt('未完の依頼が見つかりません'));
+  if(!nonempty(expectedUpdated)||e.updated!==expectedUpdated)throw Error(lt('未完の記録が変わりました。読み直して確認してください'));
+  if(!active(e))throw Error(lt('この依頼はすでに閉じています'));
+  const metadata=closeMetadata(pdir,task,e,context);
+  e.status='dismissed';e.dismissal={by:'owner',reason:'人が不要と判断',at:new Date().toISOString(),...metadata};e.updated=e.dismissal.at;
+ }).entries[id];
 }
 function prompt(pdir,task,port=4545){try{
- const items=Object.values(read(pdir,task).entries).filter(x=>['open','waiting','resuming'].includes(x.status));
- return items.length?`未完の依頼の記録：${file(pdir,task)}（${items.length}件）。「未完の作業は？」と聞かれたらこの記録の原文・途中成果・会話参照を読み、完了済みや取消済みを重ねて依頼しない。再開は人の指示後だけ。完了を確認した時だけ http://127.0.0.1:${port}/api/chat/unfinished/resolve に X-Hub:1（ローカル認証は curl -H @"$HUB_HEADERS" を使用。秘密を本文に書かない） / Content-Type:application/json で {project,task,id,expectedUpdated:記録のupdated,evidence:確認した成果の参照と理由} をPOSTする。記録を直接編集せず、未確認のまま完了扱いにしない。`:'';
- }catch{return `未完の依頼の記録を読めません：${file(pdir,task)}。確認せず再送・自動開始しない。`;}}
+ const items=pending(pdir,task);
+ return items.length?lt`未完の依頼の記録：${file(pdir,task)}（${items.length}件）。原文・途中成果・会話参照を確認し、返事の最後に未完の件数と中身を一行ずつ知らせる。完了済み・取消済み・人が不要とした依頼を重ねて依頼しない。再開は人の指示後だけ。大掃除や整理を頼まれた時は、未完の記録を1件ずつ元の依頼と今の成果に照らす。済んでいるものは確認した成果を根拠に付けて完了にする。残りは一覧にして、続けるか不要かを人に聞く。聞かずに再開しない。同じプロジェクトのほかの作業の記録は ${path.join(pdir,'.ai','chat','*.unfinished.json')} にある。完了を確認した時だけ http://127.0.0.1:${port}/api/chat/unfinished/resolve に X-Hub:1（ローカル認証は curl -H @"$HUB_HEADERS" を使用。秘密を本文に書かない） / Content-Type:application/json で {project,task,id,expectedUpdated:記録のupdated,evidence:確認した成果の参照と理由} をPOSTする。記録を直接編集せず、未確認のまま完了扱いにしない。`+lt`同じプロジェクトの記録で、人が「もう不要」と決めた時だけ http://127.0.0.1:${port}/api/chat/unfinished/dismiss に同じ認証とJSONで {project,task,id,expectedUpdated:記録のupdated} をPOSTする。元の作業が無くても、記録の所属が一致すれば閉じられる。閉じる対象の作業IDを使い、別プロジェクトの記録には触れない。`:'';
+ }catch{return lt`未完の依頼の記録を読めません：${file(pdir,task)}。確認せず再送・自動開始しない。`;}}
 
 // Kept apart from process termination: no signal, ownership or stop generation is changed here.
 const methods={
@@ -94,11 +118,13 @@ const methods={
   all.forEach(verifyStopped);
   // A redo cancels previous originals, while subsequent amendments retain
   // each intervening instruction and the queue's latest edited text/model.
-  const redo=all.findLastIndex(a=>a.mode==='redo'),active=all.slice(Math.max(0,redo));
+  const entries=read(o.pdir,o.task).entries,applicable=all.filter(a=>a.mode!=='amend'||!dismissed(entries[a.source.entryId||a.source.turn]));
+  if(!applicable.length)return o;
+  const redo=applicable.findLastIndex(a=>a.mode==='redo'),active=applicable.slice(Math.max(0,redo));
   let text=o.text;for(const a of [...active].reverse())text=compose(a.mode,a.source.text,text);
   const carried=active.filter(a=>a.mode==='amend'),first=carried[0];
   const images=[...new Set([...carried.flatMap(a=>a.source.images||[]),...(o.images||[])])];
-  return {...o,images,text,mode:all.at(-1).mode,unfinishedId:first?(first.source.entryId||first.source.turn):undefined};
+  return {...o,images,text,mode:applicable.at(-1).mode,unfinishedId:first?(first.source.entryId||first.source.turn):undefined};
  },
  saveUnfinished(o,run,row,closed,modelRejected){
   if(o.automation||o.discussion||o.discussionTurn||o.isolatedReview||o.selectionOnly)return;
@@ -110,7 +136,7 @@ const methods={
     // A continued turn is not evidence that the product task itself is complete.
     const e=d.entries[o.unfinishedId],success=!row.error&&closed;
     // A successful close is only a handoff receipt; keep an explicit resolution's revision.
-    if(e.status!=='cancelled'&&!(success&&e.status==='resolved')){e.status=success?'continued':'open';e.result={request:o.request,turn:s.turn,spool:s.spool,error:row.error||(!closed?'途中で終了':'')};e.updated=new Date().toISOString();}
+    if(e.status!=='cancelled'&&!dismissed(e)&&!(success&&e.status==='resolved')){e.status=success?'continued':'open';e.result={request:o.request,turn:s.turn,spool:s.spool,error:row.error||(!closed?'途中で終了':'')};e.updated=new Date().toISOString();}
    }
    if(a){record(d,s,row,a.mode==='redo'?'人が前の指示を取り消しました':a.reason||'追加説明への切替で中断しました',a.mode==='redo'?'cancelled':'waiting');}
    else if(unexpected){
@@ -120,9 +146,9 @@ const methods={
    }
   });
  },
- queuedOptions(b,next){return {...b,...Object.fromEntries(['automation','contextMode','freshContext','preserveTaskState','reviewKind','origin','integrationAssignment','limitPolicy','isolatedReview','selectionOnly','integrationReviewRequest','readOnly','readDirs','role','limitSlot','limitSwitch','requiredModel'].map(k=>[k,next[k]])),
+ queuedOptions(b,next){return {...b,...Object.fromEntries(['automation','contextMode','freshContext','preserveTaskState','reviewKind','origin','delegationEffort','integrationAssignment','limitPolicy','isolatedReview','selectionOnly','integrationReviewRequest','readOnly','readDirs','role','limitSlot','limitSwitch','requiredModel'].map(k=>[k,next[k]])),
   resultsOrganize:Boolean(next.resultsOrganize),ai:next.ai,account:next.account||'default',model:next.model,effort:next.effort,text:next.text,perm:next.perm,requireModel:Boolean(next.requireModel),
-  images:b.project==='freetalk'&&next.ai==='codex'?next.images||[]:[],mode:'queued',shown:next.shown||next.text,request:next.id,started:undefined,noEffort:false,unfinishedId:undefined};},
+  images:next.ai==='codex'?next.images||[]:[],mode:'queued',shown:next.shown||next.text,request:next.id,started:undefined,noEffort:false,unfinishedId:undefined};},
  continuationNotice(o,a,text){
   const chat=require('./chat');const row=chat.append(o.pdir,o.task,{role:'event',continuation:{id:a.source.entryId||a.source.turn,file:file(o.pdir,o.task)},text});this.emit(o.project,o.task,{type:'row',row});
  },
@@ -152,6 +178,9 @@ const methods={
    if(automatic){this.stopControl?.assert(b,a.source.stopTicket);if(this.stopControl?.held(b)||this.stops.has(this.key(b.project,b.task))&&this.stops.get(this.key(b.project,b.task))!==a.source.stopVersion)throw Error('停止後の指示は保留しています');}
    this.startBarrier?.(b);
    if(this.busy(b.project,b.task))throw Error('別の指示の開始・終了を確認中です');
+   if(a.mode==='amend'&&dismissed(read(b.pdir,b.task).entries[entryId])){
+    update(b.pdir,b.task,d=>{d.advances[a.source.turn].mode='fifo';});a={...a,mode:'fifo'};
+   }
    let q=this.queue(b.project,b.task);
    // A durable user row is evidence of a start attempt, including an unknown or failed outcome.
    // Never replay it after a response loss or a crash between start and queue removal.
@@ -206,4 +235,4 @@ const methods={
   }
  }
 };
-module.exports={file,read,update,source,proven,prompt,compose,resolve,methods};
+module.exports={file,read,update,source,proven,prompt,compose,resolve,dismiss,pending,summary,methods};

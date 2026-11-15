@@ -218,7 +218,7 @@ async function sendFiles(files, ai) {
   const got = [];
   for (const f of files) {
     if(project==='freetalk' && attachmentGeneration(task)!==topicGeneration)break;
-    if (ta && (project === 'freetalk' || isQuickImage(f))) {
+    if (ta && (project === 'freetalk' || isQuickImage(f) || isChatVideo(f))) {
       try { await addChatImage(project, task, f); }
       catch (e) { toast(`${f.name || UI.text('画像')}：${e.message}`); }
       continue;
@@ -244,7 +244,7 @@ async function sendFiles(files, ai) {
 }
 
 function appendChatPaths(project, task, paths) {
-  for (const path of paths) chatImages(project, task).push({ id: 'file:' + (++chatFileSequence) + ':' + path, kind: 'file', path, name: path.split(/[\\/]/).pop() });
+  for (const path of paths) chatImages(project, task).push({ id: 'file:' + (++chatFileSequence) + ':' + path, kind: 'file', path, name: path.split(/[\\/]/).pop(), ...(isChatVideo(path) ? { status:'unreadable', message:UI.text('動画の場所だけを渡します。内容は確認できません。') } : {}) });
   drawChatImages(project, task);
   toast(UI.text('ファイルを添付しました。続けて指示を書いて送ってください'));
 }
@@ -322,18 +322,22 @@ function appFilesCallback4244() {
   if (ta) {
     const project = view.project, task = view.task;
     const topicGeneration=project==='freetalk'?attachmentGeneration(task):undefined;
-    const other = [];
+    const other = [], videoFailures = [];
     for (const file of paths) {
       if(project==='freetalk' && attachmentGeneration(task)!==topicGeneration)break;
-      if (project === 'freetalk' || isQuickImage(file)) {
+      if (project === 'freetalk' || isQuickImage(file) || isChatVideo(file)) {
         try { await addChatImage(project, task, file, true); }
-        catch (e) { toast(`${file.split('/').pop()}：${e.message}`); }
+        catch (e) {
+          toast(`${file.split('/').pop()}：${e.message}`);
+          if (project !== 'freetalk' && isChatVideo(file)) { other.push(file); videoFailures.push(`${file.split('/').pop()}：${e.message}`); }
+        }
       } else other.push(file);
     }
     if (other.length) {
       try {
         const r = await api('/api/task/attach', { project, task, paths: other });
         appendChatPaths(project, task, r.paths);
+        if (videoFailures.length) toast(videoFailures.join('\n') + UI.text('\n動画の場所だけを渡します。内容は確認できません。'));
       } catch (e) { toast(e.message); }
     }
     return;
@@ -391,6 +395,9 @@ function appFilesCallback4430() {
   // ブラウザで開いている時は、落としたフォルダの場所が分からない
   if (view.kind === 'newproject' || view.kind === 'project') { toast(UI.text('ブラウザでは場所が分かりません。［選ぶ…］を押すか、アプリの窓で落としてください')); return; }
   if (view.kind !== 'work' || !e.dataTransfer) return;
+  if (view.project === 'freetalk' && Array.from(e.dataTransfer.items || []).some(x => x.webkitGetAsEntry?.()?.isDirectory)) {
+    toast(UI.text('ブラウザではフォルダの場所を渡せません。アプリの窓でフォルダを選ぶか、落としてください')); return;
+  }
   const files = droppedFiles(e.dataTransfer);
   if (!files.length) { toast(UI.text('ブラウザから画像データが届きませんでした。保存した画像を選ぶか、貼り付けてください')); return; }
   return sendFiles(files, dropTarget(e.target));

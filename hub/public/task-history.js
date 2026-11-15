@@ -181,7 +181,10 @@ function oneclickComplete(plan){
 }
 function oneclickText(flow){
  if(flow?.stage==='complete')return flow.restart?'本体への取り込みと新版の起動確認が完了しました。作業・会話・コピーは残っています。':'本体への取り込みが完了しました。作業・会話・コピーは残っています。';
- if(flow?.stage==='waiting')return '本体への取り込みは完了しています。ほかの保存が終わるまで新版への切替を待っています。';
+ if(flow?.stage==='waiting'){
+  const waiting=(state.restart?.waiting||flow.waiting||[]).slice(0,3).map(row=>row.message).filter(Boolean).join(' / ');
+  return '本体への取り込みは完了しています。新版への切替を待っています。'+(waiting?' 待機中：'+waiting:'');
+ }
  if(flow?.stage==='switching')return '本体への取り込みは完了しています。新版の起動を確認しています。';
  if(flow?.stage==='approved')return '送信記録を照合しています。取り込みは送り直しません。';
  if(flow?.stage==='stopped')return '前回の取り込みは中止しました。衝突箇所を直して保存してから進めてください。';

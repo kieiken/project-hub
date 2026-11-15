@@ -8,6 +8,9 @@ const root = path.resolve(__dirname, '..');
 const defaultOutput = path.join(root, 'public-release', 'ProjectHub');
 const publicFiles = new Set([
   'README.md', 'CONTRIBUTING.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
+  'README.en.md',
+  'docs/screenshots/conversation-v4.126.85-usage.png', 'docs/screenshots/queued-instructions-v4.126.85-usage.png',
+  'docs/project-hub/structure-map-v2-reader-ja.png', 'docs/project-hub/structure-map-v2-reader-en.png', 'docs/project-hub/structure-map-v2-reader-zh-TW.png',
   'README.zh-TW.md', 'CONTRIBUTING.zh-TW.md', 'THIRD_PARTY_NOTICES.zh-TW.md',
   'docs/idea-ledger.md', 'docs/idea-ledger-verification.md',
   'scripts/export-public.js', 'scripts/public.gitignore',
@@ -43,7 +46,7 @@ function packAsset(name) {
     || file.startsWith('test/') && /\.(?:js|json|md|yaml|yml|txt)$/.test(file);
 }
 function excluded(name) {
-  if (name.startsWith('hub/purchase-test-app/') || ['hub/test/purchase-test-app.test.js', 'hub/test/purchase-test-workspace.test.js', 'hub/test/purchase-test-update.test.js', 'hub/test/purchase-test-preparation.test.js', 'hub/test/release-mac-migration.test.js',
+  if (name.startsWith('hub/purchase-test-app/') || ['hub/test/purchase-test-app.test.js', 'hub/test/purchase-test-workspace.test.js', 'hub/test/purchase-test-update.test.js', 'hub/test/purchase-test-preparation.test.js', 'hub/test/release-mac-migration.test.js', 'hub/test/release-95.test.js',
     'hub/test/windows-license-recovery.test.cjs', 'hub/test/fixtures/purchase-test-app-child.cjs'].includes(name)) return true;
   if (name.startsWith('hub/staging-app/') || ['hub/test/staging-app.test.js', 'hub/test/fixtures/staging-app-child.cjs',
     'hub/test/staging-app-lifecycle.test.js', 'hub/test/fixtures/staging-shutdown.swift'].includes(name)) return true;
@@ -113,6 +116,8 @@ const reviewedSecretFixtures = {
 };
 const reviewedWindowsIcon = { path: 'hub/app/windows/ProjectHub.ico', sha256: '757b92279f649abe7f4e9a0ded4540d0bd58df1caf8c9eb9436390d6cb4764bd' };
 const reviewedImages = new Set([
+  'docs/screenshots/conversation-v4.126.85-usage.png', 'docs/screenshots/queued-instructions-v4.126.85-usage.png',
+  'docs/project-hub/structure-map-v2-reader-ja.png', 'docs/project-hub/structure-map-v2-reader-en.png', 'docs/project-hub/structure-map-v2-reader-zh-TW.png',
   'docs/screenshots/conversation-redacted.png', 'docs/screenshots/queued-instructions-redacted.png',
   'hub/app/icon-concept.png', 'hub/public/icon.png',
 ]);
@@ -137,7 +142,7 @@ function inspect(entries) {
     if (excluded(name) || name === '.git') findings.push(`${name}: excluded path`);
     const specialty = rules.find(([label]) => label === 'private specialty material')[1];
     if (specialty.test(name.normalize('NFC'))) findings.push(`${name}: private specialty path`);
-    // Raster images are the reviewed redacted screenshots and product icons.
+    // Raster images are the reviewed fictional screenshots, abstract reader diagrams and product icons.
     if (reviewedImages.has(name)) continue;
     if (name === reviewedWindowsIcon.path) {
       if (digest(content) !== reviewedWindowsIcon.sha256) findings.push(`${name}: reviewed product icon changed`);

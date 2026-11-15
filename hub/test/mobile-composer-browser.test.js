@@ -68,6 +68,54 @@ test('mobile composer: attachments and reduced visual viewport keep input and se
   const shot = async name => {
     if (process.env.HUB_MOBILE_COMPOSER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.HUB_MOBILE_COMPOSER_SCREENSHOTS, 'mobile-composer-' + name + '.png') });
   };
+  await t.test('スマホの添付選択は写真と動画に対応し、動画の説明は常時表示しない', async () => {
+    for(const id of ['freetalk','p']) {
+    await seed(id,0);
+    const chooser=page.waitForEvent('filechooser');await page.locator('#chat-attach').click();
+    const selected=await chooser;assert.equal(selected.isMultiple(),true);
+    const accept=await page.locator('#chat-files').getAttribute('accept');
+    assert.ok(accept.includes('image/*'));assert.ok(accept.includes('video/*'));assert.ok(accept.includes('.mov'));assert.ok(accept.includes('.mp4'));
+    assert.doesNotMatch(await page.locator('#composer').innerText(),/1件50MB・10分まで|8場面|音声は対象外/);
+    }
+  });
+  await t.test('project video upload and send keep all frame references on phone and desktop', async () => {
+    const video={id:'12d90541-48a7-48df-9b50-47a3213b55cb',name:'phone.mov',kind:'file',media:'video',path:'/fixture/phone.mov',generation:1,status:'partial',message:'8場面。音声は対象外です。',imagePaths:Array.from({length:8},(_,i)=>'/fixture/frame-'+i+'.jpg')};
+    video.imagePath=video.imagePaths[0];video.referencePaths=[video.path,'/fixture/video.txt',...video.imagePaths];
+    const uploads=[],sends=[];
+    await page.route('**/api/task/upload?**', async r=>{assert.equal(new URL(r.request().url()).searchParams.get('chat'),'1');uploads.push(new URL(r.request().url()).searchParams.get('name'));await r.fulfill({json:{ok:true,...video,typed:false}});});
+    await page.route('**/api/chat/send', async r=>{sends.push(r.request().postDataJSON());await r.fulfill({json:{ok:true}});});
+    for(const width of [390,1280]) {
+      await page.setViewportSize({width,height:844});await page.evaluate(()=>resizeVisible(844));await seed('p',0);
+      await page.locator('#chat-files').setInputFiles({name:'phone.mov',mimeType:'video/quicktime',buffer:Buffer.from('local UI fixture')});
+      await page.waitForFunction(()=>chatImages('p','t').length===1 && !chatImageUploads.get(chatAttachmentKey('p','t')));
+      assert.equal(await page.locator('#chat-images .quick-image').count(),1);
+      await page.locator('#chat-in').fill('この動画を確認');await page.locator('#chat-send').click();
+      await page.waitForFunction(()=>!chatImages('p','t').length);
+      assert.deepEqual(sends.at(-1).attachmentDraft.attachments[0].imagePaths,video.imagePaths);
+      assert.match(sends.at(-1).text,/frame-7.jpg/);assert.match(sends.at(-1).text,/音声/);assert.deepEqual(sends.at(-1).projectImages,[]);
+    }
+    assert.deepEqual(uploads,['phone.mov','phone.mov']);assert.equal(sends.length,2);
+    await page.unroute('**/api/task/upload?**');await page.unroute('**/api/chat/send');
+  });
+  await t.test('native chat video failure falls back per file; terminal drops pass paths without extraction', async () => {
+    await page.setViewportSize({width:1280,height:844});await seed('p',0);
+    const calls=[],paths=['/fixture/large.mov','/external/disk/phone.mov','/fixture/notes.txt'];
+    await page.route('**/api/task/attach',async r=>{
+      const b=r.request().postDataJSON();calls.push(b);
+      if(b.chat)await r.fulfill({status:409,json:{error:b.paths[0].includes('large')?'このファイルは添付できません':'この場所のファイルは追加できません'}});
+      else await r.fulfill({json:{ok:true,paths:b.paths,attachments:[],typed:!!b.ai}});
+    });
+    await page.evaluate(async paths=>{window.dropNotices=[];window.savedToast=toast;toast=s=>{dropNotices.push(s);savedToast(s);};await window.hubNativeDrop(paths);},paths);
+    assert.deepEqual(calls.filter(b=>b.chat).map(b=>b.paths),[[paths[0]],[paths[1]]]);
+    assert.deepEqual(calls.at(-1).paths,paths);assert.equal(calls.at(-1).chat,undefined);
+    const result=await page.evaluate(()=>({attachments:chatImages('p','t'),text:chatSendText('確認',chatImages('p','t')),notices:dropNotices}));
+    assert.deepEqual(result.attachments.map(a=>a.path),paths);assert.ok(result.attachments.slice(0,2).every(a=>a.message.includes('内容は確認できません')));assert.ok(result.attachments.every(a=>!a.imagePaths));
+    assert.match(result.text,/内容は確認できません/);assert.ok(result.notices.some(x=>x.includes('このファイルは添付できません')));assert.ok(result.notices.some(x=>x.includes('この場所のファイルは追加できません')));assert.match(await page.locator('#toast').innerText(),/このファイルは添付できません/);assert.match(await page.locator('#toast').innerText(),/この場所のファイルは追加できません/);assert.match(await page.locator('#toast').innerText(),/内容は確認できません/);
+    calls.length=0;
+    await page.evaluate(async paths=>{document.querySelector('#chat-in').remove();lastDropAi='codex';await window.hubNativeDrop(paths);toast=savedToast;},paths);
+    assert.equal(calls.length,1);assert.deepEqual(calls[0].paths,paths);assert.equal(calls[0].ai,'codex');assert.equal(calls[0].chat,undefined);
+    await page.unroute('**/api/task/attach');await seed('p',0);
+  });
   for (const width of [390, 320]) for (const id of ['p', 'freetalk']) for (const height of [340, 240]) for (const count of [0, 1, 4, 12]) {
     await t.test(`${id} ${width}px visible=${height}px images=${count}`, async () => {
       await page.setViewportSize({ width, height: 844 }); await page.evaluate(() => resizeVisible(844));

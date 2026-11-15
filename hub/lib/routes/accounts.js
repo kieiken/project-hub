@@ -38,7 +38,7 @@ module.exports = function accountsRoutes(ctx) {
             if (!['login', 'logout'].includes(b.action)) return send(res, 400, { error: 'invalid action' });
             if (process.platform === 'win32' && !DRY) return send(res, 409, { error: lt('Windows では認証用の窓を前に出せません。開いている bash の窓で操作してください') });
             const pid = accounts.authTerminalPid(ai, id);
-            if (!pid) return send(res, 409, { error: lt('認証用Terminalが見つかりません。［状態を確認］を押してください') });
+            if (!pid) return send(res, 409, { error: lt('認証用Terminalが見つかりません。起動途中で止まった窓を閉じ、［状態を確認］を押してから［ログイン］をやり直してください。') });
             result = await launch.focusAuthTerminal(pid, DRY);
             result.warning = ai === 'agy' ? (b.action === 'logout' ? lt('開いている認証用Terminalで /logout と入力し、終わったら［状態を確認］を押してください。') : lt('開いている認証用Terminalで /login と入力し、終わったら［状態を確認］を押してください。')) : lt('開いている認証用Terminalで操作を続け、終わったら［状態を確認］を押してください。');
           }

@@ -18,7 +18,8 @@ function aiSettingsInputKey(input) {
 
 function preserveAiSettings(update) {
   if (aiSettingsDrawing) return update();
-  const before = $('#ai-use-settings'), focused = before?.contains(document.activeElement) ? document.activeElement : null;
+  const layout = typeof settingsLayoutCurrent === 'function' && settingsLayoutCurrent();
+  const before = layout ? layout.root : $('#ai-use-settings'), focused = before?.contains(document.activeElement) ? document.activeElement : null;
   if (before) {
     aiSettingsOpen.clear();
     before.querySelectorAll('details[data-ai-fold][open]').forEach(el => aiSettingsOpen.add(el.dataset.aiFold));
@@ -30,7 +31,7 @@ function preserveAiSettings(update) {
     try { return update(); }
     finally {
       aiSettingsDrawing = false;
-      const after = $('#ai-use-settings');
+      const after = layout && typeof settingsLayoutCurrent === 'function' && settingsLayoutCurrent() ? settingsLayoutCurrent().root : $('#ai-use-settings');
       after?.querySelectorAll('details[data-ai-fold]').forEach(el => { el.open = aiSettingsOpen.has(el.dataset.aiFold); });
       after?.querySelectorAll('#account-new-ai,#account-new-name,[data-account-name]').forEach(el => { const value = aiSettingsInputs.get(aiSettingsInputKey(el)); if (value !== undefined) el.value = value; });
       const target = focus && (focus.id ? document.getElementById(focus.id) : [...(after?.querySelectorAll('[data-account-name]') || [])].find(el => aiSettingsInputKey(el) === focus.key));
@@ -52,9 +53,14 @@ function drawEmergencyStatus(s){const box=$('#emergency-status');if(!box)return;
 
 async function refreshEmergencyStatus(){if(!$('#emergency-status'))return;try{drawEmergencyStatus(await api('/api/ai/stop/status'));}catch(e){$('#emergency-status').textContent=`停止状態を確認できません：${e.message}`;}}
 
-function selectSettingsTab(tab) {
+function selectSettingsTab(tab, localOnly = false) {
   settingsTab = Object.hasOwn(SETTINGS_TABS, tab) ? tab : 'basic';
-  localStorage.setItem('hub.settingsTab', settingsTab);
+  // A blocked browser store must not interrupt the local presentation switch.
+  try { localStorage.setItem('hub.settingsTab', settingsTab); } catch { /* Keep this screen usable. */ }
+  if (typeof selectSettingsLayoutTab === 'function' && selectSettingsLayoutTab(settingsTab)) {
+    if (!localOnly) autoCheckRoleAccounts();
+    return;
+  }
   const dirty = rolesDirty();
   document.querySelectorAll('[data-settings-tab]').forEach(button => {
     const selected = button.dataset.settingsTab === settingsTab;
@@ -64,7 +70,7 @@ function selectSettingsTab(tab) {
     button.setAttribute('aria-label', label + (button.dataset.settingsTab === 'ai' && dirty ? UI.text(' 未保存あり') : ''));
   });
   document.querySelectorAll('.settings > [data-tab]').forEach(card => { card.hidden = card.dataset.tab !== settingsTab; });
-  autoCheckRoleAccounts();
+  if (!localOnly) autoCheckRoleAccounts();
 }
 
 function languageRestartMessage(saved = false) {
@@ -103,7 +109,10 @@ function creditSettingsHtml() {
       <p class="small">継続の許可は初期設定OFFです。ONにすると、確認ONのAIだけ、利用枠の上限後も利用可能と確認できた既存クレジットで元の担当を継続します。OFFにするまで許可が続きます。</p>
       <p class="small">自動チャージがない、またはOFFであることを確認してから保存してください。購入・自動チャージ・APIキー課金は行いません。残高が不明・古い・取得失敗なら設定された交代先へ切り替えます。正式な実行拒否は維持します。Claudeの実残高を取得できない場合も交代します。</p>
     </div></details></div>
-    <div class="acts ai-save-actions"><button class="btn" type="button" data-roles-save ${dirty ? '' : 'disabled'}>役割分担・クレジットを保存</button>
+    <h3>AI同士の依頼</h3>
+    <label class="chk"><input type="checkbox" data-allow-delegate-ultra ${allowDelegateUltraDraft ? 'checked' : ''}> AI が自動で Ultra を付けることを許可する</label>
+    <p class="small">初期設定は許可しません。許可すると、対応する Codex の機種への依頼だけ、必要な時にその1件の思考を強めます。利用量が増えることがあります。人が保存・選択した思考は変えません。</p>
+    <div class="acts ai-save-actions"><button class="btn" type="button" data-roles-save ${dirty ? '' : 'disabled'}>役割分担・確認設定を保存</button>
       <span class="${dirty ? 'dirty' : 'saved'}" role="status">${rolesSaveStatus()}</span></div></section>`;
 }
 
@@ -112,12 +121,13 @@ function renderSettings() {
     if (!rolesDraft) { rolesDraft = JSON.parse(JSON.stringify(state.roles.roles)); rolesDraftRevision = state.roles.management?.revision; }
     if (!checkCreditsDraft) checkCreditsDraft = creditCheckSettings();
     if (preferCreditsDraft === null) preferCreditsDraft = state.roles.preferCredits === true;
+    if (allowDelegateUltraDraft === null) allowDelegateUltraDraft = state.roles.allowDelegateUltra === true;
     const models = state.roles.models;
     const opt = (list, v) => list.map(x => UI.template`<option ${x === v ? 'selected' : ''}>${esc(x)}</option>`).join('');
     const cell = (i, k, s) => UI.template`<div class="cfg">
         <select data-r="${i}" data-k="${k}" data-f="ai" aria-label="AI">${roleAiOptions(s.ai)}</select>
         ${s.ai === '人' ? '' : UI.template`<select data-r="${i}" data-k="${k}" data-f="model" aria-label="モデル">${roleModelOptions(s.ai,s.model)}</select>
-        <select data-r="${i}" data-k="${k}" data-f="effort" aria-label="思考" ${effortHidden(s.ai) ? 'hidden' : ''} ${s.ai === 'agy' ? 'disabled' : ''}>${opt(effortsFor(s.ai), s.effort)}</select>`}</div>`;
+        <select data-r="${i}" data-k="${k}" data-f="effort" aria-label="思考" ${effortHidden(s.ai) ? 'hidden' : ''} ${s.ai === 'agy' ? 'disabled' : ''}>${opt(effortsFor(s.ai, s.model), s.effort)}</select>`}</div>`;
     const dirty = rolesDirty(), purchase = licensePurchaseHtml();
     $('#main').innerHTML = UI.template`<div class="view settings-view"><div class="settings">
       <div class="settings-tabs" role="tablist" aria-label="設定">${Object.entries(SETTINGS_TABS).map(([key, label]) => UI.template`<button type="button" role="tab" data-settings-tab="${key}">${label}</button>`).join('')}</div>
@@ -183,7 +193,8 @@ function renderSettings() {
         <div class="pref-row pref-stack"><div class="role-head"><p class="pref-desc">役割ごとの担当と、上限の時の担当です。</p><div class="acts"><span id="role-account-status" class="small" role="status"></span><button id="role-account-check" class="btn plain sm" type="button">もう一度確認</button></div></div>
         <div class="tbl role-table"><table><tr><th>役割</th><th>いつもの担当</th><th>上限の時</th><th>内容</th></tr>
         ${rolesDraft.map((r, i) => UI.template`<tr><td class="now">${esc(UI.label(r.name))}</td><td class="role-main" data-label="いつもの担当">${cell(i, 'main', r.main)}</td><td class="role-backup" data-label="上限の時">${cell(i, 'backup', r.backup)}</td><td class="job" title="${esc(UI.label(r.job))}">${esc(UI.label(r.job))}</td></tr>`).join('')}</table></div></div>
-        <div class="pref-row pref-stack"><div class="acts ai-save-actions"><button class="btn" id="roles-save" type="button" ${dirty ? '' : 'disabled'}>役割分担・クレジットを保存</button>
+        ${roleTiersHtml()}
+        <div class="pref-row pref-stack"><div class="acts ai-save-actions"><button class="btn" id="roles-save" type="button" ${dirty ? '' : 'disabled'}>役割分担・確認設定を保存</button>
           <button class="btn plain" id="roles-reset" type="button" ${dirty ? '' : 'disabled'}>元に戻す</button>
           <span class="${dirty ? 'dirty' : 'saved'}" role="status">${rolesSaveStatus()}</span></div>
         <details class="more"><summary>詳しく</summary><p class="small">保存した設定は次の起動・上限時の交代に反映します。交代先も上限ならいつもの担当へ、両方が上限なら待機します。</p><p class="small"><span id="model-catalog">選べるモデル：Claude Code は ${esc((models['claude-code'] || []).join(' / '))}、Codex は ${esc((models.codex || []).join(' / '))}、Grok は ${esc((models.grok || []).join(' / '))}（思考は中・高・極高・MAX）、Gemini（Agy CLI）は取得したモデル一覧から選択・思考「高」。思考は ${esc(state.efforts.join(' → '))}。</span>保存先 <span class="path">${esc(state.root)}/_hub/roles.yaml</span></p></details></div>
@@ -204,6 +215,7 @@ function renderSettings() {
         <p>画面のモデルの呼び名を、Claude Code・Codex が受け付ける名前に直します。<b>空にすると、モデルを指定せず CLI の既定のモデルを使います。</b>モデル名が拒否された場合は理由を表示し、設定を勝手に変えません。</p>
         <div id="climodels" class="small">読み込み中…</div></details></div>
       </div></section>
+      <section class="pref-section" data-tab="ai"><h2 class="pref-caption">Token の利用（このパソコン）</h2><div class="pref-list"><div class="pref-row pref-stack"><div id="token-usage-box" aria-live="polite">${typeof tokenUsageHtml === 'function' ? tokenUsageHtml(tokenUsageData) : UI.text('記録を集計中…')}</div></div></div></section>
       <section class="pref-section" data-tab="ai"><h2 class="pref-caption">AI の更新</h2><div class="pref-list">
         <div class="pref-row pref-stack"><div id="ai-tools" aria-live="polite">確認中…</div></div>
       </div></section>
@@ -259,7 +271,9 @@ function renderSettings() {
         <div class="pref-row pref-stack"><details class="more" id="logd"><summary>最近の操作（記録）</summary><div id="logbox" class="small">読み込み中…</div></details></div>
       </div></section>
     </div></div>`;
+    if (typeof mountSettingsLayout === 'function') mountSettingsLayout();
     selectSettingsTab(settingsTab);void refreshEmergencyStatus();
+    if(typeof loadTokenUsage === 'function')void loadTokenUsage();
     renderedPhoneKey = phoneSettingsKey();
     drawAccountSettings(); syncRoleAccountChoices();
     $('#role-account-check')?.addEventListener('click', () => checkRoleAccounts().catch(() => {}));
@@ -317,9 +331,17 @@ async function loadMuseSettings() {
   const epoch = ++museSettingsEpoch;
   try {
     const s = await api('/api/muse', null, { 'X-Hub': '1' });
-    if (epoch === museSettingsEpoch && $('#muse-settings-box') === box) box.innerHTML = museSettingsHtml(s);
+    if (epoch === museSettingsEpoch && $('#muse-settings-box') === box) {
+      if (typeof settingsLayoutRestoreSource === 'function') settingsLayoutRestoreSource('muse');
+      box.innerHTML = museSettingsHtml(s);
+      if (typeof settingsLayoutSync === 'function') settingsLayoutSync();
+    }
   } catch {
-    if (epoch === museSettingsEpoch && $('#muse-settings-box') === box) box.innerHTML = UI.html('<p>状態を安全に確認できませんでした。再登録せず、接続ツールを確認してください。</p><button class="btn plain" type="button" data-muse-action="tool">接続ツールを選ぶ</button><button class="btn plain" type="button" data-muse-action="refresh">状態を確認</button><p id="muse-settings-notice" role="status"></p>');
+    if (epoch === museSettingsEpoch && $('#muse-settings-box') === box) {
+      if (typeof settingsLayoutRestoreSource === 'function') settingsLayoutRestoreSource('muse');
+      box.innerHTML = UI.html('<p>状態を安全に確認できませんでした。再登録せず、接続ツールを確認してください。</p><button class="btn plain" type="button" data-muse-action="tool">接続ツールを選ぶ</button><button class="btn plain" type="button" data-muse-action="refresh">状態を確認</button><p id="muse-settings-notice" role="status"></p>');
+      if (typeof settingsLayoutSync === 'function') settingsLayoutSync();
+    }
   }
 }
 
@@ -450,10 +472,12 @@ function languageSettingsHtml(settings) {
 function drawLanguageSettings() {
   const box = $('#language-box');
   if (box && languageSettings) {
+    if (typeof settingsLayoutRestoreSource === 'function') settingsLayoutRestoreSource('language');
     const open = box.querySelector('details')?.open === true;
     box.innerHTML = languageSettingsHtml(languageSettings);
     const details = box.querySelector('details');
     if (details) details.open = open;
+    if (typeof settingsLayoutSync === 'function') settingsLayoutSync();
   }
 }
 
@@ -599,6 +623,7 @@ async function loadCliModels(keepDraft = false) {
 }
 
 function updateLabel(version, latest) {
+  if(localConnectionLost)return UI.text('画面の接続が切れています');
   const hub = latest && version && latest !== version;
   const cli = state.aiCliUpdate?.available === true;
   if(state.restart?.reserved)return UI.text('再起動を予約中');
@@ -606,6 +631,7 @@ function updateLabel(version, latest) {
 }
 
 function showVersion(version, latest) {
+  document.querySelectorAll('[data-local-restart-status]').forEach(box => { box.innerHTML = restartControls(); });
   $('#master-badge').hidden = state.license?.edition !== 'owner';
   $('#ver').textContent = version ? UI.text('稼働')+' v' + version : '';
   $('#ver').title=UI.text('本体保存済み')+' v'+(latest||version||'')+' / '+(state.restart?.waiting||[]).map(x=>x.message).join(' / ');
@@ -616,6 +642,7 @@ function showVersion(version, latest) {
 }
 
 function restartControls() {
+  if(localConnectionLost)return UI.template`<span class="small">画面の接続が切れています。再起動の状況は未確認です。入力は残っています。</span>`;
   const r=state.restart || {};
   if(r.committed)return UI.template`<span class="small">再起動を開始しています</span>`;
   if(r.reserved)return UI.template`<span class="small">再起動を予約中</span><button type="button" class="btn plain" data-restart-cancel>再起動予約を取消</button><span class="small">${esc(r.error || (r.waiting || []).map(x=>x.message).join(' / '))}</span>`;
@@ -637,6 +664,7 @@ async function switchHubUpdate() {
 }
 
 async function openUpdate() {
+  if(localConnectionLost){scheduleLocalRecovery();localConnectionNotice();return;}
   if ($('#upd').disabled) return;
   if(state.restart?.reserved){view={...view,kind:'settings'};settingsTab='ai';render();return;}
   if (state.aiCliUpdate?.available) {
@@ -677,7 +705,7 @@ async function loadLog() {
 }
 
 async function saveRoles() {
-  try { state.roles = await api('/api/roles', { roles: rolesDraft, checkCredits: checkCreditsDraft, preferCredits: preferCreditsDraft, expectedRevision: rolesDraftRevision || 'reload-required' }); clearRolesDraft(); toast(UI.text('役割分担とクレジット設定を保存しました')); render(); }
+  try { state.roles = await api('/api/roles', { roles: rolesDraft, checkCredits: checkCreditsDraft, preferCredits: preferCreditsDraft, allowDelegateUltra: allowDelegateUltraDraft, expectedRevision: rolesDraftRevision || 'reload-required', ...(tiersDirty()?{tiers:tierDraft,tiersRevision:tierDraftRevision,resumeTiers:tierResume}:{}) }, tiersDirty()?{'X-Hub-UI':'role-tiers'}:undefined); if(state.roleTiers)state.roleTiers=await api('/api/roles/tiers'); clearRolesDraft(); toast(UI.text('役割分担と確認設定を保存しました')); render(); }
   catch (e) { toast(e.message); }
 }
 
@@ -731,7 +759,7 @@ function appSettingsCallback3268() {
   return (e => {
   const button = e.target.closest?.('[data-settings-tab]');
   if (!button || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
-  const tabs = Object.keys(SETTINGS_TABS), index = tabs.indexOf(button.dataset.settingsTab);
+  const tabs = typeof settingsLayoutTabs === 'function' ? settingsLayoutTabs() : Object.keys(SETTINGS_TABS), index = tabs.indexOf(button.dataset.settingsTab);
   const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
   e.preventDefault(); selectSettingsTab(tabs[next]); document.querySelector(`[data-settings-tab="${tabs[next]}"]`)?.focus();
 });

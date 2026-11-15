@@ -2,7 +2,7 @@
 process.env.HUB_LANG='ja';
 const test=require('node:test'), assert=require('node:assert/strict'), fs=require('node:fs'), path=require('node:path'), os=require('node:os'), vm=require('node:vm');
 const history=require('../lib/role-history'), roles=require('../lib/roles');
-const seed='models:\n  claude-code: [Opus 5.5, Fable 5.1]\n  codex: [GPT-6.1-Sol]\nroles:\n  文章: { main: [claude-code, Opus 5.5, 中], backup: [codex, GPT-6.1-Sol, 高], job: 説明文 }\nswitch:\n  auto: true\npermissions:\n  publish: false\n';
+const seed='models:\n  claude-code: [Opus 5.5, Fable 5.2]\n  codex: [GPT-6.1-Sol]\nroles:\n  文章: { main: [claude-code, Opus 5.5, 中], backup: [codex, GPT-6.1-Sol, 高], job: 説明文 }\nswitch:\n  auto: true\npermissions:\n  publish: false\n';
 
 function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'hub-role-unit-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const file=path.join(dir,'roles.yaml');fs.writeFileSync(file,seed);return file;}
 function edit(file,effort,at,extra={}){const current=history.load(file),next=structuredClone(current.roles);next[0].main.effort=effort;const out=roles.write(file,next,undefined,true,undefined,{at,expectedRevision:current.revision,...extra});assert.equal(out.ok,true,out.errors?.join(' / '));return history.load(file);}
@@ -18,10 +18,10 @@ test('baseline persists once, changes alone add history, defaults and unrelated 
 test('date boundaries, multiple changes, empty days, and restore of restore retain exact snapshots',t=>{
   const file=fixture(t);const base=history.load(file,undefined,'2026-10-10T15:00:00Z');
   edit(file,'高','2026-10-11T01:00:00Z');const latest=edit(file,'MAX','2026-10-11T14:59:59Z');
-  edit(file,'Ultra','2026-10-11T15:00:00Z');const j=history.load(file).journal;
+  edit(file,'極高','2026-10-11T15:00:00Z');const j=history.load(file).journal;
   assert.throws(()=>history.select(j,{before:'2026-10-10T15:00:00Z'}),/記録されていません/);
   assert.equal(history.select(j,{before:'2026-10-11T15:00:00Z'}).roles[0].main.effort,'MAX');
-  assert.equal(history.select(j,{before:'2026-10-14T15:00:00Z'}).roles[0].main.effort,'Ultra');
+  assert.equal(history.select(j,{before:'2026-10-14T15:00:00Z'}).roles[0].main.effort,'極高');
   assert.equal(history.select(j,{id:latest.journal.history.at(-1).id}).roles[0].main.effort,'MAX');
   const before=history.load(file);assert.equal(roles.write(file,base.roles,undefined,true,undefined,{restore:true,kind:'restore'}).ok,true);
   assert.equal(roles.write(file,before.roles,undefined,true,undefined,{restore:true,kind:'restore'}).ok,true);

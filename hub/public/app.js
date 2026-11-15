@@ -17,14 +17,21 @@ const NEEDS = t => RESULTS_WAIT(t) || t.completionPending || t.state === '返事
 const REPLY = (p, t) => t.chatQueueBlocked || t.state === '返事待ち' || t.state === '上限で停止' || (t.question && t.state !== '完了');
 const WORKING = (p, t) => Boolean(live(p.id, t.id) || (t.chatQueueCount > 0 && !t.chatQueueBlocked) || t.resultsPending?.auto === 'running' || t.resultsPending?.code === 'checking' || bgOf(p.id, t.id).length || (state.webchat?.jobs || []).some(j => j.project === p.id && j.task === t.id && ['queued', 'checking', 'sending', 'tools', 'reporting'].includes(j.state)));
 // 成果不備だけでは返事を求めない。実質問・停止対応 → 稼働 → 成果確認 → 完了承認の順に一度だけ数える。
-const notificationKind = (p, t) => REPLY(p, t) ? 'reply' : WORKING(p, t) ? 'work' : RESULTS_WAIT(t) ? 'results' : t.completionPending ? 'done' : '';
+const notificationKind = (p, t) => workAnswerSending(p, t) ? 'work' : REPLY(p, t) ? 'reply' : WORKING(p, t) ? 'work' : RESULTS_WAIT(t) ? 'results' : t.completionPending ? 'done' : '';
 const CONFIRM = (p, t) => notificationKind(p, t) === 'done';
 const CLI = o => /claude|codex|agy|grok/i.test(o || '') || !o;
 const aiOf = o => (/grok/i.test(o || '') ? 'grok' : /agy/i.test(o || '') ? 'agy' : /codex/i.test(o || '') ? 'codex' : 'claude');
 const AIS = ['claude', 'codex', 'agy', 'grok'];
 const AI_ICON = { muse: 'M', claude: 'C', codex: 'X', agy: 'G', grok: 'K', chatgpt: 'G', 'chatgpt-chat': 'G', dot: 'D' };
 const AI_KEY = { claude: 'claude-code', codex: 'codex', agy: 'agy', grok: 'grok' };
-const effortsFor = ai => ai === 'agy' ? ['高'] : (state.efforts || []).filter(e => ai !== 'grok' || e !== 'Ultra');
+const normalizeEffort = (ai, effort) => ['claude', 'claude-code'].includes(ai) && effort === 'Ultra' ? '高' : effort;
+const effortsFor = (ai, model, account = 'default') => {
+  if (ai === 'agy') return ['高'];
+  const id = state.cliFlags?.codex?.[model] || model;
+  const row = state.codexModelCatalogs?.[account]?.models?.find(m => m.id === id || m.label === model);
+  return (state.efforts || []).filter(e => !(e === 'Ultra' && ['claude', 'claude-code', 'grok'].includes(ai)) &&
+    (e !== '低' || ['claude', 'claude-code'].includes(ai) || ai === 'codex' && row?.efforts?.includes('低')));
+};
 const effortHidden = ai => ['agy', 'chatgpt', 'muse'].includes(ai);
 const aiUnavailable = ai => ai === 'agy' ? !state.agyAvailable : ai === 'grok' ? !state.grokAvailable : false;
 const AI_LABEL = { muse: 'Muse', claude: 'Claude Code', codex: 'Codex', agy: 'Agy CLI', grok: 'Grok', chatgpt: 'ChatGPT', 'chatgpt-chat': UI.text('ChatGPT（Chat）'), dot: 'Dot' };
@@ -88,31 +95,39 @@ let rolesDraft = null;
 let rolesDraftRevision = null;
 let checkCreditsDraft = null;
 let preferCreditsDraft = null;
+let allowDelegateUltraDraft = null;
 const creditCheckSettings = () => ({ claude: state.roles.checkCredits?.claude === true, codex: state.roles.checkCredits?.codex === true });
 const roleAssignmentsDirty = () => Boolean(rolesDraft && JSON.stringify(rolesDraft) !== JSON.stringify(state.roles.roles));
 const creditsDirty = () => Boolean(checkCreditsDraft && JSON.stringify(checkCreditsDraft) !== JSON.stringify(creditCheckSettings()) || preferCreditsDraft !== null && preferCreditsDraft !== (state.roles.preferCredits === true));
 function rolesDirty() {
-  return Boolean(rolesDraft && JSON.stringify(rolesDraft) !== JSON.stringify(state.roles.roles) ||
+  return Boolean(tiersDirty() || rolesDraft && JSON.stringify(rolesDraft) !== JSON.stringify(state.roles.roles) ||
     checkCreditsDraft && JSON.stringify(checkCreditsDraft) !== JSON.stringify(creditCheckSettings()) ||
-    preferCreditsDraft !== null && preferCreditsDraft !== (state.roles.preferCredits === true));
+    preferCreditsDraft !== null && preferCreditsDraft !== (state.roles.preferCredits === true) ||
+    allowDelegateUltraDraft !== null && allowDelegateUltraDraft !== (state.roles.allowDelegateUltra === true));
 }
-function clearRolesDraft() { rolesDraft = null; rolesDraftRevision = null; checkCreditsDraft = null; preferCreditsDraft = null; }
+function clearRolesDraft() { clearTierDraft(); rolesDraft = null; rolesDraftRevision = null; checkCreditsDraft = null; preferCreditsDraft = null; allowDelegateUltraDraft = null; }
 let stateLoadEpoch = 0;
 let renderedTreeKey = '', renderedMainKey = '';
 try { const v = JSON.parse(localStorage.getItem('hub-view') || 'null'); if (v) view = v; open = new Set(JSON.parse(localStorage.getItem('hub-open') || '[]')); } catch (e) { /* 使えない時はそのまま */ }
 
 let stateTag = ''; // 一覧の印（本体が「変わっていない」を答えるために送り返す）
 const stateResponseTags = new WeakMap(); // 採用前の印は応答ごとに保持し、破棄・並行取得で混ぜない。
+let apiPendingWrites = 0, localConnectionLost = false, localRecoveryTimer = null;
 async function api(path, body, headers) {
+  if (body) apiPendingWrites++;
+  try {
   if(body?.project&&body.task&&globalThis.HubChatGenerations?.has(body.project+'\0'+body.task)&&body.generation===undefined)body={...body,generation:globalThis.HubChatGenerations.get(body.project+'\0'+body.task)};
   const opt = body ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Hub': '1' }, body: JSON.stringify(body) } : {};
   if (headers) opt.headers = { ...opt.headers, ...headers };
   const r = await fetch(path, opt);
   if (r.status === 304) return null; // 変わっていない（一覧の取得）
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(j.error || UI.text('失敗しました')); e.status = r.status; e.reason = j.reason; e.stage = j.stage; e.code = j.code; e.waiting = j.waiting; e.task = j.task; e.blocker = j.blocker; e.delivery = j.delivery; e.queued = j.queued; e.id = j.id; throw e; }
+  if (!r.ok) { const e = new Error(j.error || UI.text('失敗しました')); e.status = r.status; e.reason = j.reason; e.stage = j.stage; e.code = j.code; e.waiting = j.waiting; e.task = j.task; e.blocker = j.blocker; e.delivery = j.delivery; e.queued = j.queued; e.id = j.id;
+    if (e.status === 401 && e.code === 'local_auth_required') { localConnectionLost = true; localConnectionNotice(); }
+    throw e; }
   if (path === '/api/state') stateResponseTags.set(j, (r.headers && r.headers.get && r.headers.get('etag')) || '');
   return j;
+  } finally { if (body) apiPendingWrites--; }
 }
 function toast(t) { const e = $('#toast'); e.textContent = t; e.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => { e.hidden = true; }, 3000); }
 function save() { try { localStorage.setItem('hub-view', JSON.stringify(view)); localStorage.setItem('hub-open', JSON.stringify([...open])); } catch (e) { /* 無視 */ } }
@@ -132,7 +147,7 @@ function specOf(t, ai) {
   const key = AI_KEY[ai];
   const slot = r ? (r.main.ai === key ? r.main : r.backup.ai === key ? r.backup : null) : null;
   const model = t.model || (slot && slot.model) || '';
-  return { model: ai === 'agy' ? agyModelLabel(model) : model, effort: ai === 'agy' ? '高' : state.efforts.includes(t.effort) ? t.effort : (slot && slot.effort) || '' };
+  return { model: ai === 'agy' ? agyModelLabel(model) : model, effort: ai === 'agy' ? '高' : normalizeEffort(ai, state.efforts.includes(t.effort) ? t.effort : (slot && slot.effort) || '') };
 }
 function agyModelLabel(model) { return (state.agyModels || []).find(row => row.id === model || row.label === model)?.label || model; }
 function modelRequest(ai, model) { return ai === 'agy' ? (state.agyModels || []).find(row => row.label === model || row.id === model)?.id || model : model; }
@@ -147,8 +162,100 @@ const specText = (t, ai) => { const s = specOf(t, ai); return [s.model, UI.label
 
 // 一覧の取得。本体は前回と同じなら中身を送らない（304）ので、その時は今の state を使う
 async function fetchState() {
-  const next = await api('/api/state', null, stateTag ? { 'If-None-Match': stateTag } : undefined);
-  return next || (state ? null : await api('/api/state'));
+  try {
+    const next = await api('/api/state', null, stateTag ? { 'If-None-Match': stateTag } : undefined);
+    if (!restartReloaded) {
+      if (localConnectionLost) $('#toast').hidden = true;
+      localConnectionLost = false;
+      localRecoveryReason = '';
+      try { sessionStorage.removeItem('hub-local-recovery'); } catch (_) { /* No reload without storage. */ }
+    }
+    return next || (state ? null : await api('/api/state'));
+  } catch (e) {
+    if (e.status === 401 && e.code === 'local_auth_required') scheduleLocalRecovery();
+    throw e; // Keep the last view and drafts; never render an empty state as success.
+  }
+}
+const localRecoveryEdits = new WeakSet();
+const localRecoveryMessages = {
+  'unsaved-input': '変更中の欄があります。再読み込みすると、設定などの変更中の欄の内容は失われます。会話の下書きは保存します。',
+  'pending-write': '保存・送信の完了を待っています。',
+  sending: '送信処理の完了を待っています。',
+  uploading: '添付ファイルの準備が終わるのを待っています。',
+  'dialog-open': '開いている入力画面を閉じてください。',
+  'new-project': 'プロジェクトの作成画面を閉じてください。',
+  'no-reconnect-hint': 'この画面からは自動で接続し直せません。アプリか起動ファイルから開き直してください。',
+  'already-tried': '自動の接続し直しを一度試しました。再読み込みボタンでもう一度試せます。',
+  'storage-unavailable': '画面の保存領域を利用できません。保存領域を確認してから再読み込みしてください。',
+  'draft-save-failed': '下書きを保存できないため、再読み込みを待っています。',
+};
+let localRecoveryReason = '';
+function trackLocalRecoveryEdit(event) {
+  const el = event.target?.closest?.('input, textarea, select, [contenteditable="true"]');
+  if (event.isTrusted && el) localRecoveryEdits.add(el);
+}
+document.addEventListener('input', trackLocalRecoveryEdit, true);
+document.addEventListener('change', trackLocalRecoveryEdit, true);
+function localConnectionNotice(code) {
+  if (Object.hasOwn(localRecoveryMessages, code)) {
+    if (localRecoveryReason !== code) {
+      try {
+        const rows = JSON.parse(sessionStorage.getItem('hub-local-recovery-reasons') || '[]');
+        // Rebuild records using only fixed codes and timestamps, never input values.
+        const safe = (Array.isArray(rows) ? rows : []).filter(r => r && Object.hasOwn(localRecoveryMessages, r.code) && Number.isFinite(r.at)).map(r => ({ at: r.at, code: r.code }));
+        sessionStorage.setItem('hub-local-recovery-reasons', JSON.stringify([...safe.slice(-9), { at: Date.now(), code }]));
+      } catch (_) { /* Reporting must work even when storage is unavailable. */ }
+    }
+    localRecoveryReason = code;
+  }
+  toast(UI.text('画面の接続が切れています。入力は残っています。AIの停止や再起動の再予約は不要です。') + (localRecoveryReason ? ' ' + UI.text('自動で戻れない理由：') + UI.text(localRecoveryMessages[localRecoveryReason]) : ''));
+  clearTimeout(toast.h);
+  const notice = $('#toast');
+  notice.insertAdjacentHTML('beforeend', '<button type="button" class="btn plain sm" data-local-recovery-reload></button>');
+  const button = notice.querySelector('[data-local-recovery-reload]');
+  if (button) {
+    button.textContent = UI.text('画面を再読み込み');
+    button.disabled = !window.HubLocalAuth?.canReconnect || Boolean(localRecoveryBlocker(false));
+    button.addEventListener('click', event => { if (event.isTrusted) attemptLocalRecovery(true); });
+  }
+  showVersion(state.version, state.latest);
+}
+function localRecoveryHasUnsavedInputs() {
+  return [...document.querySelectorAll('input, textarea, select, [contenteditable="true"]')].some(el => {
+    // These editors are mirrored in the existing restart draft snapshot.
+    if (el.matches('#chat-in, [data-queue-text], [data-queue-model], #quickform input, #quickform textarea, #quickform select, #conversation-search-query, #conversation-search-mode')) return false;
+    if (el.type === 'file') return Boolean(el.files?.length);
+    return localRecoveryEdits.has(el);
+  });
+}
+function localRecoveryBlocker(includeInputs = true) {
+  if (apiPendingWrites || window.HubLocalAuth?.pendingWrites) return 'pending-write';
+  if (chatSending.size || workAnswerSends.size || quickStarting.size) return 'sending';
+  if (quickUploading.size || [...chatImageUploads.values()].some(Boolean) || nativeDropTickets.size) return 'uploading';
+  if (view.kind === 'newproject') return 'new-project';
+  if (document.querySelector('dialog[open], .ideas-dialog[open]')) return 'dialog-open';
+  if (includeInputs && localRecoveryHasUnsavedInputs()) return 'unsaved-input';
+  return '';
+}
+function attemptLocalRecovery(manual = false) {
+  if (!localConnectionLost || restartReloaded) return;
+  const blocked = localRecoveryBlocker(!manual);
+  if (blocked) { localConnectionNotice(blocked); return; }
+  if (!window.HubLocalAuth?.canReconnect) { localConnectionNotice('no-reconnect-hint'); return; }
+  if (manual && localRecoveryHasUnsavedInputs() && !confirm(UI.text(localRecoveryMessages['unsaved-input']))) return;
+  try {
+    if (!manual && sessionStorage.getItem('hub-local-recovery')) { localConnectionNotice('already-tried'); return; }
+    reloadAfterRestart(() => sessionStorage.setItem('hub-local-recovery', 'attempted'));
+  } catch (_) { localConnectionNotice('storage-unavailable'); }
+}
+function scheduleLocalRecovery() {
+  if (localRecoveryTimer !== null || restartReloaded) return;
+  // Let failed sends restore their inputs first. Only the GET state poll may
+  // initiate recovery; a failed POST is never repeated, even after reloading.
+  localRecoveryTimer = setTimeout(() => {
+    localRecoveryTimer = null;
+    attemptLocalRecovery();
+  }, 0);
 }
 let restartWatch = null, restartReloaded = false;
 const RESTART_DRAFT_KEY = 'hub-restart-drafts';
@@ -160,21 +267,23 @@ function restoreRestartDrafts() {
     const saved = JSON.parse(sessionStorage.getItem(RESTART_DRAFT_KEY) || 'null');
     if (!saved) return;
     chatDraft = saved.chatDraft || {};
-    rolesDraft = saved.rolesDraft ?? null; rolesDraftRevision = saved.rolesDraftRevision ?? null; checkCreditsDraft = saved.checkCreditsDraft ?? null; preferCreditsDraft = saved.preferCreditsDraft ?? null;
+    tierDraft=saved.tierDraft??null;tierDraftRevision=saved.tierDraftRevision??null;tierResume=saved.tierResume||[]; rolesDraft = saved.rolesDraft ?? null; rolesDraftRevision = saved.rolesDraftRevision ?? null; checkCreditsDraft = saved.checkCreditsDraft ?? null; preferCreditsDraft = saved.preferCreditsDraft ?? null; allowDelegateUltraDraft = saved.allowDelegateUltraDraft ?? null;
     for (const [name, map] of Object.entries(restartDraftMaps())) for (const [key, value] of saved.maps?.[name] || []) map.set(key, name==='freetalkPromotionDrafts'?{...value,creating:false}:value);
     for (const key of saved.quickOverrides || []) quickOverrides.add(key);
     chatFileSequence = saved.chatFileSequence || 0;
     sessionStorage.removeItem(RESTART_DRAFT_KEY);
   } catch (_) { /* 保存が使えなくても起動は続ける */ }
 }
-function reloadAfterRestart() {
+function reloadAfterRestart(beforeReload) {
   if (restartReloaded) return true;
   const maps = Object.fromEntries(Object.entries(restartDraftMaps()).map(([name, map]) => [name, [...map]]));
   const hasDraft = Object.values(chatDraft).some(Boolean) || rolesDirty() || Object.values(maps).some(rows => rows.length);
   if (hasDraft) {
-    try { sessionStorage.setItem(RESTART_DRAFT_KEY, JSON.stringify({ chatDraft, rolesDraft, rolesDraftRevision, checkCreditsDraft, preferCreditsDraft, maps, quickOverrides: [...quickOverrides], chatFileSequence })); }
-    catch (_) { toast(UI.text('入力の保存ができないため、画面の再読込を待っています。')); return false; }
+    try { sessionStorage.setItem(RESTART_DRAFT_KEY, JSON.stringify({ chatDraft, tierDraft, tierDraftRevision, tierResume, rolesDraft, rolesDraftRevision, checkCreditsDraft, preferCreditsDraft, allowDelegateUltraDraft, maps, quickOverrides: [...quickOverrides], chatFileSequence })); }
+    catch (_) { localConnectionNotice('draft-save-failed'); return false; }
   }
+  // Storage failure or an unverified old shell must never cause a reload loop.
+  if (typeof beforeReload === 'function') beforeReload();
   save(); restartReloaded = true; location.reload(); return true;
 }
 function observeRestart(next) {
@@ -190,12 +299,14 @@ function observeRestart(next) {
 }
 function adoptState(next) {
   const previousSpecial = JSON.stringify(state.specialMode);
-  const previousModels = JSON.stringify([state.roles?.models,state.modelOrder,state.hiddenModels,state.agyModels]);
+  const previousModels = JSON.stringify([state.roles?.models,state.modelOrder,state.hiddenModels,state.agyModels,state.codexModelCatalogs,state.codexHiddenModels]);
+  const previousAccounts = JSON.stringify(state.accounts);
   observeRestart(next);
   if (!rolesDirty() && state.roles.management?.revision !== next.roles.management?.revision) clearRolesDraft();
   state = next;
   if (previousSpecial !== JSON.stringify(state.specialMode)) syncSpecialModeChange();
-  if (previousModels !== JSON.stringify([state.roles?.models,state.modelOrder,state.hiddenModels,state.agyModels])) syncChatModelChoices();
+  if (previousModels !== JSON.stringify([state.roles?.models,state.modelOrder,state.hiddenModels,state.agyModels,state.codexModelCatalogs,state.codexHiddenModels])) syncChatModelChoices();
+  if (previousAccounts !== JSON.stringify(state.accounts)) drawAccountSettings();
   drawShellAlerts();
   syncChatHandoff();
   stateTag = stateResponseTags.get(next) || ''; // 一覧を採用した時だけ、その一覧の印も進める。
@@ -401,6 +512,12 @@ const refsOf = p => p.folders.filter(f => /^参考/.test(f.label));
 
 // ---- 作業画面 ----
 let sendWorkAnswer = null;
+/* @app-function app-work.js:unfinishedBadge */
+/* @app-function app-work.js:unfinishedListHtml */
+/* @app-function app-work.js:draftUnfinished */
+/* @app-function app-work.js:showUnfinished */
+/* @app-function app-work.js:workAnswerSending */
+/* @app-function app-work.js:refreshWorkAnswerSend */
 /* @app-function app-work.js:workQuestionHtml */
 // 会話や入力欄を作り直さず、質問の変更だけを反映する。
 /* @app-function app-work.js:syncWorkQuestion */
@@ -443,17 +560,20 @@ const instructionHistory = window.HubChatHistory.create(historyStorage);
 const chatAttachments = new Map();
 let chatFileSequence = 0;
 const chatImageUploads = new Map();
-const FREETALK_ACCEPT = '.png,.jpg,.jpeg,.webp,.gif,.heic,.txt,.md,.csv,.tsv,.json,.jsonl,.yaml,.yml,.xml,.html,.css,.js,.ts,.py,.log,.rtf,.pdf,.pptx,.key';
+const chatVideoUploads = new Map();
+const FREETALK_ACCEPT = 'image/*,video/*,.png,.jpg,.jpeg,.webp,.gif,.heic,.mp4,.mov,.m4v,.webm,.txt,.md,.csv,.tsv,.json,.jsonl,.yaml,.yml,.xml,.html,.css,.js,.ts,.py,.log,.rtf,.pdf,.pptx,.key';
 const chatSending = new Set();
+const workAnswerSends = new Map(); // Display-only; task state changes only after acceptance.
 const chatAttachmentKey = (project, task) => JSON.stringify([project, task]);
 /* @app-function app-composer.js:chatImages */
 /* @app-function app-composer.js:attachmentImagesHtml */
 /* @app-function app-composer.js:chatImagesHtml */
 /* @app-function app-composer.js:drawChatImages */
+/* @app-function app-composer.js:isChatVideo */
 /* @app-function app-composer.js:addChatImage */
 /* @app-function app-composer.js:attachmentGeneration */
 /* @app-function app-composer.js:syncFreetalkAttachmentControls */
-/* @app-function app-composer.js:addFreetalkAttachment */
+/* @app-function app-composer.js:addTaskAttachment */
 /* @app-function app-composer.js:removeChatImage */
 /* @app-function app-composer.js:chatSendText */
 /* @app-function app-composer.js:clearSentChatImages */
@@ -469,6 +589,7 @@ const EMPTY_CHAT = UI.html('<p class="chat-empty">ここで AI と話します�
 // 選ぶ欄に出すモデル（設定で隠したものは出さない。ただし今選んでいるものは残す）
 /* @app-function app-composer.js:orderedModels */
 /* @app-function app-composer.js:shownModels */
+/* @app-function app-composer.js:taskModels */
 /* @app-function app-composer.js:roleModelOptions */
 /* @app-function app-composer.js:chatSelection */
 let discussionUIInstance;
@@ -625,6 +746,7 @@ let modelViewSaving = false, modelOrderDrag = '', modelOrderNotice = '';
 /* @app-function app-settings-ai.js:syncRoleModelOrder */
 /* @app-function app-settings-ai.js:saveModelOrder */
 /* @app-function app-settings-ai.js:toggleModelVisibility */
+/* @app-function app-settings-ai.js:refreshCodexAccountModels */
 document.addEventListener('click', /* @app-callback app-settings-ai.js:appSettingsAiCallback2779 */appSettingsAiCallback2779());
 document.addEventListener('dragstart', /* @app-callback app-settings-ai.js:appSettingsAiCallback2790 */appSettingsAiCallback2790());
 /* @app-function app-settings-ai.js:clearModelDrop */
@@ -655,8 +777,10 @@ document.addEventListener('input', /* @app-callback app-settings-ai.js:appSettin
 document.addEventListener('change', /* @app-callback app-settings-ai.js:appSettingsAiCallback2945 */appSettingsAiCallback2945());
 // AIアカウント：選択は台帳で共有し、送信時にも明示して待ち順へ固定する。
 let accountSelectionSaving = 0, accountOperation = false;
+let codexModelAccount = 'default', codexModelsPending = false;
 const accountSelectionsPending = new Set();
 let accountStatusRows = null;
+const accountHoldNotices = new Map();
 let accountCheckedAt = '', accountCheckPromise = null, accountAutoChecked = false, accountCheckError = '';
 /* @app-function app-settings-ai.js:roleAiAvailability */
 /* @app-function app-settings-ai.js:roleAiOptions */
@@ -695,6 +819,8 @@ let chatgptWorkPending = null;
 let agyModelsRefreshing = false;
 /* @app-function app-settings-ai.js:agyModelsHtml */
 document.addEventListener('click',/* @app-callback app-settings-ai.js:appSettingsAiCallback3145 */appSettingsAiCallback3145());
+/* @app-function app-settings-ai.js:accountRowsWithStatus */
+/* @app-function app-settings-ai.js:accountHoldReason */
 /* @app-function app-settings-ai.js:accountSettingsHtml */
 /* @app-function app-settings-ai.js:drawAccountSettings */
 /* @app-function app-settings-ai.js:operateAccount */
@@ -710,7 +836,8 @@ let museUsageBusy = false;
 document.addEventListener('click', /* @app-callback app-settings.js:appSettingsMuseCallback */appSettingsMuseCallback());
 document.addEventListener('click',/* @app-callback app-settings.js:appSettingsCallback3230 */appSettingsCallback3230());
 setInterval(/* @app-callback app-settings.js:appSettingsCallback3248 */appSettingsCallback3248(),3000);
-let settingsTab = localStorage.getItem('hub.settingsTab') || 'basic';
+let settingsTab = 'basic';
+try { settingsTab = localStorage.getItem('hub.settingsTab') || 'basic'; } catch { /* Settings work without browser storage. */ }
 /* @app-function app-settings.js:selectSettingsTab */
 document.addEventListener('click', /* @app-callback app-settings.js:appSettingsCallback3264 */appSettingsCallback3264());
 document.addEventListener('keydown', /* @app-callback app-settings.js:appSettingsCallback3268 */appSettingsCallback3268());
@@ -811,6 +938,8 @@ document.addEventListener('click', e => {
   if (!e.target.closest('#menu') && !e.target.closest('[data-tree-menu]') && !e.target.closest('[data-act="files"]')) $('#menu').hidden = true;
   const tg = e.target.closest('[data-toggle]');
   if (tg) { const id = tg.dataset.toggle; open.has(id) ? open.delete(id) : open.add(id); save(); renderTree(); if(tg.dataset.sidebarGroup)$('#sidebar-'+tg.dataset.sidebarGroup+'-toggle')?.focus({preventScroll:true}); e.stopPropagation(); return; }
+  const unfinished=e.target.closest('[data-unfinished]');
+  if(unfinished){void showUnfinished(unfinished.dataset.p,unfinished.dataset.t);return;}
   const go = e.target.closest('[data-go]');
   if (go) {
     if (go.dataset.go === 'newproject') newProjectPreset = null;
@@ -833,6 +962,7 @@ document.addEventListener('click', e => {
   }
   if (e.target.id === 'set-enter') { try { localStorage.setItem('hub-enter', e.target.checked ? '1' : '0'); } catch (err) { /* 無視 */ } toast(e.target.checked ? UI.text('Enter だけで送ります') : UI.text('⌘ + Enter で送ります')); return; }
   if (e.target.id === 'set-detail') { try { localStorage.setItem('hub-detail', e.target.checked ? '1' : '0'); } catch (err) { /* 無視 */ } toast(e.target.checked ? UI.text('細かい作業を出します') : UI.text('細かい作業を隠します')); return; }
+  if (e.target.id === 'codex-model-refresh') { refreshCodexAccountModels(); return; }
   if (e.target.id === 'models-tidy') {
     if (rolesDirty() && !confirm(UI.text('役割分担とクレジット設定の保存していない変更は消えます。整理しますか？'))) return;
     api('/api/models/tidy', {expectedRevision:state.roles.management?.revision}).then(async r => {
@@ -861,6 +991,7 @@ document.addEventListener('toggle', e => {
   if (e.target.id === 'verd') { verOpen = e.target.open; if (verOpen) loadChangelog(); }
 }, true);
 document.addEventListener('change', async e => {
+  if (e.target.id === 'codex-model-account') { codexModelAccount = e.target.value; drawModelOrder(); return; }
   if (e.target.hasAttribute?.('data-task-account')) { await saveTaskAccount(e.target); return; }
   const f = e.target.closest && e.target.closest('#quickform');
   if (f) {
@@ -870,6 +1001,7 @@ document.addEventListener('change', async e => {
     if (e.target.id === 'quick-ai') { d.ai = e.target.value; d.model = ''; d.effort = d.ai === 'agy' ? '高' : ''; }
     if (e.target.id === 'quick-model') d.model = e.target.value;
     if (e.target.id === 'quick-effort') d.effort = e.target.value;
+    if (d.effort && !effortsFor(d.ai, d.model).includes(d.effort)) d.effort = '高';
     keepQuick(p.id); drawQuick(p); return;
   }
 
@@ -879,13 +1011,16 @@ document.addEventListener('change', async e => {
     const next = { ...initialPick(), [s.dataset.initial]: s.value };
     if (s.dataset.initial === 'ai') {
       next.model = shownModels(AI_KEY[next.ai])[0] || '';
-      if (!state.efforts.includes(next.effort)) next.effort = '高';
     }
+    if (!effortsFor(next.ai, next.model).includes(next.effort)) next.effort = '高';
     await saveInitialPick(next); return;
   }
   if (['claude', 'codex'].includes(s.dataset.checkCredits) && checkCreditsDraft) {
     checkCreditsDraft[s.dataset.checkCredits] = s.checked;
     render(); return;
+  }
+  if (s.dataset.allowDelegateUltra !== undefined && allowDelegateUltraDraft !== null) {
+    allowDelegateUltraDraft = s.checked; render(); return;
   }
   if (s.dataset.preferCredits !== undefined && preferCreditsDraft !== null) {
     preferCreditsDraft = s.checked; render(); return;
@@ -897,9 +1032,10 @@ document.addEventListener('change', async e => {
       const list = shownModels(s.value);
       r.model = s.value === '人' ? '' : (list.includes(r.model) ? r.model : s.value === 'agy' ? '' : list[0] || '');
       r.effort = s.value === '人' ? '' : s.value === 'agy' ? '高' : (r.effort || '高');
-      if (s.value === 'grok' && r.effort === 'Ultra') r.effort = '高';
+      if (['grok', 'claude-code'].includes(s.value) && r.effort === 'Ultra') r.effort = '高';
       if (s.value === 'agy' && !list.includes(r.model)) r.model = '';
     }
+    if (r.effort && !effortsFor(r.ai, r.model).includes(r.effort)) r.effort = '高';
     render(); return;
   }
   const a = s.dataset.act;
@@ -1040,7 +1176,7 @@ async function pollState() {
   try {
     const next = await fetchState();
     if (epoch !== stateLoadEpoch || webchatUIPending() || accountSelectionSaving || taskFastSaving || accelerationSaving || initialPickSaving || specialModeSaving || phoneLabelsSaving) return; // 保存後などの明示 load() を古い定期取得で上書きしない
-    const previousModels = JSON.stringify([state.modelOrder, state.hiddenModels, state.roles?.models]);
+    const previousModels = JSON.stringify([state.modelOrder, state.hiddenModels, state.roles?.models, state.codexModelCatalogs, state.codexHiddenModels]);
     const previousInitial = JSON.stringify([state.initialPick, state.initialPickError]);
     if (next) adoptState(next);
     refreshKidsDoneBar(); syncWorkQuestion(); syncTaskSteps();
@@ -1051,10 +1187,12 @@ async function pollState() {
     syncAccountPickers();
     syncChatWebchatAvailability();
     if (typeof syncRoleSettings === 'function') syncRoleSettings();
+    if (view.kind==='settings')syncRoleTiers();
     if(view.kind==='settings'&&state.stopControl)drawEmergencyStatus(state.stopControl);
+    if(view.kind==='settings'&&typeof settingsLayoutSync==='function')settingsLayoutSync();
     if (view.kind === 'settings' && !phoneLabelsSaving && renderedPhoneKey !== phoneSettingsKey() && !$('#phone-labels')?.contains?.(document.activeElement)) drawPhoneLabels();
-    if (view.kind === 'settings' && !modelViewSaving && previousModels !== JSON.stringify([state.modelOrder, state.hiddenModels, state.roles?.models])) { drawModelOrder(); syncRoleModelOrder(); }
-    if (view.kind === 'settings' && !initialPickSaving && (previousInitial !== JSON.stringify([state.initialPick, state.initialPickError]) || previousModels !== JSON.stringify([state.modelOrder, state.hiddenModels, state.roles?.models]))) drawInitialPick();
+    if (view.kind === 'settings' && !modelViewSaving && previousModels !== JSON.stringify([state.modelOrder, state.hiddenModels, state.roles?.models, state.codexModelCatalogs, state.codexHiddenModels])) { drawModelOrder(); syncRoleModelOrder(); }
+    if (view.kind === 'settings' && !initialPickSaving && (previousInitial !== JSON.stringify([state.initialPick, state.initialPickError]) || previousModels !== JSON.stringify([state.modelOrder, state.hiddenModels, state.roles?.models, state.codexModelCatalogs, state.codexHiddenModels]))) drawInitialPick();
     if (!next && state.sessions.length) { state.sessions = await api('/api/sessions'); if (epoch !== stateLoadEpoch) return; } // 止まっている秒数だけ取り直す
     if (document.hidden) return;
     if (typeof syncMaintenanceControls === 'function') syncMaintenanceControls();

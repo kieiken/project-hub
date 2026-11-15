@@ -30,7 +30,7 @@ test('シンボリックリンク・重なる本体・別worktreeのcommon Git�
 test('隔離したHubを実際に停止・再起動しても、順序・依頼ID・上限保持・手動停止を変えず重複開始しない',async t=>{
  const root=tmp(t),ledger=path.join(root,'Product/P');fs.mkdirSync(path.join(ledger,'.ai/tasks'),{recursive:true});fs.mkdirSync(path.join(ledger,'.ai/chat'));
  fs.writeFileSync(path.join(ledger,'PROJECT.md'),'---\nname: P\nfolders: {}\n---\n');fs.writeFileSync(path.join(ledger,'.ai/tasks/t.md'),'---\nid: t\ntitle: t\nstate: 上限で停止\nworkspaceMode: direct\n---\n');
- const file=path.join(ledger,'.ai/chat/t.queue.json'),q=[{id:'one',ai:'claude',model:'claude-fable-5-1',text:'held',limitWaiting:true,error:'上限',limitSwitch:{request:'handoff',sourceRequest:'origin',until:'2099-01-01'}},{id:'two',ai:'codex',model:'gpt-6.1-sol',text:'manual stop',error:'手動停止',paused:true}];fs.writeFileSync(file,JSON.stringify(q,null,2));
+ const file=path.join(ledger,'.ai/chat/t.queue.json'),q=[{id:'one',ai:'claude',model:'claude-fable-5-2',text:'held',limitWaiting:true,error:'上限',limitSwitch:{request:'handoff',sourceRequest:'origin',until:'2099-01-01'}},{id:'two',ai:'codex',model:'gpt-6.1-sol',text:'manual stop',error:'手動停止',paused:true}];fs.writeFileSync(file,JSON.stringify(q,null,2));
  const before=fs.readFileSync(file),taskBefore=fs.readFileSync(path.join(ledger,'.ai/tasks/t.md'));
  const probe=require('node:http').createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const port=probe.address().port;await new Promise(r=>probe.close(r));const base='http://127.0.0.1:'+port;
  let child;const env={...process.env,HUB_ROOT:root,HUB_PORT:String(port),HUB_DRY_RUN:'1',HUB_AI_HOME:path.join(root,'home'),HUB_FREETALK_HOME:path.join(root,'ft'),HUB_AUTO_UPDATE:'0',HUB_AUTO_TRANSLATE:'0',HUB_STORAGE_GUARD:'',HUB_UPDATE_SOURCE:''};

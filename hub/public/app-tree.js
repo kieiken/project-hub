@@ -89,7 +89,7 @@ function taskTree(p, parentId) {
     const tOpen = open.has(tk) || hot;
     return UI.template`<div class="tree-line"><button class="node t ${view.kind === 'work' && view.project === p.id && view.task === t.id ? 'sel' : ''}" data-go="work" data-p="${esc(p.id)}" data-t="${esc(t.id)}" type="button" title="${esc(t.title)}">
         <span class="caret" ${sub ? `data-toggle="${esc(tk)}"` : ''}>${sub ? (tOpen ? '▼' : '▶') : ''}</span><span class="sdot ${taskLight(p, t, isLive).cls}" title="${taskLight(p, t, isLive).tip}"></span>
-        ${t.parent && t.kind !== 'derived' ? UI.html('<span class="fork" title="子作業（小作業）">↳</span>') : ''}<span class="nm">${esc(t.title)}${taskFutureHeld(p,t)?UI.template`<small class="branch-label">将来検討</small>`:''}${branchText(p,t) ? UI.template`<small class="branch-label">${esc(branchText(p,t))}</small>` : ''}</span>${notificationBadges(p, [t])}</button>${treeMenuButton(p, t)}</div>
+        ${t.parent && t.kind !== 'derived' ? UI.html('<span class="fork" title="子作業（小作業）">↳</span>') : ''}<span class="nm">${esc(t.title)}${taskFutureHeld(p,t)?UI.template`<small class="branch-label">将来検討</small>`:''}${branchText(p,t) ? UI.template`<small class="branch-label">${esc(branchText(p,t))}</small>` : ''}</span>${notificationBadges(p, [t])}</button>${unfinishedBadge(p,t)}${treeMenuButton(p, t)}</div>
       ${sub && tOpen ? UI.template`<div class="kids">${sub}</div>` : ''}`;
   }).join('');
 }
@@ -120,7 +120,7 @@ function projectNode(p, depth) {
   const isOpen = open.has(p.id);
   const subs = projectSiblings(p.id);
   const forks = state.projects.filter(q=>ProjectOrder.source(q,state.projects)?.id===p.id).length;
-  const visible = new Set(p.tasks.filter(t => t.state !== '完了' || isUnread(p.id,t.id)).map(t=>t.id));
+  const visible = new Set(p.tasks.filter(t => t.state !== '完了' || t.unfinishedCount || t.unfinishedError || isUnread(p.id,t.id)).map(t=>t.id));
   const full = treeTasks(p);
   for(const t of full.filter(x=>visible.has(x.id))) {
     let parent=t.parent;const seen=new Set([t.id]);
@@ -143,7 +143,7 @@ function treeKey() {
 
 function mainKey() {
   const p = proj(view.project);
-  const common = [view.kind, view.project, view.task, state.root, state.freetalk, state.terminal, state.roles, state.efforts, state.cliFlags, state.agyModels, state.agyModelsState, state.agyAvailable, state.completionWarning, state.modelOrder, state.hiddenModels, state.specialMode];
+  const common = [view.kind, view.project, view.task, state.root, state.freetalk, state.terminal, state.roles, state.efforts, state.cliFlags, state.codexModelCatalogs, state.agyModels, state.agyModelsState, state.agyAvailable, state.completionWarning, state.modelOrder, state.hiddenModels, state.specialMode];
   if (view.kind === 'work') {
     const sessions = workMode() === 'term' ? state.sessions.filter(s => s.project === view.project && s.task === view.task).map(s => [s.ai, s.running]) : [];
     return JSON.stringify([...common, p && p.name, p && p.phases, taskOf(p, view.task), sessions]);
@@ -154,7 +154,7 @@ function mainKey() {
 }
 
 function freetalkTopics(p) {
-  return p.tasks.map(t => UI.template`<div class="freetalk-row ${notificationKind(p, t) === 'reply' ? 'waiting' : WORKING(p, t) ? 'running' : ''} ${view.kind === 'work' && view.project === p.id && view.task === t.id ? 'sel' : ''}"><button class="freetalk-topic" data-go="work" data-p="${esc(p.id)}" data-t="${esc(t.id)}" type="button" title="${esc(t.title)}">${esc(t.title)}${(state.unread || []).some(x => x.project === p.id && x.task === t.id) ? ' ●' : ''}</button><button class="freetalk-del" data-act="freetalkdelete" data-t="${esc(t.id)}" type="button" aria-label="この話題を削除" title="この話題を削除">×</button></div>`).join('');
+  return p.tasks.map(t => UI.template`<div class="freetalk-row ${notificationKind(p, t) === 'reply' ? 'waiting' : WORKING(p, t) ? 'running' : ''} ${view.kind === 'work' && view.project === p.id && view.task === t.id ? 'sel' : ''}"><button class="freetalk-topic" data-go="work" data-p="${esc(p.id)}" data-t="${esc(t.id)}" type="button" title="${esc(t.title)}">${esc(t.title)}${(state.unread || []).some(x => x.project === p.id && x.task === t.id) ? ' ●' : ''}</button>${unfinishedBadge(p,t)}<button class="freetalk-del" data-act="freetalkdelete" data-t="${esc(t.id)}" type="button" aria-label="この話題を削除" title="この話題を削除">×</button></div>`).join('');
 }
 
 function sidebarGroup(name, label, content, action = '') {
@@ -178,13 +178,14 @@ function renderTree() {
 function updateTurnCounts() {
   const items = state.projects.flatMap(p => p.tasks.map(t => ({ p, t })));
   const kinds = items.map(({ p, t }) => notificationKind(p, t));
+  const sending = items.filter(({ p, t }) => workAnswerSending(p, t)).length;
   const replies = kinds.filter(k => k === 'reply').length;
-  const working = kinds.filter(k => k === 'work').length;
+  const working = kinds.filter(k => k === 'work').length - sending;
   const confirmations = kinds.filter(k => k === 'done').length;
   const results = kinds.filter(k => k === 'results').length;
-  $('#turn-n').textContent = UI.text('返事待ち ') + replies;
+  $('#turn-n').textContent = (sending ? UI.template`送信中 ${sending}・` : '') + UI.text('返事待ち ') + replies;
   $('#turn-work-n').textContent = UI.text('作業中 ') + working;
   $('#turn-results-n').textContent = UI.text('成果確認 ') + results;
   $('#turn-done-n').textContent = UI.text('完了 ') + confirmations;
-  $('#turn').setAttribute('aria-label', UI.template`あなたの番：返事待ち ${replies}件、作業中 ${working}件、成果確認 ${results}件、完了 ${confirmations}件`);
+  $('#turn').setAttribute('aria-label', UI.text('あなたの番：') + (sending ? UI.template`送信中 ${sending}件、` : '') + UI.template`返事待ち ${replies}件、作業中 ${working}件、成果確認 ${results}件、完了 ${confirmations}件`);
 }

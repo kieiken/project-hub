@@ -1,18 +1,12 @@
 # English pack changelog
 
-## 4.126.92 (draft)
-- Added English for 4 screen texts, 7 backend texts and 2 Mac window texts introduced in 4.126.77-4.126.92: the "Unanswered question" card, the new-device code and trusted-device buttons, the "Checking the send…" status, the notes for omitted conversation messages, the "question has changed" refusal, the updated delegation instructions that use the local authentication header, the remote sign-in page with the one-time new-device code field, and two Mac window error texts. Existing translations are preserved. In the remote sign-in page only the visible text was translated; its script is unchanged.
-- Two new settings messages (the new-device code prompt and the "revoked trusted-device marks" notice) are translated but not yet shown in English or Traditional Chinese, because 4.126.92 has no translation hook for them.
-- Product changes covered (4.126.77-4.126.92): on phones the input and send controls stay reachable with attached images; the send screen shows "Checking the send…" right after sending; usage checks before sending are limited to the AI that will start, and the existing-credit check overlaps the first save check, with one fresh re-check when a reused result becomes stale; the light and dark themes are easier to read; background reading for conversation tidy-up and search is lighter; when the conversation handed to an AI is too long, whole messages are kept from the start and the omitted part is noted; unanswered questions and all their choices stay visible after a summary; the work phase and progress display is off by default; an old red tidy-up notice is cleared after a later normal check; and the local owner cookie alone no longer authorizes the API (a separate launch token is required, and the cookie and screen token expire after 8 hours).
-- Speed figures for these changes come from simulated tests only; real response time was not measured. Not yet verified with 4.126.92 on real Mac/Windows screens, updates or language switching. Not published.
+## Language pack 4.126.98 (draft)
+- Added 94 UI and 90 backend entries, including tiers, Token display and bulk alert review. Preserved existing translations and native entries. verifiedWith: 4.126.98.
+- Includes current 4.126.97–4.126.98 changes: isolated web-only tier reviews; saved holds visible in usage; Token panel scroll preservation; header alert button removed; snapshot-scoped bulk review. Not published; packaged Mac/Windows display remains unverified.
 
-## 4.126.76 (draft)
-- Added English for 41 screen texts and 3 instruction texts: the "Show full text" button for collapsed automatic requests, the previous-page button in archived conversations, the one-decimal credit balance, the section line-range guidance in AI instructions, and 38 conversation-search screen texts that had been missing since the search screen was added. Existing translations are preserved.
-- Product changes covered (4.126.68-4.126.76): automatic requests are collapsed with [Show full text]; AI history shortens resolved automatic requests while keeping the original; multi-line purpose/conditions are kept in full; task files get a section line-range guide in chat instructions; tapping a search result opens the task conversation at the matched message; the credit settings have their own save button; one request can omit the line-range guide for comparison; the credit balance is shown with one decimal place.
-- Verified with 4.126.76 by automated dictionary checks. Real Mac/Windows screens, updates and language switching are not yet verified. Not published.
-
-## 4.126.67 (draft)
-- Added English for 9 screen texts and 17 instruction texts introduced up to 4.126.67: automatic answer checks for Muse, the manual review guidance, the compact AI instructions, and the "reopen after a moment" notice. Existing translations are preserved. Verified with 4.126.67.
+## 4.126.96 (draft)
+- Verified with product 4.126.96. Added 42 UI entries (the new settings layout, video attachments, data location, per-account model lists and connection recovery) and 39 backend entries for strings added or reworded since 4.126.44 (compressed AI rules, video frames, remote sign-in page, Terminal sign-in recovery and others). Existing translations are kept; older entries that the product no longer uses are left in place.
+- Strict scans (UI and backend tests) pass. Not published; actual Mac/Windows display is not yet verified.
 
 ## 4.126.44 (draft)
 - Added six sidebar search labels and enabled translation of the compact sidebar search form. Existing translations are preserved. Verified with 4.126.44.

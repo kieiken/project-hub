@@ -2,11 +2,20 @@
 // Classic-script declarations only. Shared state and startup stay in app.js.
 // See README.md for the loading and state contract.
 
+function workAnswerSending(p, t) {
+  const key = chatAttachmentKey(p.id, t.id), receipt = workAnswerSends.get(key);
+  return Boolean(receipt && chatSending.has(key) && t.question === receipt.question && !t.chatQueueBlocked && t.state !== '上限で停止');
+}
+
+function refreshWorkAnswerSend() {
+  syncWorkQuestion(); updateTurnCounts(); renderTree(); window.HubMobile?.badges();
+}
+
 function workQuestionHtml(p, t) {
   const k = `data-p="${esc(p.id)}" data-t="${esc(t.id)}"`;
-  return t.question ? UI.template`<div class="wq ask-box"><div class="ask-head"><b>あなたへの質問：</b><span>${richText(t.question)}</span></div>
+  return t.question ? UI.template`<div class="wq ask-box"><div data-work-answer-content><div class="ask-head"><b>あなたへの質問：</b><span>${richText(t.question)}</span></div>
       <form class="ask-form" id="ask-form" ${k}><input type="text" name="answer" maxlength="2000" placeholder="答えや指示を書く（例：A で進めて）" aria-label="答え"><button class="btn sm" type="submit" title="この答えを、この作業の AI に指示として送ります。作業の続きがこの会話に残ります">この作業で AI に送る</button><button class="btn plain sm" data-act="answered" ${k} type="button" title="AI には送りません。この質問と返事待ちの表示だけを消します。AI は続きを始めません。">送らずに消す</button></form>
-      <span class="small">答えを送ると、この作業の AI が続きをします。［送らずに消す］は AI には送りません。AI は続きを始めません。</span></div>` : '';
+      <span class="small">答えを送ると、この作業の AI が続きをします。［送らずに消す］は AI には送りません。AI は続きを始めません。</span></div><div data-work-answer-pending role="status" hidden>回答を送信中です。受付を確認しています…</div></div>` : '';
 }
 
 function syncWorkQuestion() {
@@ -18,9 +27,11 @@ function syncWorkQuestion() {
     slot.dataset.question = t.question || ''; slot.innerHTML = workQuestionHtml(p,t);
   }
   const badge = $('.whead .pill');
-  if (badge) { badge.className = `pill s-${t.state}`; badge.textContent = t.continuation?UI.text('継続中'):UI.label(t.state); }
+  if (badge) { const sending = workAnswerSending(p, t); badge.className = `pill s-${sending ? '実行中' : t.state}`; badge.textContent = sending ? UI.text('送信中') : t.continuation?UI.text('継続中'):UI.label(t.state); }
   const select = $('.wfoot [data-act="state"]'); if (select) select.value = t.state;
   if (box) box.scrollTop = top;
+  const unfinished=$('[data-work-unfinished]');if(unfinished)unfinished.innerHTML=unfinishedBadge(p,t);
+  window.HubMobile?.badges();
   syncWorkAttention();
   updateWorkAnswerControls();
 }
@@ -58,25 +69,31 @@ function updateWorkAnswerControls() {
   const status = $('#chat-send-status');
   if (status) {
     status.hidden = !pending;
-    status.textContent = pending ? UI.text('送信を確認しています…') : '';
+    status.textContent = pending ? UI.text('送信前の確認・受付結果を待っています…') : '';
   }
   const send = $('#chat-send');
   if (send) {
     const muse=$('#chat-ai')?.value==='muse|direct';
-    send.disabled=pending;send.textContent=UI.text(pending?'送っています…':muse?'Museへ送る（外部）':'送る');send.classList?.toggle('muse-send',muse);
+    send.disabled=pending;send.textContent=UI.text(pending?'送信中':muse?'Museへ送る（外部）':'送る');send.classList?.toggle('muse-send',muse);
     const scope=$('#muse-send-scope');if(scope)scope.hidden=!muse;
   }
   $('#ask-form')?.querySelectorAll('button, input').forEach(el => { el.disabled = pending; });
   if ($('#msgs')) refreshAsks($('#msgs'));
   document.querySelectorAll('.ask').forEach(updateAskControls);
+  const p = proj(view.project), t = taskOf(p, view.task);
+  const sending = Boolean(p && t && workAnswerSending(p, t));
+  const content = $('#work-question [data-work-answer-content]'), notice = $('#work-question [data-work-answer-pending]');
+  if (content) content.hidden = sending;
+  if (notice) notice.hidden = !sending;
 }
 
-async function acceptedWorkAnswer(p, t, question, result, askKey) {
+async function acceptedWorkAnswer(p, t, question, result, askKey, questionCurrent = true) {
   // API の受付結果と、今の質問の両方を照合する。別の質問は消さない。
   if (!question) return;
   ++stateLoadEpoch; // 送信前の定期取得と、早い busy 通知の取り直しを無効にする。
   const current = taskOf(proj(p.id), t.id);
-  const matched = result.answeredQuestion === question && current && (current.question === question || !current.question);
+  // A fresh assistant row invalidates the send receipt even if its question repeats.
+  const matched = questionCurrent && result.answeredQuestion === question && current && (current.question === question || !current.question);
   if (matched) { current.question = ''; current.state = '実行中'; }
   if (view.kind !== 'work' || view.project !== p.id || view.task !== t.id) return;
   if (matched && askKey) document.querySelectorAll('.ask').forEach(a => {
@@ -89,7 +106,8 @@ async function acceptedWorkAnswer(p, t, question, result, askKey) {
     const slot = $('#work-question');
     if (slot) slot.innerHTML = UI.html('<div class="wq" role="status">回答を受け付けました。今の作業が終わったら、この回答で AI が続けます。</div>');
   }
-  try { await load({ preserveMain: true }); } catch (err) { toast(UI.text('回答は受け付けました。表示の再取得に失敗しました：') + err.message); }
+  // Acceptance is already confirmed; do not hold send controls for a state refresh.
+  void load({ preserveMain: true }).catch(err => toast(UI.text('回答は受け付けました。表示の再取得に失敗しました：') + err.message));
 }
 
 function workFoldAttr(p,t,name,fallback=false) {
@@ -121,6 +139,8 @@ function rememberDisclosure(el) {
 
 function dismissDisclosures(target) {
   if(!target)return;
+  // Acknowledging Token alerts must keep the owner's opened tables in place.
+  if(target.closest?.('[data-token-ack],[data-token-ack-all]'))return;
   // Capture visibility before closing any ancestor or the clicked summary opens it.
   const visible=[...document.querySelectorAll('details[open]')].filter(el=>{
     if(!el.getClientRects().length||getComputedStyle(el).visibility!=='visible')return false;
@@ -215,7 +235,7 @@ function renderWork() {
   const p = proj(view.project), t = taskOf(p, view.task);
   if (!p || !t) { view.kind = 'project'; return render(); }
   if (p.kind === 'freetalk') {
-    $('#main').innerHTML = UI.template`<div class="work freetalk-work" data-p="${esc(p.id)}" data-t="${esc(t.id)}" data-readonly="${t.freetalkHistory?.migrated ? 'true' : 'false'}"><div class="whead"><button class="back" data-go="project" data-p="${esc(p.id)}" type="button">← freetalk</button><h2>${esc(t.title)}</h2><button class="btn plain sm" type="button" data-act="freetalknew">新しい話題</button></div>${freetalkHistoryHtml(p,t)}<div data-handoff-status data-p="${esc(p.id)}" data-t="${esc(t.id)}">${chatHandoffHtml(p.id,t.id)}</div><div id="work-question" data-question="${esc(t.question || '')}">${workQuestionHtml(p,t)}</div>${chatHtml(p,t)}</div>`;
+    $('#main').innerHTML = UI.template`<div class="work freetalk-work" data-p="${esc(p.id)}" data-t="${esc(t.id)}" data-readonly="${t.freetalkHistory?.migrated ? 'true' : 'false'}"><div class="whead"><button class="back" data-go="project" data-p="${esc(p.id)}" type="button">← freetalk</button><h2>${esc(t.title)}</h2><span data-work-unfinished>${unfinishedBadge(p,t)}</span><button class="btn plain sm" type="button" data-act="freetalknew">新しい話題</button></div>${freetalkHistoryHtml(p,t)}<div data-handoff-status data-p="${esc(p.id)}" data-t="${esc(t.id)}">${chatHandoffHtml(p.id,t.id)}</div><div id="work-question" data-question="${esc(t.question || '')}">${workQuestionHtml(p,t)}</div>${chatHtml(p,t)}</div>`;
     closePanes(); window.HubMobile?.mount(scrollKey); openChat(p,t,savedScroll); syncFreetalkMigrationControls(t.freetalkHistory); if(t.freetalkHistory?.migrated){$('#composer').querySelectorAll('button,input,textarea,select').forEach(e=>e.disabled=true);} return;
   }
   const running = AIS.filter(a => live(p.id, t.id, a));
@@ -235,7 +255,7 @@ function renderWork() {
       <div class="work-topline">
         <button class="back" data-go="project" data-p="${esc(p.id)}" type="button">← ${esc(p.name)}</button>
         <h2 title="${esc(t.title)}">${esc(t.title)}</h2><span class="pill s-${esc(t.state)}">${esc(t.continuation?UI.text('継続中'):UI.label(t.state))}</span>
-        ${futureHoldBadge(p,t)}
+        <span data-work-unfinished>${unfinishedBadge(p,t)}</span>${futureHoldBadge(p,t)}
         ${t.role ? UI.template`<span class="small wrole">${esc(UI.label(t.role))}</span>` : ''}
         ${modeSeg}<span class="sp"></span>${startBtns}
         ${t.copy && !t.mergeExcluded && !ProjectOrder.integrators(p,t,state.projects).length ? UI.template`<button class="btn plain" data-act="merge" ${k} type="button" hidden disabled title="表示した範囲を本体に取り込みます">本体に取り込む</button>` : ''}
@@ -434,4 +454,49 @@ async function loadMuseApprovals(project,task) {
       host.hidden = true;
     }
   }
+}
+
+function unfinishedBadge(p,t) {
+  if (!t.unfinishedCount && !t.unfinishedError) return '';
+  return UI.template`<button class="unfinished-badge" type="button" data-unfinished="1" data-p="${esc(p.id)}" data-t="${esc(t.id)}" title="未完の依頼を確認">${t.unfinishedError?UI.text('未完の記録を確認'):UI.template`未完 ${t.unfinishedCount}件`}</button>`;
+}
+
+function unfinishedListHtml(entries) {
+  return entries.length ? entries.map((e,i)=>UI.template`<article class="unfinished-entry"><p class="unfinished-original">${esc(String(e.original||'').slice(0,600))}</p><p class="small">${esc(e.reason||'')}</p><time class="small">${esc(e.at||e.updated)}</time><div class="acts"><button class="btn sm" type="button" data-unfinished-draft="${i}">続ける</button><button class="btn plain sm" type="button" data-unfinished-dismiss="${i}">もう不要</button></div></article>`).join('') : UI.template`<p>未完の依頼はありません</p>`;
+}
+
+function draftUnfinished(project,task,entry) {
+  const key=chatAttachmentKey(project,task),p=proj(project),t=taskOf(p,task);
+  if (!t || t.freetalkHistory?.migrated) throw Error(UI.text('この作業の入力欄を確認してください'));
+  if (chatSending.has(key)) throw Error(UI.text('送信の受付を確認してから、もう一度押してください'));
+  const text=UI.template`次の未完の依頼について、元の依頼と途中成果を確認して続けてください。済んだ操作は繰り返さないでください。\n${entry.original}\n\n未完の記録：${entry.id}`;
+  const current=view.kind==='work'&&view.project===project&&view.task===task&&workMode()==='chat'?$('#chat-in'):null;
+  const before=current?.value||chatDraft[key]||'';
+  setChatDraft(key,[before,text].filter(Boolean).join('\n\n'));
+  if (!current) { try{localStorage.setItem('hub-mode','chat');}catch{} navigateView({kind:'work',project,task},true); }
+  const input=$('#chat-in');if(input){input.value=chatDraft[key];input.focus();}
+  window.HubMobile?.draft();
+}
+
+async function showUnfinished(project,task) {
+  if (document.querySelector('#unfinished-dialog')) return;
+  const dialog=document.createElement('dialog');dialog.id='unfinished-dialog';dialog.className='unfinished-dialog';
+  dialog.innerHTML=UI.template`<h2>未完の依頼</h2><p class="small">［続ける］は入力欄に入れるだけです。内容を見てから送ってください。［もう不要］は記録を残して閉じます。</p><div data-unfinished-list role="status">読み込み中…</div><p data-unfinished-error role="status"></p><button class="btn plain" type="button" data-unfinished-close>閉じる</button>`;
+  const close=()=>{dialog.close();dialog.remove();};
+  dialog.querySelector('[data-unfinished-close]').addEventListener('click',close);
+  dialog.addEventListener('cancel',e=>{e.preventDefault();close();});
+  let entries=[];
+  const refresh=async()=>{const result=await api('/api/chat/unfinished?'+new URLSearchParams({project,task}));if(dialog.isConnected===false)return;entries=result.entries;dialog.querySelector('[data-unfinished-list]').innerHTML=unfinishedListHtml(entries);};
+  dialog.addEventListener('click',async e=>{
+    const button=e.target.closest('[data-unfinished-draft],[data-unfinished-dismiss]');if(!button||button.disabled)return;
+    const draft=button.dataset.unfinishedDraft!==undefined,entry=entries[Number(draft?button.dataset.unfinishedDraft:button.dataset.unfinishedDismiss)];if(!entry)return;
+    const notice=dialog.querySelector('[data-unfinished-error]');notice.textContent='';button.disabled=true;
+    try {
+      if(draft){draftUnfinished(project,task,entry);close();}
+      else {await api('/api/chat/unfinished/dismiss',{project,task,id:entry.id,expectedUpdated:entry.updated});await refresh();await load({preserveMain:true});}
+    } catch(err){notice.textContent=err.message;}
+    finally{button.disabled=false;}
+  });
+  document.body.appendChild(dialog);dialog.showModal();
+  try{await refresh();}catch(err){dialog.querySelector('[data-unfinished-list]').textContent='';dialog.querySelector('[data-unfinished-error]').textContent=err.message;}
 }

@@ -3,9 +3,9 @@ process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), vm = require('node:vm');
 const special = require('../public/special-mode'), { ModelView } = require('../lib/model-view');
-const data = { models: { 'claude-code': ['Opus 5.5', 'Fable 5.1', 'Sonnet'], codex: ['GPT-6.1-Sol', 'GPT-6-Astra', 'GPT-6-Luna'] }, roles: [
+const data = { models: { 'claude-code': ['Opus 5.5', 'Fable 5.2', 'Sonnet'], codex: ['GPT-6.1-Sol', 'GPT-6-Astra', 'GPT-6-Luna'] }, roles: [
   { name: 'コーディング', main: { ai: 'codex', model: 'GPT-6.1-Sol', effort: '高' }, backup: { ai: 'claude-code', model: 'Opus 5.5', effort: '中' } },
-  { name: 'チェック', main: { ai: 'claude-code', model: 'Fable 5.1', effort: '極高' }, backup: { ai: 'codex', model: 'GPT-6-Astra', effort: '高' } }
+  { name: 'チェック', main: { ai: 'claude-code', model: 'Fable 5.2', effort: '極高' }, backup: { ai: 'codex', model: 'GPT-6-Astra', effort: '高' } }
 ] };
 test('AIだけを固定しモデルは役割の同AI候補、未知役割は一覧。無効・破損で通常へ戻る', () => {
   const original = JSON.stringify(data);
@@ -112,7 +112,7 @@ test('R1/R2: 入力中の会話を再描画せず最新既定へ同期し、明�
   f.run(`specialOverrides.set('p/t',{ai:'claude',model:'Sonnet',effort:'中'});adoptState({...state,specialMode:{enabled:true,ai:'claude'}})`);
   assert.equal(select.value, 'claude|Sonnet');
   f.run(`specialOverrides.delete('p/t');syncSpecialPick(p,t)`);
-  assert.equal(select.value, 'claude|Fable 5.1');
+  assert.equal(select.value, 'claude|Fable 5.2');
 });
 // Bind the actual composer listeners/send closure, stopping before unrelated queue/history loading.
 function chatComposer(f) {
@@ -138,7 +138,7 @@ for (const route of ['load({preserveMain:true})', 'refreshTree()', 'pollState()'
     const composer = chatComposer(f);
     composer.change('#chat-ai', 'claude|Sonnet'); composer.change('#chat-effort', '中');
     f.el('#chat-in').value = '入力中';
-    f.run(`chatImages('p','t').push({id:'img',path:'/fixture.png'});state.queue=[{text:'受付済み',ai:'claude',model:'Fable 5.1'}];`);
+    f.run(`chatImages('p','t').push({id:'img',path:'/fixture.png'});state.queue=[{text:'受付済み',ai:'claude',model:'Fable 5.2'}];`);
     const before = f.run('JSON.stringify([state.roles,state.queue,chatImages("p","t")])');
     await f.run(route);
     assert.equal(select.value, 'claude|Sonnet'); assert.equal(f.el('#chat-effort').value, '中');
@@ -181,32 +181,32 @@ test('R1残件: 過去の保存選択とOFF時の受付済み選択を現在の�
   }
 });
 test('R2: 再描画で隠れた復帰先をoptionへ戻して選択し、表示名・正式ID・非表示設定を保持', async () => {
-  for (const model of ['Fable 5.1', 'claude-fable-5-1']) {
+  for (const model of ['Fable 5.2', 'claude-fable-5-2']) {
     const f = draftFixture();
     f.run(`state=JSON.parse(JSON.stringify(state));state.roles.roles[1].main.model=${JSON.stringify(model)};
-      state.cliFlags={claude:{'Fable 5.1':'claude-fable-5-1'}};state.hiddenModels={'claude-code':['Fable 5.1']};
+      state.cliFlags={claude:{'Fable 5.2':'claude-fable-5-2'}};state.hiddenModels={'claude-code':['Fable 5.2']};
       view={kind:'work',project:'p',task:'t'};specialOverrides.set('p/t',{ai:'codex',model:'GPT-6.1-Sol',effort:'高'});`);
     const html = f.run('chatHtml(p,t)');
-    assert.doesNotMatch(html, /value="claude\|Fable 5.1"/);
+    assert.doesNotMatch(html, /value="claude\|Fable 5.2"/);
     const select = chatSelect(f, html);
     const composer = chatComposer(f); f.el('#chat-in').value = '一時指定';
     f.run(`api=async(route,body)=>{await stub(route,body);return {queued:true,queue:1};}`);
     assert.equal(await composer.send(), true);
     assert.equal(f.calls.at(-1).body.model, 'GPT-6.1-Sol');
-    assert.equal(select.value, 'claude|Fable 5.1');
+    assert.equal(select.value, 'claude|Fable 5.2');
     const option = select.options.find(o => o.value === select.value);
-    assert.equal(option.dataset.full, 'Claude Code・Fable 5.1'); assert.equal(option.disabled, false);
+    assert.equal(option.dataset.full, 'Claude Code・Fable 5.2'); assert.equal(option.disabled, false);
     assert.equal(f.el('#chat-effort').value, '極高');
-    assert.equal(f.run('JSON.stringify(state.hiddenModels)'), '{"claude-code":["Fable 5.1"]}');
-    f.run('syncSpecialPick(p,t)'); assert.equal(select.options.filter(o => o.value === 'claude|Fable 5.1').length, 1);
+    assert.equal(f.run('JSON.stringify(state.hiddenModels)'), '{"claude-code":["Fable 5.2"]}');
+    f.run('syncSpecialPick(p,t)'); assert.equal(select.options.filter(o => o.value === 'claude|Fable 5.2').length, 1);
     f.el('#chat-in').value = '復帰後'; assert.equal(await composer.send(), true);
-    assert.equal(f.calls.at(-1).body.ai, 'claude'); assert.equal(f.calls.at(-1).body.model, 'Fable 5.1'); assert.equal(f.calls.at(-1).body.effort, '極高');
+    assert.equal(f.calls.at(-1).body.ai, 'claude'); assert.equal(f.calls.at(-1).body.model, 'Fable 5.2'); assert.equal(f.calls.at(-1).body.effort, '極高');
   }
 });
 test('画面：過去の選択よりモード優先、手動指定は一度だけ、同AIの別モデルも可能、OFFで従来選択', () => {
   const f = ui(); f.context.p = { id: 'p' }; f.context.t = { id: 't', role: 'チェック', owner: 'codex', model: 'GPT-6.1-Sol' };
   f.saved.set('hub-chat-p/t', JSON.stringify({ ai: 'codex', model: 'GPT-6.1-Sol', effort: '高' }));
-  assert.equal(f.run('chatPick(p,t).ai'), 'claude'); assert.equal(f.run('chatPick(p,t).model'), 'Fable 5.1');
+  assert.equal(f.run('chatPick(p,t).ai'), 'claude'); assert.equal(f.run('chatPick(p,t).model'), 'Fable 5.2');
   f.run(`specialOverrides.set('p/t',{ai:'codex',model:'GPT-6-Luna',effort:'中'})`); assert.equal(f.run('chatPick(p,t).model'), 'GPT-6-Luna');
   f.run(`specialOverrides.delete('p/t')`); assert.equal(f.run('chatPick(p,t).ai'), 'claude');
   f.run(`specialOverrides.set('p/t',{ai:'claude',model:'Sonnet',effort:'高'})`); assert.equal(f.run('chatPick(p,t).model'), 'Sonnet');

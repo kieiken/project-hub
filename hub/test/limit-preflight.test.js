@@ -35,21 +35,21 @@ Usage.prototype.status = function(force, selection, options) {
   return originalStatus.call(this, force, selection, options);
 };
 function config(auto = true, backup = 'GPT-6-Astra') {
-  fs.writeFileSync(rolesFile, `models:\n  claude-code: [Fable 5.1, Opus 5.5]\n  codex: [GPT-6-Astra, GPT-6.1-Sol]\nroles:\n  司令塔: { main: [claude-code, Fable 5.1, 極高], backup: [codex, ${backup}, 極高] }\n  チェック: { main: [claude-code, Fable 5.1, 極高], backup: [codex, ${backup}, 極高] }\n  文章: { main: [claude-code, Opus 5.5, 高], backup: [codex, GPT-6.1-Sol, 高] }\nswitch:\n  auto: ${auto}\n`);
+  fs.writeFileSync(rolesFile, `models:\n  claude-code: [Fable 5.2, Opus 5.5]\n  codex: [GPT-6-Astra, GPT-6.1-Sol]\nroles:\n  司令塔: { main: [claude-code, Fable 5.2, 極高], backup: [codex, ${backup}, 極高] }\n  チェック: { main: [claude-code, Fable 5.2, 極高], backup: [codex, ${backup}, 極高] }\n  文章: { main: [claude-code, Opus 5.5, 高], backup: [codex, GPT-6.1-Sol, 高] }\nswitch:\n  auto: ${auto}\n`);
   const stamp = new Date(Date.now() + ++count * 10); fs.utimesSync(rolesFile, stamp, stamp);
 }
 function task(role = 'チェック') {
   const id = 'case-' + ++count;
-  fs.writeFileSync(path.join(dir, '.ai/tasks', id + '.md'), `---\nid: ${id}\ntitle: Fixture\nrole: ${role}\nowner: claude-code\nmodel: Fable 5.1\nworkspaceMode: direct\nstate: 実行中\nworkspaceStarted: 2026-10-06T00:00:00.000Z\n---\n## 手順\n- [ ] Review\n`); return id;
+  fs.writeFileSync(path.join(dir, '.ai/tasks', id + '.md'), `---\nid: ${id}\ntitle: Fixture\nrole: ${role}\nowner: claude-code\nmodel: Fable 5.2\nworkspaceMode: direct\nstate: 実行中\nworkspaceStarted: 2026-10-06T00:00:00.000Z\n---\n## 手順\n- [ ] Review\n`); return id;
 }
 const rows = id => chat.read(dir, id), replies = id => rows(id).filter(r => r.role === 'assistant');
 const post = (route, id, body = {}) => fetch(base + route, { method: 'POST', headers: { 'X-Hub': '1', 'Content-Type': 'application/json', Connection: 'close' }, body: JSON.stringify({ project: 'Preflight', task: id, ...body }) });
-const send = (id, scenario = 'ok', body = {}) => post('/api/chat/send', id, { ai: 'claude', model: 'Fable 5.1', text: 'scenario=' + scenario, ...body });
+const send = (id, scenario = 'ok', body = {}) => post('/api/chat/send', id, { ai: 'claude', model: 'Fable 5.2', text: 'scenario=' + scenario, ...body });
 // Keep queue preconditions alive until the test completes the intended action.
 // A short timer can finish before a later HTTP request under full-suite load.
 const hold = (id, body = {}) => send(id, 'hold-gated gate=' + id, body);
 const releaseHold = id => fs.writeFileSync(path.join(tmp, 'gate-' + id), '1');
-const delegate = (id, body = {}) => post('/api/delegate', id, { ai: 'claude', model: 'claude-fable-5-1', role: 'チェック', title: 'Review', text: 'scenario=ok', ...body });
+const delegate = (id, body = {}) => post('/api/delegate', id, { ai: 'claude', model: 'claude-fable-5-2', role: 'チェック', title: 'Review', text: 'scenario=ok', ...body });
 async function wait(fn) {
   for (let i = 0; i < 200; i++) { if (fn()) return; await new Promise(r => setTimeout(r, 20)); }
   assert.fail('fixture timed out');
@@ -74,7 +74,7 @@ async function closeFixture() {
 }
 async function restart(e = null) {
   await closeFixture();
-  fs.writeFileSync(file, typeof e === 'string' ? e : JSON.stringify(e ? { 'claude-fable-5-1': e } : {}));
+  fs.writeFileSync(file, typeof e === 'string' ? e : JSON.stringify(e ? { 'claude-fable-5-2': e } : {}));
   delete require.cache[require.resolve('../server')];
   ({ server, sessions } = require('../server')); await new Promise(r => server.listen(Number(process.env.HUB_PORT), '127.0.0.1', r));await require('../server').restoreReady;
 }
@@ -160,7 +160,7 @@ for (const route of ['send', 'delegate', 'terminal', 'saved-queue']) {
     const target = { ai: 'codex', model: 'GPT-6-Astra' };let res;
     if (route === 'terminal') {
       const taskFile = path.join(dir, '.ai/tasks', id + '.md');
-      fs.writeFileSync(taskFile, fs.readFileSync(taskFile, 'utf8').replace('model: Fable 5.1', 'model: GPT-6-Astra'));
+      fs.writeFileSync(taskFile, fs.readFileSync(taskFile, 'utf8').replace('model: Fable 5.2', 'model: GPT-6-Astra'));
       res = await post('/api/term/start', id, target);
     }
     else if (route === 'saved-queue') {
@@ -190,7 +190,7 @@ test('Priority falls back for empty/unknown/unlimited credits, disabled checks, 
     await restart();if(entry.cli) new (require('../lib/model-limits').ModelLimits)(file).record({ ai: 'codex', model: 'GPT-6-Astra', limitError: "You've hit your usage limit." });
     const id = task(), before = launches('codex');creditChecks.length = 0;
     const res = await send(id, 'ok', { ai: 'codex', model: 'GPT-6-Astra' });
-    assert.equal(res.status, 200);assert.equal((await res.json()).model, 'Fable 5.1');await reply(id);
+    assert.equal(res.status, 200);assert.equal((await res.json()).model, 'Fable 5.2');await reply(id);
     assert.equal(launches('codex'), before);assert.equal(creditChecks.length > 0, entry.enabled !== false);
   }
   codexUsageData = null;
@@ -209,7 +209,7 @@ test('A real CLI refusal after credit preflight switches once after exit and lat
   assert.equal(launches('codex'), before + 1);
   assert.equal(JSON.parse(fs.readFileSync(file))['gpt-6-astra'].source, 'cli-limit');
   const next = task(), resumed = await send(next, 'ok', { ai: 'codex', model: 'GPT-6-Astra' });
-  assert.equal(resumed.status, 200);assert.equal((await resumed.json()).model, 'Fable 5.1');await reply(next);
+  assert.equal(resumed.status, 200);assert.equal((await resumed.json()).model, 'Fable 5.2');await reply(next);
   assert.equal(launches('codex'), before + 1);codexUsageData = null;
 });
 
@@ -227,7 +227,7 @@ for (const route of ['send', 'delegate', 'terminal', 'saved-queue']) {
       if (route === 'terminal') res = await post('/api/term/start', id, { ai: 'claude' });
       else if (route === 'saved-queue') {
         fs.mkdirSync(path.join(dir, '.ai/chat'), { recursive: true });
-        fs.writeFileSync(path.join(dir, '.ai/chat', id + '.queue.json'), JSON.stringify([{ id: 'credits-saved', ai: 'claude', model: 'Fable 5.1', role: 'チェック', text: 'scenario=ok' }]));
+        fs.writeFileSync(path.join(dir, '.ai/chat', id + '.queue.json'), JSON.stringify([{ id: 'credits-saved', ai: 'claude', model: 'Fable 5.2', role: 'チェック', text: 'scenario=ok' }]));
         res = await post('/api/chat/send', id, { fromQueue: 'credits-saved' });
       } else res = await (route === 'send' ? send(id) : delegate(id));
       assert.equal(res.status, 200); assert.equal((await res.json()).model, 'GPT-6-Astra');
@@ -263,13 +263,13 @@ test('モデル順・非表示の保存と再起動は正式証拠判定を迂�
   assert.deepEqual(before.initialPick, initial);
   const defaults = order.ordered(before.roles.models, before.modelOrder), next = defaults.slice().reverse();
   assert.equal((await post('/api/models/order', null, { order: next, before: defaults })).status, 200);
-  for (const [ai, model] of [['claude-code', 'Fable 5.1'], ['codex', 'GPT-6-Astra']]) {
+  for (const [ai, model] of [['claude-code', 'Fable 5.2'], ['codex', 'GPT-6-Astra']]) {
     assert.equal((await post('/api/models/hidden', null, { ai, model, hidden: true })).status, 200);
   }
   const viewFile = path.join(root, '_hub/model-view.json'), savedView = fs.readFileSync(viewFile);
   const savedRoles = fs.readFileSync(rolesFile);
   const unconfirmed = task(), initialReads = statuses;
-  assert.equal((await (await delegate(unconfirmed)).json()).model, 'Fable 5.1');
+  assert.equal((await (await delegate(unconfirmed)).json()).model, 'Fable 5.2');
   assert.equal((await reply(unconfirmed)).ai, 'claude');
   assert.ok(statuses > initialReads); // 非消費の新鮮な利用枠確認。99.9%の表示丸めでは交代しない。
 
@@ -281,18 +281,18 @@ test('モデル順・非表示の保存と再起動は正式証拠判定を迂�
 
   await restart(evidence()); usageData = full();
   const confirmed = task(), result = await (await delegate(confirmed)).json();
-  assert.equal(result.model, 'GPT-6-Astra'); assert.match(result.note, /Fable 5.1 上限保持中のため GPT-6-Astra/);
+  assert.equal(result.model, 'GPT-6-Astra'); assert.match(result.note, /Fable 5.2 上限保持中のため GPT-6-Astra/);
   const answer = await reply(confirmed), args = JSON.parse(answer.text).args;
   assert.equal(answer.ai, 'codex'); assert.equal(args[args.indexOf('--model') + 1], 'gpt-6-astra');
   assert.equal(rows(confirmed).filter(r => r.role === 'event' && r.limitSwitch?.preflight).length, 1);
   const after = await (await fetch(base + '/api/state', { headers: { Connection: 'close' } })).json();
   assert.deepEqual(after.modelOrder, next); assert.deepEqual(after.roles, before.roles);
   assert.deepEqual(after.initialPick, initial); // 初期AI設定は再起動・正式上限判定でも保持し、チェック役割を変更しない。
-  assert.ok(after.hiddenModels['claude-code'].includes('Fable 5.1'));
+  assert.ok(after.hiddenModels['claude-code'].includes('Fable 5.2'));
   assert.ok(after.hiddenModels.codex.includes('GPT-6-Astra'));
   assert.deepEqual(fs.readFileSync(viewFile), savedView); assert.deepEqual(fs.readFileSync(rolesFile), savedRoles);
   for (const id of [unconfirmed, failed, confirmed]) {
-    assert.match(fs.readFileSync(path.join(dir, '.ai/tasks', id + '.md'), 'utf8'), /^model: Fable 5.1$/m);
+    assert.match(fs.readFileSync(path.join(dir, '.ai/tasks', id + '.md'), 'utf8'), /^model: Fable 5.2$/m);
   }
 });
 
@@ -301,7 +301,7 @@ test('新鮮な未丸め100%は正式エラーを待たず保存し、委任を�
   await (await fetch(base + '/api/usage', { headers: { 'X-Hub': '1', Connection: 'close' } })).json();
   const before = statuses, id = task();
   const res = await (await delegate(id)).json(); assert.equal(res.model, 'GPT-6-Astra'); assert.ok(statuses >= before);
-  assert.equal((await reply(id)).ai, 'codex'); assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-1'].source, 'usage-100');
+  assert.equal((await reply(id)).ai, 'codex'); assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-2'].source, 'usage-100');
 });
 test('正式上限だけを記録、引用/一時上限/モデル拒否/停止は保存しない', async () => {
   config(false); usageData = null;
@@ -311,8 +311,8 @@ test('正式上限だけを記録、引用/一時上限/モデル拒否/停止�
     await reply(id); assert.deepEqual(JSON.parse(fs.readFileSync(file)), {});
   }
   await restart(); const id = task(); await send(id, 'limit'); await reply(id);
-  await wait(() => statuses > 0 && JSON.parse(fs.readFileSync(file))['claude-fable-5-1']);
-  const e = JSON.parse(fs.readFileSync(file))['claude-fable-5-1']; assert.equal(e.source, 'cli-limit'); assert.equal(e.task, id); assert.equal(e.validUntil, null);
+  await wait(() => statuses > 0 && JSON.parse(fs.readFileSync(file))['claude-fable-5-2']);
+  const e = JSON.parse(fs.readFileSync(file))['claude-fable-5-2']; assert.equal(e.source, 'cli-limit'); assert.equal(e.task, id); assert.equal(e.validUntil, null);
   assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /You've|credits|input/);
 });
 test('共通send入口でstrictモデルを維持し、同requestを重複させず失敗後も再交代しない', async () => {
@@ -324,7 +324,7 @@ test('共通send入口でstrictモデルを維持し、同requestを重複させ
   const runner = new chat.ChatRunner({ dirOf: () => dir, limitBackup: () => ({ ai: 'codex', model: 'GPT-6-Astra', requiredModel: 'gpt-6-astra' }), limitPreflight: () => e.active() });
   let captured;
   runner.run = o => { captured = o; return { startedP: Promise.resolve(true) }; };
-  const o = { project: 'Preflight', task: task(), pdir: dir, ai: 'claude', model: 'Fable 5.1', text: 'original', request: 'fixed' };
+  const o = { project: 'Preflight', task: task(), pdir: dir, ai: 'claude', model: 'Fable 5.2', text: 'original', request: 'fixed' };
   runner.send(o); runner.send(o);
   assert.equal(captured.requiredModel, 'gpt-6-astra'); assert.equal(captured.requireModel, true); assert.equal(captured.limitSwitch.preflight, true);
   assert.equal(rows(o.task).filter(r => r.role === 'user').length, 1); assert.equal(rows(o.task).filter(r => r.role === 'event' && r.limitSwitch).length, 1);
@@ -334,9 +334,9 @@ test('順番待ちは開始時に判定し、解除期限を過ぎたFable依頼
   usageData = { ...full(), rate_limits: { five_hour: { utilization: 100, resets_at: new Date(until).toISOString() } } };
   await post('/api/usage/refresh'); const id = task();
   t.after(()=>releaseHold(id));await hold(id, { ai: 'codex', model: 'GPT-6.1-Sol' });
-  const before = statuses, queued = await (await delegate(id)).json(); assert.equal(queued.queued, true); assert.equal(queued.model, 'Fable 5.1'); assert.ok(statuses >= before);
+  const before = statuses, queued = await (await delegate(id)).json(); assert.equal(queued.queued, true); assert.equal(queued.model, 'Fable 5.2'); assert.ok(statuses >= before);
   await wait(()=>Date.now()>until);releaseHold(id);
-  await reply(id, 2); assert.deepEqual(replies(id).map(r => r.model), ['GPT-6.1-Sol', 'Fable 5.1']); assert.equal(rows(id).filter(r => r.limitSwitch).length, 0);
+  await reply(id, 2); assert.deepEqual(replies(id).map(r => r.model), ['GPT-6.1-Sol', 'Fable 5.2']); assert.equal(rows(id).filter(r => r.limitSwitch).length, 0);
 });
 test('順番待ちと保存キュー再開も有効証拠なら同じ依頼をAstraで始める', async t => {
   config(); const role = require('../lib/roles');
@@ -348,12 +348,12 @@ test('順番待ちと保存キュー再開も有効証拠なら同じ依頼をAs
   await reply(id, 2); assert.equal(replies(id).at(-1).model, 'GPT-6-Astra'); assert.equal(rows(id).find(r => r.limitSwitch).limitSwitch.request, queued.id);
   assert.ok(creditChecks.some(c => c.ai === 'claude'));
   const saved = task(), queueFile = path.join(dir, '.ai/chat', saved + '.queue.json');
-  fs.writeFileSync(queueFile, JSON.stringify([{ id: 'saved', ai: 'claude', model: 'Fable 5.1', role: 'チェック', requireModel: true, requiredModel: 'claude-fable-5-1', text: 'scenario=ok' }]));
+  fs.writeFileSync(queueFile, JSON.stringify([{ id: 'saved', ai: 'claude', model: 'Fable 5.2', role: 'チェック', requireModel: true, requiredModel: 'claude-fable-5-2', text: 'scenario=ok' }]));
   const result = await (await post('/api/chat/send', saved, { fromQueue: 'saved' })).json(); assert.equal(result.model, 'GPT-6-Astra'); await reply(saved); assert.deepEqual(JSON.parse(fs.readFileSync(queueFile)), []);
 });
 test('自動交代オフと未保持モデルは維持し、手動の別モデルも作業のbackupを選ぶ', async () => {
-  for (const [auto, backup, role, model] of [[false, 'GPT-6-Astra', 'チェック', 'Fable 5.1'], [true, 'GPT-6-Astra', '文章', 'Fable 5.1'], [true, 'GPT-6.1-Sol', 'チェック', 'Fable 5.1'], [true, 'GPT-6-Astra', 'チェック', 'Opus 5.5']]) {
-    config(auto, backup); await restart(evidence()); const id = task(role); const result = await (await send(id, 'ok', { model })).json(); const switched = auto && model === 'Fable 5.1';
+  for (const [auto, backup, role, model] of [[false, 'GPT-6-Astra', 'チェック', 'Fable 5.2'], [true, 'GPT-6-Astra', '文章', 'Fable 5.2'], [true, 'GPT-6.1-Sol', 'チェック', 'Fable 5.2'], [true, 'GPT-6-Astra', 'チェック', 'Opus 5.5']]) {
+    config(auto, backup); await restart(evidence()); const id = task(role); const result = await (await send(id, 'ok', { model })).json(); const switched = auto && model === 'Fable 5.2';
     const target = role === '文章' ? 'GPT-6.1-Sol' : backup;
     assert.equal(result.model, switched ? target : model); assert.equal((await reply(id)).ai, switched ? 'codex' : 'claude'); assert.equal(rows(id).filter(r => r.limitSwitch).length, switched ? 2 : 0);
   }
@@ -381,7 +381,7 @@ test('再起動後も手動Opusの有効な上限は作業の交代先へ送り�
 test('正式上限の終了後に取った利用枠を次の委任で再利用し、Fableの再失敗を省く', async () => {
   config(false); usageData = full(); await restart(); const first = task();
   await send(first, 'limit'); await reply(first);
-  await wait(() => JSON.parse(fs.readFileSync(file))['claude-fable-5-1']?.validUntil);
+  await wait(() => JSON.parse(fs.readFileSync(file))['claude-fable-5-2']?.validUntil);
   config(); const second = task(), before = reads;
   assert.equal((await (await delegate(second)).json()).model, 'GPT-6-Astra');
   assert.equal((await reply(second)).ai, 'codex'); assert.equal(reads, before);
@@ -390,14 +390,14 @@ test('正式上限の終了後に取った利用枠を次の委任で再利用�
 test('旧上限ファイルだけでは送信・委任・旧直行キュー・利用量表示を有効にしない', async () => {
   config(); usageData = null; await restart();
   const legacy = path.join(root, '_hub/fable-limit.json');
-  const old = JSON.stringify({ model: 'claude-fable-5-1', at: new Date().toISOString(), until: new Date(Date.now() + 3600000).toISOString(), untilSource: 'unknown' });
+  const old = JSON.stringify({ model: 'claude-fable-5-2', at: new Date().toISOString(), until: new Date(Date.now() + 3600000).toISOString(), untilSource: 'unknown' });
   fs.writeFileSync(legacy, old); await restart();
-  const direct = task(); assert.equal((await (await send(direct)).json()).model, 'Fable 5.1'); await reply(direct);
-  const delegated = task(); assert.equal((await (await delegate(delegated)).json()).model, 'Fable 5.1'); await reply(delegated);
+  const direct = task(); assert.equal((await (await send(direct)).json()).model, 'Fable 5.2'); await reply(direct);
+  const delegated = task(); assert.equal((await (await delegate(delegated)).json()).model, 'Fable 5.2'); await reply(delegated);
   const queued = task(), queueFile = path.join(dir, '.ai/chat', queued + '.queue.json');
   fs.writeFileSync(queueFile, JSON.stringify([{ id: 'legacy', ai: 'codex', model: 'GPT-6-Astra', role: 'チェック', requireModel: true, requiredModel: 'gpt-6-astra', text: 'obsolete-card', shown: 'obsolete-card', limitSwitch: { direct: true, original: 'scenario=ok queue-original' } }]));
   const result = await (await post('/api/chat/send', queued, { fromQueue: 'legacy' })).json();
-  assert.equal(result.model, 'Fable 5.1'); assert.equal((await reply(queued)).ai, 'claude');
+  assert.equal(result.model, 'Fable 5.2'); assert.equal((await reply(queued)).ai, 'claude');
   const input = JSON.parse(replies(queued)[0].text).input; assert.match(input, /queue-original/); assert.doesNotMatch(input, /obsolete-card/);
   const status = await (await post('/api/usage/refresh')).json(); assert.equal(status.fableLimit, null);
   assert.equal(fs.readFileSync(legacy, 'utf8'), old); assert.deepEqual(JSON.parse(fs.readFileSync(file)), {});
@@ -406,11 +406,11 @@ test('旧上限ファイルだけでは送信・委任・旧直行キュー・�
 test('確認済み上限の表示と事前カードは1経路にそろい、CLI入力量も保持する', async () => {
   config(); usageData = full(); await restart(evidence()); await confirmRestored();
   const status = await (await fetch(base + '/api/usage', { headers: { 'X-Hub': '1', Connection: 'close' } })).json();
-  assert.equal(status.fableLimit.untilSource, 'usage'); assert.equal(status.fableLimit.until, JSON.parse(fs.readFileSync(file))['claude-fable-5-1'].validUntil);
+  assert.equal(status.fableLimit.untilSource, 'usage'); assert.equal(status.fableLimit.until, JSON.parse(fs.readFileSync(file))['claude-fable-5-2'].validUntil);
   const id = task(), result = await (await delegate(id, { text: 'scenario=ok integrated-unique' })).json();
   assert.equal(result.model, 'GPT-6-Astra'); const row = await reply(id), input = JSON.parse(row.text).input;
-  assert.match(input, /Fable 5.1 上限保持中/); assert.match(input, /前の番は無い/);
-  assert.doesNotMatch(input, /Fable 5.1 は利用上限で止まった/); assert.equal(input.split('integrated-unique').length - 1, 1);
+  assert.match(input, /Fable 5.2 上限保持中/); assert.match(input, /前の番は無い/);
+  assert.doesNotMatch(input, /Fable 5.2 は利用上限で止まった/); assert.equal(input.split('integrated-unique').length - 1, 1);
   assert.deepEqual(row.usage, { input_tokens: 40, cached_input_tokens: 10 });
   const user = rows(id).find(r => r.role === 'user'); assert.ok(user.turn); assert.equal(user.limitSwitch.preflight, true);
   const log = fs.readFileSync(path.join(root, '_hub/log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse).findLast(r => r.task === id && r.action === 'delegate');
@@ -433,7 +433,7 @@ for (const known of [true, false]) {
       assert.equal(ev.length, 1); assert.equal(ev[0].limitSwitch.preflight, true);
       assert.match(ev[0].text, known ? /解除/ : /手動解除まで/); assert.doesNotMatch(ev[0].text, /1970/);
       assert.deepEqual(fs.readFileSync(rolesFile), rolesBefore);
-      assert.match(fs.readFileSync(path.join(dir, '.ai/tasks', id + '.md'), 'utf8'), /model: Fable 5.1/);
+      assert.match(fs.readFileSync(path.join(dir, '.ai/tasks', id + '.md'), 'utf8'), /model: Fable 5.2/);
     });
   }
 }
@@ -441,7 +441,7 @@ test('期限後・破損・移行できないv1はFableのまま、v1の未来�
   config(); usageData = null;
   const old = evidence(); delete old.version; delete old.hold; delete old.lastLimitAt; delete old.untilSource;
   for (const e of [evidence(true, Date.now() - 1), '{broken', { ...old, validUntil: null }, { ...old, checkedAt: old.at }]) {
-    await restart(e); const id = task(); assert.equal((await (await delegate(id)).json()).model, 'Fable 5.1'); assert.equal((await reply(id)).ai, 'claude');
+    await restart(e); const id = task(); assert.equal((await (await delegate(id)).json()).model, 'Fable 5.2'); assert.equal((await reply(id)).ai, 'claude');
   }
   await restart(old); const id = task(); assert.equal((await (await send(id)).json()).model, 'GPT-6-Astra'); await reply(id);
 });
@@ -449,7 +449,7 @@ test('100%未満の利用状況・取得失敗・自動交代オフでのFable�
   config(); usageData = { ...full(), rate_limits: { five_hour: { utilization: 99, resets_at: new Date(Date.now() + 3600000).toISOString() } } };
   await restart(evidence(false));
   const low = await (await post('/api/usage/refresh')).json(); assert.equal(low.fableLimit.hold, true); assert.equal(low.fableLimit.until, null);
-  config(false); const id = task(); await send(id); await reply(id); assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-1'].hold, true);
+  config(false); const id = task(); await send(id); await reply(id); assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-2'].hold, true);
   config(); usageData = null; await restart(evidence(false));
   const failed = await (await post('/api/usage/refresh')).json(); assert.equal(failed.providers.claude.status, 'unavailable'); assert.equal(failed.fableLimit.hold, true);
   const next = task(), before = statuses; assert.equal((await (await delegate(next)).json()).model, 'GPT-6-Astra'); await reply(next); assert.ok(statuses >= before);
@@ -462,12 +462,12 @@ test('手動解除APIはX-HubとOriginを守り、解除保存とlogの後でFab
     assert.equal(res.status, 403); assert.deepEqual(fs.readFileSync(file), saved);
   }
   const result = await post('/api/limits/fable/clear'); assert.equal(result.status, 200); assert.equal((await result.json()).fableLimit, null);
-  assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-1'], undefined);
-  assert.ok(JSON.parse(fs.readFileSync(file))._cleared['claude-fable-5-1']);
+  assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-2'], undefined);
+  assert.ok(JSON.parse(fs.readFileSync(file))._cleared['claude-fable-5-2']);
   const log = fs.readFileSync(path.join(root, '_hub/log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse); assert.equal(log.at(-1).action, 'limit-clear');
-  const id = task(); assert.equal((await (await send(id)).json()).model, 'Fable 5.1'); await reply(id);
-  await restart(JSON.parse(fs.readFileSync(file))['claude-fable-5-1'] || null);
-  const next = task(); assert.equal((await (await delegate(next)).json()).model, 'Fable 5.1'); await reply(next);
+  const id = task(); assert.equal((await (await send(id)).json()).model, 'Fable 5.2'); await reply(id);
+  await restart(JSON.parse(fs.readFileSync(file))['claude-fable-5-2'] || null);
+  const next = task(); assert.equal((await (await delegate(next)).json()).model, 'Fable 5.2'); await reply(next);
 });
 test('解除保存失敗は500で保持を続け、原因修復後に解除できる', async () => {
   config(); await restart(evidence(false)); const original = fs.renameSync, saved = fs.readFileSync(file);
@@ -488,7 +488,7 @@ test('初回正式上限の保存失敗をevent/logへ残し、終了後引継�
     assert.ok(rows(id).some(r => r.role === 'event' && /確認記録を更新できませんでした/.test(r.text)));
     assert.deepEqual(JSON.parse(fs.readFileSync(file)), {});
     assert.ok(fs.readFileSync(path.join(root, '_hub/log.jsonl'), 'utf8').includes('limit-save-error'));
-    const next = task(); assert.equal((await (await delegate(next)).json()).model, 'Fable 5.1'); await reply(next);
+    const next = task(); assert.equal((await (await delegate(next)).json()).model, 'Fable 5.2'); await reply(next);
   } finally { fs.renameSync = original; }
 });
 test('手動解除後に届く利用枠の応答は保持を復活させず、新しい保持より古い取得も無視', async () => {
@@ -502,15 +502,15 @@ test('手動解除後に届く利用枠の応答は保持を復活させず、�
     const id = task(); await send(id, 'limit'); await reply(id);
     release(); delayRead = null;
     const result = await (await pending).json(); assert.equal(result.fableLimit, null); // auto off
-    assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-1'].validUntil, null);
+    assert.equal(JSON.parse(fs.readFileSync(file))['claude-fable-5-2'].validUntil, null);
     assert.equal((await post('/api/limits/fable/clear')).status, 200);
-    config(); const next = task(); assert.equal((await (await delegate(next)).json()).model, 'Fable 5.1'); await reply(next);
+    config(); const next = task(); assert.equal((await (await delegate(next)).json()).model, 'Fable 5.2'); await reply(next);
   } finally { release(); delayRead = null; }
 });
 function saveQueue(id, item = {}) {
   const queueFile = path.join(dir, '.ai/chat', id + '.queue.json');
   fs.mkdirSync(path.dirname(queueFile), { recursive: true });
-  fs.writeFileSync(queueFile, JSON.stringify([{ id: 'saved', ai: 'claude', model: 'Fable 5.1', role: 'チェック', requireModel: true, requiredModel: 'claude-fable-5-1', text: 'scenario=ok', ...item }])); return queueFile;
+  fs.writeFileSync(queueFile, JSON.stringify([{ id: 'saved', ai: 'claude', model: 'Fable 5.2', role: 'チェック', requireModel: true, requiredModel: 'claude-fable-5-2', text: 'scenario=ok', ...item }])); return queueFile;
 }
 for (const automatic of [true, false]) {
   const route = automatic ? '自動キュー' : '保存キュー再開';
@@ -549,7 +549,7 @@ test('待機中に手動解除したキューは開始時にFable、開始済み
   config(); await restart(evidence(false)); const id = task();
   t.after(()=>releaseHold(id));await hold(id, { ai: 'codex', model: 'GPT-6.1-Sol' });const queued=await (await delegate(id)).json();assert.equal(queued.queued,true);
   assert.equal((await post('/api/limits/fable/clear')).status, 200);releaseHold(id); await reply(id, 2);
-  assert.deepEqual(replies(id).map(r => r.model), ['GPT-6.1-Sol', 'Fable 5.1']);
+  assert.deepEqual(replies(id).map(r => r.model), ['GPT-6.1-Sol', 'Fable 5.2']);
   await restart(evidence(false)); const started = task();t.after(()=>releaseHold(started));const running=await (await hold(started)).json();assert.equal(running.model,'GPT-6-Astra');
   assert.equal((await post('/api/limits/fable/clear')).status, 200);releaseHold(started); await reply(started);
   assert.equal(replies(started)[0].model, 'GPT-6-Astra'); assert.equal(replies(started)[0].error, '');

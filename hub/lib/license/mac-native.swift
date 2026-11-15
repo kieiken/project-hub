@@ -21,6 +21,37 @@ func main() throws {
         FileHandle.standardOutput.write(data)
         return
     }
+    if action == "jev-status" || action == "jev-put" || action == "jev-get" {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "ProjectHub.Jev.v1", kSecAttrAccount as String: "api-key", kSecAttrSynchronizable as String: false]
+        if action == "jev-status" {
+            // Only existence, never key data, crosses the process boundary.
+            let status = SecItemCopyMatching(query as CFDictionary, nil)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw NSError(domain: "keychain", code: 1) }
+            FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: ["registered": status == errSecSuccess]))
+        } else if action == "jev-get" {
+            // Dedicated server-only read, through stdout pipe, never a UI response.
+            var q = query
+            q[kSecReturnData as String] = true
+            q[kSecMatchLimit as String] = kSecMatchLimitOne
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(q as CFDictionary, &result)
+            if status == errSecItemNotFound { FileHandle.standardOutput.write(Data("{\"value\":null}".utf8)); return }
+            guard status == errSecSuccess, let data = result as? Data, let value = String(data: data, encoding: .utf8) else { throw NSError(domain: "keychain", code: 1) }
+            FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: ["value": value]))
+        } else {
+            guard let value = r["value"], value.utf8.count >= 16, value.utf8.count <= 1024, value.utf8.allSatisfy({ $0 >= 33 && $0 <= 126 }) else { throw NSError(domain: "input", code: 1) }
+            let data = Data(value.utf8)
+            let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            if status == errSecItemNotFound {
+                var add = query
+                add[kSecValueData as String] = data
+                add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+                guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { throw NSError(domain: "keychain", code: 1) }
+            } else if status != errSecSuccess { throw NSError(domain: "keychain", code: 1) }
+            FileHandle.standardOutput.write(Data("{}".utf8))
+        }
+        return
+    }
     guard let account = r["account"], !account.isEmpty else { throw NSError(domain: "input", code: 1) }
     let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "ProjectHub.DeviceKey.v1", kSecAttrAccount as String: account, kSecAttrSynchronizable as String: false]
     if action == "put" {

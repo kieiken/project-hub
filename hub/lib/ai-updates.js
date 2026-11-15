@@ -51,14 +51,15 @@ class AiUpdates {
       busyCount: this.tools.busy(), error: this.error, day: this.data.day };
   }
   assertStorage() { if (this.error) throw toolError(500, 'save', this.error); }
-  async select(ai, fn, checking = false) {
+  async select(ai, fn, checking = false, account) {
     if (!this.tools.find(ai)) return fn({ eligible: false, status: 'not-installed' });
+    if (!this.tools.dry) this.tools.ready(ai, this.tools.find(ai)); // before auth status or any CLI startup
     // Agy/Grokの認証確認自身がmodelsを実行するため、稼働中は認証も補完へ回す。
     if (!checking && ['agy', 'grok'].includes(ai) && this.tools.busy(ai)) {
       return fn({ eligible: false, status: 'unknown', ...(this.data.rows[ai] || {}), deferred: true, authDeferred: true });
     }
     let rows;
-    try { rows = this.accounts.list().filter(r => r.ai === ai); }
+    try { rows = this.accounts.list().filter(r => r.ai === ai && (account === undefined || r.id === account)); }
     catch { return fn({ eligible: false, status: 'unknown' }); }
     let status = 'unknown';
     for (const r of rows) {
@@ -78,7 +79,7 @@ class AiUpdates {
           return { value: await fn({ eligible: auth.status === 'logged-in', status: auth.status, account: r.id }, auth.modelObservation) };
         });
         if (result) return result.value;
-      } catch (e) { if (selected) throw e; /* このアカウントは対象外 */ }
+      } catch (e) { if (selected || e.stage === 'mac-confirmation') throw e; /* このアカウントは対象外 */ }
     }
     return fn({ eligible: false, status });
   }
@@ -91,12 +92,12 @@ class AiUpdates {
     return row;
   }
   observe(ai, row, observation) {
-    const result = { ...this.tools.saveCatalog(ai, observation), observedModels: observation.models };
+    const result = { ...this.tools.saveCatalog(ai, observation, row.account), observedModels: observation.models };
     this.modelResult(ai, row, result);
     return result;
   }
   scope(ai, row, owner) {
-    return { owner, env: this.accounts.env(ai, row.account), cacheDir: this.accounts.location(ai, row.account), fileAuth: ai === 'codex' && row.account !== 'default' };
+    return { owner, account: row.account, env: this.accounts.env(ai, row.account), cacheDir: this.accounts.location(ai, row.account), fileAuth: ai === 'codex' && row.account !== 'default' };
   }
   modelResult(ai, row, result) {
     row.deferred = false;
@@ -115,7 +116,7 @@ class AiUpdates {
     this.onCatalog();
   }
   async runRow(ai, owner, apply) {
-    return this.select(ai, async (target, observation) => {
+    try { return await this.select(ai, async (target, observation) => {
       const row = this.setTarget(ai, target);
       if (row.authDeferred) {
         row.check = null; row.modelsStatus = 'unknown'; row.notice = lt('モデル一覧はAIが終了してから確認します。');
@@ -154,12 +155,17 @@ class AiUpdates {
         }
       } catch (e) {
         if (e.stage === 'save') throw e;
-        outcome = 'failed'; row.modelsStatus = 'unknown';
-        row.notice = e.stage === 'auth' ? lt('契約ログインを確認できないため対象外です。') : e.stage === 'check' ? lt('更新情報を確認できませんでした。配布元への接続とCLIの版を確認してください') : lt('CLI の操作に失敗しました。状態を確認してください。');
+        outcome = e.stage === 'mac-confirmation' ? 'mac-confirmation' : 'failed'; row.modelsStatus = 'unknown';
+        row.notice = e.stage === 'mac-confirmation' ? e.reason : e.stage === 'auth' ? lt('契約ログインを確認できないため対象外です。') : e.stage === 'check' ? lt('更新情報を確認できませんでした。配布元への接続とCLIの版を確認してください') : lt('CLI の操作に失敗しました。状態を確認してください。');
       }
       this.save();
-      return { ai, state: outcome, modelsStatus: row.modelsStatus };
-    });
+      return { ai, state: outcome, modelsStatus: row.modelsStatus, ...(outcome === 'mac-confirmation' ? { notice: row.notice } : {}) };
+    }); } catch (e) {
+      if (e.stage !== 'mac-confirmation') throw e;
+      const row = this.data.rows[ai] = { ...this.data.rows[ai], modelsStatus: 'unknown', notice: e.reason };
+      this.save();
+      return { ai, state: 'mac-confirmation', notice: row.notice, modelsStatus: 'unknown' };
+    }
   }
   async run(kind, fn, ai) {
     this.assertStorage();
@@ -181,8 +187,12 @@ class AiUpdates {
     } finally { this.batch = false; }
   }
   // 古いAPIにも同じ対象制限と新鮮確認を適用する。
-  single(ai, action) {
+  single(ai, action, account) {
     if (!AIS.includes(ai)) return Promise.reject(toolError(400, 'input', lt('AI の指定が正しくありません')));
+    if (account !== undefined) {
+      if (ai !== 'codex' || action !== 'models' || typeof account !== 'string') return Promise.reject(toolError(400, 'input', lt('アカウントの指定が正しくありません')));
+      try { this.accounts.get(ai, account); } catch (e) { return Promise.reject(e); }
+    }
     if (this.batch) return Promise.reject(toolError(409, 'busy', lt('別の更新・モデル再取得が進行中です')));
     if (this.tools.busy(ai) && action !== 'check') return Promise.reject(toolError(409, 'busy', lt('AIの作業が終わるまで更新できません。')));
     return this.run(action, async owner => {
@@ -213,7 +223,7 @@ class AiUpdates {
           if (e.stage === 'save') throw e;
           row.modelsStatus = 'unknown'; row.notice = lt('モデル一覧を新しく確認できませんでした。前回の候補を保持しています。'); this.save(); throw e;
         }
-      }, action === 'check');
+      }, action === 'check', account);
     }, ai);
   }
 

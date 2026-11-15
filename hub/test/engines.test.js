@@ -91,6 +91,21 @@ test('manual queue change rejects a send lock before retreat/private state and u
  retreat={guard:()=>{}};assert.equal(route.handle({}, {},{},b).status,200);assert.equal(unqueue,1);
 });
 
+test('terminal limit handoff rejects a model outside the successor account before starting it and keeps recovery material',async()=>{
+ const writes=new Map(),checked=[],project={id:'p',dir:'/ledger',tasks:[{id:'t',state:'実行中'}]};let starts=0;
+ const f=limitHost({path,crypto:require('node:crypto'),fs:{mkdirSync:()=>{},existsSync:()=>true,writeFileSync:(file,text)=>writes.set(file,text),renameSync:(a,b)=>writes.set(b,writes.get(a))},
+  getStore:()=>({readProject:()=>project,taskFile:()=>'/ledger/.ai/tasks/t.md'}),getStopControl:()=>({ticket:()=>({}),held:()=>false,changed:()=>false}),
+  getTranscript:()=>({collect:()=>({}),packet:()=> 'saved transcript'}),getBuildHandoffCard:()=>()=> 'saved original request',
+  getAccounts:()=>({location:()=>'/source-account',available:()=>assert.fail('candidate rejection must precede account admission')}),getLimitEvidence:()=>({forRequest:()=>null}),getUsage:()=>({status:async()=>({})}),
+  getSessions:()=>({list:()=>[],start:()=>{starts++;}}),getChats:()=>({busy:()=>false}),getAppUpdate:()=>({applying:()=>false}),getAiTools:()=>({isOperating:()=>false}),assertWorkspaceIdle:()=>{},expandHome:()=>'',
+  modelError:(ai,model,account)=>{checked.push({ai,model,account});return account==='spare'?'outside successor catalog':'';}});
+ f.policy.backup=()=>({ai:'codex',model:'GPT-6.1-Sol',account:'spare'});
+ await assert.rejects(limit(f.ctx).terminalLimitHandoff({project:'p',task:'t',ai:'claude',model:'main'},{exited:true,stopped:false,dir:'/work',started:'stamp',original:'original request'}),/outside successor catalog/);
+ assert.deepEqual(checked,[{ai:'codex',model:'GPT-6.1-Sol',account:'spare'}]);assert.equal(starts,0);
+ assert.equal(JSON.parse(writes.get('/ledger/.ai/handoff/t-limit.json')).pending,true);
+ assert.match(writes.get('/ledger/.ai/handoff/t-limit-stamp.md'),/saved original request/);
+});
+
 test('external terminal launch failure cancels its prepared command and propagates to the original caller',async()=>{
  const events=[],project={id:'p'},task={id:'t'};
  const route=require('../lib/routes/terminal-start')({send,lt,licenseGuard:()=>events.push('guard'),store:{readProject:()=>project,taskFile:()=>'/task',readTask:()=>task},launch:{AIS:['codex'],buildCommand:()=> 'command',openTerminal:async()=>{events.push('launch');throw Error('launch failed');}},pickSpec:()=>({model:'model'}),requestAccount:()=> 'default',modelError:()=>'',startDir:()=>({dir:'/work'}),taskPrompt:()=> 'prompt',permCmd:()=> 'codex',codexFastFor:()=>false,accounts:{terminalCommand:()=>({command:'prepared',cancel:()=>events.push('cancel')})}}).continue;

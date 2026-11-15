@@ -1,0 +1,2 @@
+# Apple Silicon Mac only (Python 3.11 recommended).
+mlx-whisper==0.4.3

@@ -6,18 +6,18 @@
 # 書き方: [AI, モデル, 思考]   思考 = 中 / 高 / 極高 / MAX / Ultra
 
 models:                      # AI ごとに選べるモデル
-  claude-code: [Opus 5.5, Fable 5.1]
+  claude-code: [Opus 5.5, Fable 5.2]
   codex:       [GPT-6.1-Sol]
 
 agents: ["サンプル担当"]    # Discord の架空の担当例。実際の担当に変更する
 
 roles:
-  司令塔:       { main: [claude-code, Fable 5.1, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: 計画・割り振り・進み具合 }
+  司令塔:       { main: [claude-code, Fable 5.2, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: 計画・割り振り・進み具合 }
   調査:         { main: [claude-code, Opus 5.5, "高"],   backup: [codex, GPT-6.1-Sol, "高"], job: 情報集め・要約 }
   デザイン:     { main: [claude-code, Opus 5.5, "高"],   backup: [codex, GPT-6.1-Sol, "高"], job: 画面・構成・見た目 }
   画像生成:     { main: [codex, GPT-6.1-Sol, "中"],     backup: ["人"],                     job: '画像を作る' }
   コーディング: { main: [codex, GPT-6.1-Sol, "高"],     backup: [claude-code, Opus 5.5, "高"], job: プログラムを書く }
-  チェック:     { main: [claude-code, Fable 5.1, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '独立レビュー（本人のテストは必須）' }
+  チェック:     { main: [claude-code, Fable 5.2, "極高"], backup: [codex, GPT-6.1-Sol, "高"], job: '独立レビュー（本人のテストは必須）' }
   文章:         { main: [claude-code, Opus 5.5, "中"],   backup: [codex, GPT-6.1-Sol, "中"], job: 説明文・マニュアル }
   最終確認:     { main: ["人"],                          backup: ["人"],                     job: 完成の判断 }
 

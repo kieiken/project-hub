@@ -1,4 +1,5 @@
 'use strict';
+const { FABLE_MODEL } = require('./lib/fable-model');
 const platform = require('./lib/platform');
 const { lt, locale, config:localeConfig, configScript, activePack } = require('./lib/locale');
 const langpacks = require('./lib/langpack');
@@ -30,7 +31,7 @@ const license = new (require('./lib/license').License)({ root: ROOT });
 const launch = require('./lib/launch');
 const roles = require('./lib/roles');
 const roleHistory = require('./lib/role-history');
-let roleReview;
+let roleReview, tierReview;
 const extensions = require('./lib/extensions').loadExtensions();
 const discussionRuntime = extensions.definition('discussion');
 const roleReviewRuntime = extensions.definition('role_review');
@@ -64,6 +65,7 @@ const DRY = process.env.HUB_DRY_RUN === '1'; // テスト用：実際には起�
 const stopControl = new (require('./lib/stop-control').StopControl)({dir:path.join(ROOT,'_hub','stop-control')});
 const accounts = new (require('./lib/accounts').Accounts)({ file: path.join(ROOT, '_hub', 'accounts.json'), dry: DRY, busy: accountBusy });
 launch.setAccounts(accounts);
+const tokenUsage = new (require('./lib/token-usage').TokenUsage)({dir:path.join(ROOT,'_hub','token-usage'),accounts,provenanceRoot:path.join(ROOT,'_hub','cli-runs')});
 function limitModels() { return limitEngine.limitModels(); }
 const limitEvidence = new ModelLimits(path.join(ROOT, '_hub', 'limits.json'), { models: limitModels,
   creditPolicy: rolesData, creditState: (ai, account) => usage.creditState(ai, account),
@@ -84,6 +86,7 @@ const extensionUI = extensions.uiSource(), extensionCSS = extensions.uiSource('s
 const staticFiles=new StaticFiles({root:PUBLIC,live:process.env.HUB_STATIC_LIVE==='1'});
 const ROLES_FILE = path.join(ROOT, '_hub', 'roles.yaml');
 const store = new Store(ROOT);
+require('./lib/rules-migration').migrate(store);
 const { Ideas } = require('./lib/ideas');
 const { IdeaAPI, isSaveRoute: ideaSaveRoute } = require('./lib/idea-api');
 const { IdeaSource, decorate: ideaRows } = require('./lib/idea-source');
@@ -107,8 +110,8 @@ let restartControl = null, emergencyRestart = null;
 let activeRequests = 0;
 const queueActions = new Set();
 const queueEdit = require('./lib/queue-edit');
-const queueEditable = item => item.origin !== 'hub-internal' && !item.automation && !item.readOnly && !item.selectionOnly && !item.limitSwitch && !item.resultsOrganize && !item.integrationAssignment && !item.isolatedReview && !item.integrationReviewRequest;
-const queueEngine = require('./lib/engines/queue')({ getDelegateCompletedError: () => DELEGATE_COMPLETED_ERROR, getLogFile: () => LOG_FILE, ROOT, accountFor, accounts, getAiTools: () => aiTools, getAppUpdate: () => appUpdate, assertWorkspaceIdle, autoTick, chat, getChatEnded: () => chatEnded, getChats: () => chats, codexFastFor, crypto, delegateTerminalError, getDiscussion: () => discussion, discussionRuntime, executionGate, getFreetalkHistory: () => freetalkHistory, fs, gitw, getIdeaDispatch: () => ideaDispatch, getIdeaRunner: () => ideaRunner, ideas, getIntegrateAuto: () => integrateAuto, integrationPolicyRequest, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, limitBackup, capacityBackup, assertCapacityHandoff, limitEvidence, limitIdentity, limitRoutingEnabled, lt, modelError, modelPolicy, getModelView: () => modelView, path, permCmd, queueActions, getQueueRetreat: () => queueRetreat, readLog, record, refreshLimitEvidence, requestAccount, getRestartControl: () => restartControl, getResultsGate: () => resultsGate, getRoleReview: () => roleReview, roleReviewLimit, roleReviewRuntime, roles, rolesData, selectionPrompt, send, specialMode, startDir, stopControl, store, getTaskIntegrate: () => taskIntegrate, taskPrompt, usage, verifyIntegrationAssignmentSend, verifyIntegrationReviewSend, webchatActive, workDir });
+const queueEditable = item => !item.roleTier && !item.tierReview && item.origin !== 'hub-internal' && !item.automation && !item.readOnly && !item.selectionOnly && !item.limitSwitch && !item.resultsOrganize && !item.integrationAssignment && !item.isolatedReview && !item.integrationReviewRequest;
+const queueEngine = require('./lib/engines/queue')({ getRoleTiers:()=>extensions.state().included.includes('delegate')?roleTiers:null, getTierReview:()=>tierReview, getDelegateCompletedError: () => DELEGATE_COMPLETED_ERROR, getLogFile: () => LOG_FILE, ROOT, accountFor, accounts, getAiTools: () => aiTools, getAppUpdate: () => appUpdate, assertWorkspaceIdle, autoTick, chat, getChatEnded: () => chatEnded, getChats: () => chats, codexFastFor, crypto, delegateTerminalError, getDiscussion: () => discussion, discussionRuntime, executionGate, getFreetalkHistory: () => freetalkHistory, fs, gitw, getIdeaDispatch: () => ideaDispatch, getIdeaRunner: () => ideaRunner, ideas, getIntegrateAuto: () => integrateAuto, integrationPolicyRequest, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, limitBackup, capacityBackup, assertCapacityHandoff, limitEvidence, limitIdentity, limitRoutingEnabled, lt, modelError, modelPolicy, getModelView: () => modelView, path, permCmd, queueActions, getQueueRetreat: () => queueRetreat, getReqCtx: () => reqCtx, readLog, record, refreshLimitEvidence, requestAccount, getRestartControl: () => restartControl, getResultsGate: () => resultsGate, getRoleReview: () => roleReview, roleReviewLimit, roleReviewRuntime, roles, rolesData, selectionPrompt, send, specialMode, startDir, stopControl, store, getTaskIntegrate: () => taskIntegrate, taskPrompt, usage, verifyIntegrationAssignmentSend, verifyIntegrationReviewSend, webchatActive, workDir });
 const chats = queueEngine.createChatRunner();
 queueRetreat = queueEngine.createQueueRetreat();
 const { Maintenance } = require('./lib/maintenance');
@@ -133,14 +136,15 @@ const removalReview=new (require('./lib/removal-review').RemovalReview)({store,r
  rows:(p,t)=>{const dir=store.readProject(p)?.dir;return dir?chat.read(dir,t):[];},
  start:async o=>{
   const p=store.readProject(o.project),t=p.tasks.find(t=>t.id===o.task),ai=t.owner==='codex'?'codex':'claude',account=requestAccount(p,t.id,ai);
-  const model=t.model || 'claude-fable-5-1',invalid=modelError(ai,model);if(invalid)throw Error(invalid);
+  const model=t.model || FABLE_MODEL,invalid=modelError(ai,model,account);if(invalid)throw Error(invalid);
   const turn={...o,ai,model,account,effort:t.effort || '高',role:'チェック',requireModel:true,requiredModel:launch.flagFor(ai,model),
    basePrompt:lt('読み取り専用の共有確認です。ファイルを編集せず、判定のJSONだけを返してください。'),policy:lt('読み取り専用。JSONだけを返してください。')};
   chats.enqueue(p.id,t.id,{...turn,id:o.request});
   try{const r=await chats.sendQueued(turn);chats.unqueue(p.id,t.id,o.request);return r;}
   catch(e){chats.unqueue(p.id,t.id,o.request);throw e;}
  }});
-const aiTools = new AiTools({ root: ROOT, dry: DRY, busy: ai => sessions.list().filter(x => x.running && (!ai || x.ai === ai)).length + [...chats.running.values()].filter(x => !ai || x.ai === ai).length + procwatch.list().filter(x => x.project && (!ai || !x.ai || x.ai === ai)).length + Number(accounts.terminalBusy(ai)) });
+const aiTools = new AiTools({ root: ROOT, dry: DRY, accounts, busy: ai => sessions.list().filter(x => x.running && (!ai || x.ai === ai)).length + [...chats.running.values()].filter(x => !ai || x.ai === ai).length + procwatch.list().filter(x => x.project && (!ai || !x.ai || x.ai === ai)).length + Number(accounts.terminalBusy(ai)) });
+const roleTiers = new (require('./lib/role-tiers').RoleTiers)({file:path.join(ROOT,'_hub','role-tiers.json'),roles:rolesData,tools:aiTools,accountFor,modelError,notice:o=>{record('role-tiers-stop',{},o);const p=store.readProject(o.project);if(p&&p.tasks.some(t=>t.id===o.task)){const row=chat.append(p.dir,o.task,{role:'event',text:`${o.role}の振り分けを停止しました：${o.reason}。再開は設定画面で人が決めてください。`});chats.emit(p.id,o.task,{type:'row',row});}}});
 aiTools.canOperate = () => restartControl?.committed ? lt('再起動を開始しています') : taskIntegrate.active || integrateAuto.active ? lt('統合の処理が進行中です') : appUpdate.applying() || appShell.rebuilding ? lt('Hubの更新が進行中です') : '';
 parallelEngine.installTerminal();
 const aiUpdates = new (require('./lib/ai-updates').AiUpdates)({ tools: aiTools, accounts, root: ROOT, onCatalog: applyModelCatalog });
@@ -288,6 +292,7 @@ function rolesData() { return roles.read(ROLES_FILE).data; }
 function limitRoutingEnabled() { return limitEngine.limitRoutingEnabled(); }
 function executionRoles() {
   const raw = rolesData(), mode = modelView.special();
+  if(!mode.enabled&&extensions.state().included.includes('delegate')){const t=roleTiers.readSafe();if(t.exists)raw.tierSettings=t.data;}
   return mode.enabled ? { ...raw, specialMode: mode, roles: raw.roles.map(r => ({ ...r,
     main: { ...specialMode.pick(mode, raw, r.name), ai: launch.AI_KEY[mode.ai] } })) } : raw;
 }
@@ -491,10 +496,10 @@ function pickSpec(task, ai) {
   const taskModel = task.model && (!mode.enabled || !modelError(ai, task.model)) ? task.model : '';
   const model = launch.modelLabel(ai, taskModel || (slot && slot.model) || modeSpec?.model || '');
   const effort = roles.EFFORTS.includes(task.effort) ? task.effort : (slot && slot.effort) || '';
-  return { model, effort: ai === 'agy' ? '高' : effort };
+  return { model, effort: ai === 'agy' ? '高' : launch.normalizeEffort(ai, effort) };
 }
 
-function modelError(ai, model) {
+function modelError(ai, model, account) {
   if (ai === 'chatgpt') return chat.CHATGPT_RETIRED;
   model = launch.modelLabel(ai, model);
   if (ai === 'agy') {
@@ -505,6 +510,10 @@ function modelError(ai, model) {
     if (!model) return lt('Agy の利用可能なモデルを一覧から選んでください');
     const id = launch.flagFor(ai, model);
     if (!catalog.models.some(row => row.id === id)) return lt`モデル「${model}」は現在の候補から外れています。新しいモデルを選んでください`;
+  }
+  if (ai === 'codex' && model && account !== undefined) {
+    const c = aiTools.accountCatalog(ai, account);
+    if (c.source && !c.models.some(row => row.id === (launch.flagFor(ai, model) || model))) return lt('このモデルは選んだアカウントの候補にありません。モデルを選び直すか、一覧を再取得してください');
   }
   if (!model) return '';
   if (aiTools.staleModel(ai, model)) return lt`モデル「${model}」は現在の候補から外れています。新しいモデルを選んでください`;
@@ -707,11 +716,11 @@ function modelPolicy(p, t, where = 'chat', projects) {
   const credits = instructions.creditRule(d);
   const paidModelRule = credits ? modelRule.replace(lt('従量課金・認証変更はしない。'), lt('購入・自動チャージ・APIキー課金・認証変更は禁止。')) : modelRule;
   const paidPolicy = credits ? limitPolicy.replace(lt('追加課金・API従量課金は使わない。'), lt('購入・自動チャージ・APIキー課金は禁止。')) : limitPolicy;
-  return `${paidModelRule}\n${paidPolicy}${credits ? '\n' + credits : ''}\n${instructions.WORKFLOW_RULE}\n${delegateRule(p, t)}\n\n${p.kind === 'freetalk' ? '自由対話の会話画面。新しい話題は人が［新しい話題］から作る。手順・完了・統合・取り込みの操作はありません。' : guidance(p, resultsGate.decorate(p,t,projects || store.listProjects()), { where, projects: projects || (t.kind === 'derived' && t.derivedFrom?.includes('/') && !t.derivedFrom.startsWith(p.id + '/') ? store.listProjects() : [p]), copy: inWork(p, t) && !copyMissing(p, t), copyMissing: copyMissing(p, t) })}`;
+  return `${paidModelRule}\n${paidPolicy}${credits ? '\n' + credits : ''}\n${instructions.delegateUltraRule(d)}\n${instructions.WORKFLOW_RULE}${p.kind === 'freetalk' || where === 'terminal' ? '\n' + instructions.SEND_TEXT_RULE + '\n' + instructions.PATH_RULE : ''}\n${delegateRule(p, t)}\n\n${p.kind === 'freetalk' ? '自由対話の会話画面。新しい話題は人が［新しい話題］から作る。手順・完了・統合・取り込みの操作はありません。' : guidance(p, resultsGate.decorate(p,t,projects || store.listProjects()), { where, projects: projects || (t.kind === 'derived' && t.derivedFrom?.includes('/') && !t.derivedFrom.startsWith(p.id + '/') ? store.listProjects() : [p]), copy: inWork(p, t) && !copyMissing(p, t), copyMissing: copyMissing(p, t) })}`;
 }
 
 function taskPrompt(p, t, file, dir, where = 'chat', startup, { readIndex = true } = {}) {
-  if (p.kind === 'freetalk') return [modelPolicy(p, t, where), freetalk.prompt(p, t)].join('\n\n');
+  if (p.kind === 'freetalk') { const common=[freetalk.prompt(p,t),require('./lib/chat-continuation').prompt(p.dir,t.id,PORT)].filter(Boolean).join('\n\n');return where==='terminal'?[modelPolicy(p,t,where),common].join('\n\n'):instructions.packet({pdir:p.dir,project:p.id,task:t.id,freetalk:true,roleData:executionRoles(),policy:modelPolicy(p,t,where),common,port:PORT,contextRule:launch.CONTEXT_RULE,askRule:chat.ASK_RULE,reportRule:chat.REPORT_RULE}); }
   const issuesRule = lt`【問題点を短くまとめる決まり】PROJECT.md の issues を足す・変える時は、同じプロジェクトの .ai/issues-summary.json も更新する（他プロジェクトには書かない）。保存形式は {"items":[{"hash":"原文のsha256先頭16文字","title":"30字までの問題名","state":"未解決/確認待ち/判断待ち/解決済み/履歴のいずれか","next":"50字までの次の対応（無ければ空）","who":"人/AI/空のいずれか"}]}。原文は文字列ならそのまま、オブジェクトなら text。hash は Node の require('node:crypto').createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 16) で計算する（text は原文そのもの。空白・改行を変えない）。問題名と次の対応に作業ID・commit・テスト件数を入れない。新しい状態の項目を足したら、同じ件の古い項目は「履歴」にする。確かめていない事は「確認待ち」にし、不具合・解決と断定しない。原文は消さない。`;
   const rel = dir && path.relative(workRoot(p), dir);
   const copy = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? lt`今いるフォルダ（${dir}）はこの作業専用の作業用コピー。ここだけで作業し、本体には触らないこと（取り込みは人が作業画面の［本体に取り込む］で行う）。`
@@ -735,7 +744,7 @@ function taskPrompt(p, t, file, dir, where = 'chat', startup, { readIndex = true
     const index=readIndex===false?'':require('./lib/task-read-index').taskReadIndex(taskRaw,{task:t.id,summaryIncluded:!!resumeSummary&&!resumeView.incomplete});
     const pastIndex=taskHistory.indexFile(p.id,t.id),past=pastIndex?lt`過去の会話の目次：台帳/${path.relative(p.dir,pastIndex).split(path.sep).join('/')}（全文を読まず、必要な話題だけ開く。根拠は保管先の原文の行番号で確認）\n`:'';
     const read = past+(resumeView.warning?resumeView.warning+'\n':'')+(resumeSummary?lt`最新の再開要約：\n${resumeSummary}\n読む：作業ファイルの最新の再開要約・手順・成果。昔の詳細と保管会話は必要箇所だけ。\n`:'')+lt`作業「${String(t.title).replace(/[\r\n]+/g, ' ')}」（作業ID ${t.id}）の続きを。読む（台帳内）：.ai/rules.md・PROJECT.md・.ai/tasks/${t.id}.md${resumeSummary?'の最新の再開要約・手順・成果（過去全文を読み直さない）':''}。区切りで更新・実施手順のみ[x]（無ければ3〜5個）。workdir・state・questionは書き換えない（Hub管理）。`;
-    return instructions.packet({ pdir: p.dir, project: p.id, task: t.id, dynamic: index, roleData: executionRoles(), policy: modelPolicy(p, t, where, all), issues: issuesRule, port: PORT, contextRule: launch.CONTEXT_RULE, askRule: chat.ASK_RULE,
+    return instructions.packet({ pdir: p.dir, project: p.id, task: t.id, dynamic: index, roleData: executionRoles(), policy: modelPolicy(p, t, where, all), issues: issuesRule, port: PORT, contextRule: launch.CONTEXT_RULE, askRule: chat.ASK_RULE, reportRule: chat.REPORT_RULE,
       common: [dir ? `cwd=${dir === p.dir ? '台帳' : '台帳/' + path.relative(p.dir, dir).split(path.sep).join('/')}。${rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? lt('作業用コピー限定。本体には触らない（人が［本体に取り込む］）。') : lt('本体。コピーは使わず、ここで作業してよい（Hub指定）。')}` : '', look, context, read,require('./lib/chat-continuation').prompt(p.dir,t.id,PORT)].filter(Boolean).join('\n') });
   }
   const resumeView=require('./lib/text-budget').summaryView(fs.readFileSync(file,'utf8'));
@@ -757,7 +766,7 @@ function accountFor(project, task, ai) {
 function requestAccount(p, task, ai, supplied) {
   const id = supplied ?? accountFor(p.id, task, ai); accounts.available(ai, id, { forWork: true }); return id;
 }
-function accountBusy(ai, id) {
+function accountBusy(ai, id, displayObservation) {
   if (usage?.inflight?.has(usage.key(ai, id)) || usage?.resetBusy?.has(usage.key(ai, id))) return true;
   if (id === 'default' && aiTools.isOperating()) return true;
   if (sessions.list().some(s => s.running && s.ai === ai && (s.account || 'default') === id)) return true;
@@ -765,8 +774,25 @@ function accountBusy(ai, id) {
   for (const p of store.listProjects()) for (const t of p.tasks) {
     if (chats.queue(p.id, t.id).some(q => (q?.ai === ai && (q.account || 'default') === id) || (ai === 'claude' && q?.limitSwitch && (q.limitSwitch.sourceAccount || 'default') === id))) return true;
   }
-  // 外部Terminal等のAIはアカウントを特定できないので、該当AIの認証変更を保留する。
-  return procwatch.list().some(r => r.ai === ai || r.ai === launch.AI_KEY[ai]);
+  const activity = require('./lib/account-processes');
+  const observe = () => {
+    const external = procwatch.list().filter(r => r.ai === ai || r.ai === launch.AI_KEY[ai]);
+    if (!external.length) return new Map();
+    try {
+      const readInputs = () => {
+        try { return { roots: activity.managedRoots(chats, sessions), rows: require('./lib/platform').processSnapshot() }; }
+        catch { return null; }
+      };
+      if (displayObservation && !displayObservation.has('external-inputs')) displayObservation.set('external-inputs', readInputs());
+      const inputs = displayObservation ? displayObservation.get('external-inputs') : readInputs();
+      if (!inputs) return 'unknown-process';
+      return activity.observeExternal(ai, external, inputs.roots, inputs.rows, undefined,
+        () => accounts.list({ includeActivity: false }).filter(row => row.ai === ai).map(row => ({ id: row.id, dir: accounts.location(ai, row.id) })));
+    } catch { return 'unknown-process'; }
+  };
+  if (!displayObservation) return activity.busyFor(observe(), id);
+  if (!displayObservation.has(ai)) displayObservation.set(ai, observe());
+  return activity.busyFor(displayObservation.get(ai), id);
 }
 function usageSelection(url, b = {}) {
   const project = b.project || url.searchParams.get('project'), task = b.task || url.searchParams.get('task');
@@ -781,7 +807,7 @@ function usageWithLimit(snapshot) {
   // 表示も開始前の共通判定から作る。旧fable-limit.jsonは読まず変更もしない。
   const account = snapshot.selection?.claude || snapshot.providers?.claude?.account || 'default';
   const state = limitRoutingEnabled() && limitEvidence.active(account);
-  return { ...snapshot, creditException:limitEvidence.creditException(), limits: limitRoutingEnabled() ? limitEvidence.list(snapshot.selection || {}) : [], fableLimit: state ? { model: 'claude-fable-5-1', account, at: state.at, until: state.validUntil, untilSource: state.untilSource, hold: true } : null };
+  return { ...snapshot, creditException:limitEvidence.creditException(), limits: limitRoutingEnabled() ? limitEvidence.list(snapshot.selection || {}) : [], fableLimit: state ? { model: FABLE_MODEL, account, at: state.at, until: state.validUntil, untilSource: state.untilSource, hold: true } : null };
 }
 
 const { FreetalkHistory } = require('./lib/freetalk-history');
@@ -815,6 +841,7 @@ const taskHistory = new (require('./lib/task-history').TaskHistory)({store,recor
     return '';
   },reset:(project,task,generation)=>{chats.base.delete(chats.key(project,task));chats.queues.delete(chats.key(project,task));for(const ai of launch.AIS){const key=sessions.key(project,task,ai);if(sessions.get(project,task,ai)?.exited)sessions.map.delete(key);}chats.emit(project,task,{type:'reset',generation});}
 });
+const projectAttachments = new (require('./lib/project-attachments').ProjectAttachments)(store,taskHistory);
 conversationHistory=taskHistory;
 const historyProjects = project => require('./lib/resource-scope').relatedProjects(project, store.listProjects(), baseOf, expandHome, __dirname, {hubGlobal:false});
 function historyBlockers(project,{body=false}={}){
@@ -1113,6 +1140,7 @@ function isolatedReviewDir(p,t){
 function verifyIntegrationReviewSend(o) {
   verifyIntegrationAssignmentSend(o);
   if(discussionRuntime.isRequest(o.request)){discussion.verify(o);return;}
+  if(require('./lib/role-tier-review').isRequest(o.request)){tierReview.verify(o);return;}
   if(roleReviewRuntime.isRequest(o.request)){roleReview.verify(o);return;}
   const queued=o.mode==='queued'||o.mode==='amend',q=queued?chats.queue(o.project,o.task).find(q=>q.id===o.request):null;
   const original=x=>x?.limitSwitch?.original||x?.shown||x?.text;
@@ -1204,6 +1232,12 @@ function documentHtml(fd, info, size) {
 const stateOffers = new (require('./lib/state-offers').StateOffers)({transfer:taskTransfer,removal,baseOf});
 
 const museSettings = new (require('./lib/muse-settings').MuseSettings)({root:ROOT});
+const jevSettings = new (require('./lib/jev-settings').JevSettings)({dry:DRY});
+const jevSearch = new (require('./lib/jev-search').JevSearch)({
+  budget: new (require('./lib/jev-search-budget').JevSearchBudget)(path.join(ROOT, '_hub', 'jev-search.json')),
+  store: () => jevSettings.store, dry: DRY,
+});
+jevSettings.search = jevSearch;
 museDirect = new (require('./lib/muse-direct').MuseDirect)({muse:museSettings,
   probe:b=>{
     stopControl.assert(b);
@@ -1217,8 +1251,10 @@ museDirect = new (require('./lib/muse-direct').MuseDirect)({muse:museSettings,
     if(chats.busy(b.project,b.task)||chats.queue(b.project,b.task).length||webchatActive(b.project,b.task))throw Error('前の処理が終わってからMuseへ送ってください。');
     assertWorkspaceIdle(p,t,false);
   },emit:(p,t,ev)=>chats.emit(p,t,ev)});
-const conversationSearch = new (require('./lib/conversation-search').ConversationSearch)(store.root);
+const conversationSearch = new (require('./lib/conversation-search').ConversationSearch)(store.root, { jev: jevSearch });
 const routes = require('./lib/routes').createRoutes([
+  {name:'tokenusage',create:require('./lib/routes/token-usage'),ctx:{send,tokenUsage,PORT}},
+  { name: 'jevsettings', create: require('./lib/routes/jev-settings'), ctx: { send, PORT, fromRemote, jev:jevSettings } },
   { name: 'musesettings', create: require('./lib/routes/muse-settings'), ctx: { send, PORT, fromRemote, muse: museSettings, direct:museDirect, launch, DRY, record,
     approvalProbe: request => integrationAssignment(request),
     approvalDispatch: async request => {
@@ -1229,17 +1265,17 @@ const routes = require('./lib/routes').createRoutes([
       if (status !== 200 || !body?.ok) throw Error('Muse continuation not confirmed');
       return body;
     } } },
-  { name: 'queuecontrol', create: require('./lib/routes/queue-control'), ctx: { ROLES_FILE, chats, freetalkAttachments, fromRemote, fs, launch, limitIdentity, lt, modelError, permCmd, pickSpec, queueActions, queueEdit, queueEditable, getQueueRetreat: () => queueRetreat, record, requestAccount, roleHistory, getRoleReview: () => roleReview, roles, rolesData, send, store } },
+  { name: 'queuecontrol', create: require('./lib/routes/queue-control'), ctx: { ROLES_FILE, chats, freetalkAttachments, projectAttachments, fromRemote, fs, launch, limitIdentity, lt, modelError, permCmd, pickSpec, queueActions, queueEdit, queueEditable, getQueueRetreat: () => queueRetreat, record, requestAccount, roleHistory, getRoleReview: () => roleReview, roles, rolesData, send, store } },
   { name: 'terminalstart', create: require('./lib/routes/terminal-start'), ctx: { DRY, accountFor, accounts, aiTools, codexFastFor, crypto, fs, gitSnapshot, launch, license, licenseGuard, limitBackup, limitEvidence, limitIdentity, lt, modelError, modelView, path, permCmd, pickSpec, record, refreshLimitEvidence, requestAccount, getRestartControl: () => restartControl, rolesData, saveTerminalPending, send, sessions, startDir, store, taskPrompt, terminalBusy, terminalPending, transcript } },
-  { name: 'chatsend', create: require('./lib/routes/chat-send'), ctx: { DELEGATE_COMPLETED_ERROR, assertWorkspaceIdle, chat, chatEnded, chats, getDiscussion: () => discussion, extensions, freetalk, freetalkAttachments, fs, holdStoppedQueue, getIdeaDispatch: () => ideaDispatch, ideas, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, lt, modelError, modelPolicy, modelView, permCmd, pickSpec, queueActions, queueEdit, queueEditable, record, startCreditCheck, refreshLimitEvidence, removalReview, reqCtx, requestAccount, roles, rolesData, send, sessions, specialMode, start, startDir, stopControl, store, taskHistory, taskPrompt, verifyIntegrationReviewSend, getWebchat: () => webchat, webchatActive } },
+  { name: 'chatsend', create: require('./lib/routes/chat-send'), ctx: { DELEGATE_COMPLETED_ERROR, assertWorkspaceIdle, chat, chatEnded, chats, getDiscussion: () => discussion, extensions, freetalk, freetalkAttachments, projectAttachments, fs, holdStoppedQueue, getIdeaDispatch: () => ideaDispatch, ideas, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, lt, modelError, modelPolicy, modelView, permCmd, pickSpec, queueActions, queueEdit, queueEditable, record, startCreditCheck, refreshLimitEvidence, removalReview, reqCtx, requestAccount, roles, rolesData, send, sessions, specialMode, start, startDir, stopControl, store, taskHistory, taskPrompt, verifyIntegrationReviewSend, getWebchat: () => webchat, webchatActive } },
   { name: 'ideaimage', create: require('./lib/routes/idea-image-upload'), ctx: { send, ideas } },
   { name: 'chatrecovery', create: require('./lib/routes/chat-recovery'), ctx: { send, chats, store } },
-  { name: 'terminalio', create: require('./lib/routes/terminal-io'), ctx: { send, lt, sessions, setUnread, launch, modelError, store, pickSpec, limitIdentity, rolesData, record } },
+  { name: 'terminalio', create: require('./lib/routes/terminal-io'), ctx: { send, lt, sessions, setUnread, launch, modelError, store, pickSpec, limitIdentity, rolesData, record, accountFor } },
   { name: 'localfiles', create: require('./lib/routes/local-files'), ctx: { send, lt, resolvePlace, viewInfo, fs, documentHtml, fromRemote, record, store, expandHome, denied, launch, DRY, path, platform } },
   { name: 'mcpsettings', create: require('./lib/routes/mcp-settings'), ctx: { send, lt, gpt, readBody, freetalkHistory, codexMcpStatus, codexMcpRegister, record } },
-  { name: 'rolesettings', create: require('./lib/routes/role-settings'), ctx: { send, lt, roleHistory, ROLES_FILE, roles } },
+  { name: 'rolesettings', create: require('./lib/routes/role-settings'), ctx: { send, lt, roleHistory, ROLES_FILE, roles, tiers:roleTiers, getReview:()=>tierReview, extensions, license } },
   { name: 'taskmanagement', create: require('./lib/routes/task-management'), ctx: { send, lt, store, fs, acceleration, chat, record, webchatActive, sessions, chats, emptyLib, removal } },
-  { name: 'taskattachments', create: require('./lib/routes/task-attachments'), ctx: { send, lt, store, taskHistory, freetalk, freetalkAttachments, readRaw, MAX_UPLOAD, record, saveUpload, launch, sessions, path, fs } },
+  { name: 'taskattachments', create: require('./lib/routes/task-attachments'), ctx: { send, lt, store, taskHistory, freetalk, freetalkAttachments, projectAttachments, readRaw, MAX_UPLOAD, record, saveUpload, launch, sessions, path, fs } },
   { name: 'taskintegration', create: require('./lib/routes/task-integration'), ctx: { send, lt, store, inWork, copyMissing, expandHome, gitw, mainMergeDelivery, getMainMergeFlow: () => mainMergeFlow, workRoot, mainMergeTokens, crypto, integrationBlockers, integrationBlockersAsync, HUB_INSTANCE, lastMerge, record, taskIntegrate, launch, sessions, taskTransfer, setUnread, integrationFailure, integrationAbandon, integrateAuto, pruneUnread, resultsGate, executionRoles, delegateRequest } },
   { name: 'taskbodywrite', create: require('./lib/routes/task-body-write'), ctx: { send, textBudget, record } },
   { name: 'taskcontinuation', create: require('./lib/routes/task-continuation'), ctx: { send, taskHistory, textBudget, autoTick, record } },
@@ -1249,7 +1285,7 @@ const routes = require('./lib/routes').createRoutes([
   { name: 'taskprogress', create: require('./lib/routes/task-progress'), ctx: { send, lt, getDiscussion: () => discussion, webchatActive, chats, launch, sessions, resultsGate, store, record, reportChild, handoff } },
   { name: 'chatnote', create: require('./lib/routes/chat-note'), ctx: { send, lt, store, freetalk, chat, chats } },
   { name: 'tasksettings', create: require('./lib/routes/task-settings'), ctx: { send, lt, store, fromRemote, record, chats, sessions, setUnread, taskHistory, chat } },
-  { name: 'taskread', create: require('./lib/routes/task-read'), ctx: { send, lt, store, stepSummary, inWork, gitw, expandHome, workRoot, taskIntegrate } },
+  { name: 'taskread', create: require('./lib/routes/task-read'), ctx: { send, sendEncoded, lt, store, stepSummary, inWork, gitw, expandHome, workRoot, taskIntegrate } },
   { name: 'taskbody', create: require('./lib/routes/task-body-read'), ctx: { send, lt, textBudget, path, store, fs } },
   { name: 'taskhistory', create: require('./lib/routes/task-history-read'), ctx: { send, taskHistory, autoView, textBudget } },
   { name: 'conversationsearch', create: require('./lib/routes/conversation-search'), ctx: { send, search: conversationSearch, PORT, fromRemote } },
@@ -1257,9 +1293,9 @@ const routes = require('./lib/routes').createRoutes([
   { name: 'freetalk', create: require('./lib/routes/freetalk'), ctx: { send, lt, freetalkHistory, freetalkAttachments, freetalk, specialMode, modelView, rolesData, freetalkLifecycle, chats, setUnread, cleanFreetalkMemory, startAutomaticFreetalk, delegateRequest } },
   { name: 'project', create: require('./lib/routes/project'), ctx: { send, projectNotes, store, expandHome, github, githubProject, fs, path, gitw, lt, handoff, sessions, chats, record, reportChild, activePack, __dirname } },
   { name: 'start', create: require('./lib/routes/start'), ctx: { store, start, send, fs, lt, readRaw, quickStart: (...args) => quickStart(...args) } },
-  { name: 'state', create: require('./lib/routes/state'), ctx: { gitw, __dirname, pruneUnread, getDiscussion: () => discussion, rolesData, modelView, stepSummary, chats, restartBlockers, extensions, stopControl, ROOT, HUB_INSTANCE, VERSION, readVersion, BOOT_HEAD, license, appUpdate, appShell, freetalkStatus, onboarding, aiUpdates, aiTools, updateBusy, getRestartControl: () => restartControl, bodyNoticeState, github, accounts, store, projectOrder, taskTransfer, stateOffers, taskIntegrate, launch, handoff, baseOf, githubProject, start, workRoot, copyMissing, chat, path, expandHome, fs, resultsGate, freetalkHistory, inWork, getWebchat: () => webchat, getMuseDirect: () => museDirect, sessions, modelError, roles, unread, procwatch, acceleration, remote, gpt, crypto, fromRemote, getUpdateRestoreReady: () => updateRestoreReady, record, sendEncoded, lt } },
+  { name: 'state', create: require('./lib/routes/state'), ctx: { roleTiers, gitw, __dirname, pruneUnread, getDiscussion: () => discussion, rolesData, modelView, stepSummary, chats, restartBlockers, extensions, stopControl, ROOT, HUB_INSTANCE, VERSION, readVersion, BOOT_HEAD, license, appUpdate, appShell, freetalkStatus, onboarding, aiUpdates, aiTools, updateBusy, getRestartControl: () => restartControl, bodyNoticeState, github, accounts, store, projectOrder, taskTransfer, stateOffers, taskIntegrate, launch, handoff, baseOf, githubProject, start, workRoot, copyMissing, chat, path, expandHome, fs, resultsGate, freetalkHistory, inWork, getWebchat: () => webchat, getMuseDirect: () => museDirect, sessions, modelError, roles, unread, procwatch, acceleration, remote, gpt, crypto, fromRemote, getUpdateRestoreReady: () => updateRestoreReady, record, sendEncoded, lt } },
   { name: 'acceleration', create: require('./lib/routes/acceleration'), ctx: { send, acceleration, record } },
-  { name: 'modelsettings', create: require('./lib/routes/model-settings'), ctx: { send, saveCliModels, record, launch, modelView, rolesData, modelError, roles, ROLES_FILE, lt } },
+  { name: 'modelsettings', create: require('./lib/routes/model-settings'), ctx: { send, saveCliModels, record, launch, modelView, rolesData, modelError, roles, ROLES_FILE, lt, accounts, aiTools } },
   { name: 'limits', create: require('./lib/routes/limits'), ctx: { send, usageSelection, accounts, usage, limitEvidence, record, usageWithLimit, lt, limitModels, getDiscussion: () => discussion } },
   { name: 'aiupdate', create: require('./lib/routes/ai-update'), ctx: { send, aiUpdates, applyModelCatalog, record, lt } },
   { name: 'hierarchy', create: require('./lib/routes/hierarchy'), ctx: { send, removal, removalReview, ideas, crypto, pruneUnread, record, projectOrder, store, sessions, chats } },
@@ -1281,7 +1317,7 @@ async function api(req, res, url) {
   if ((req.method === 'POST' && !['/api/restart','/api/ai/stop','/api/ai/resume','/api/chat/stop','/api/term/stop'].includes(url.pathname) || accountRead) && restartControl?.committed) { req.resume(); return send(res,url.pathname.startsWith('/api/ideas')?503:409,{error:lt('再起動を開始しています'),...(url.pathname.startsWith('/api/ideas')?{code:'restarting',saved:false,retry:'receipt'}:{})}); }
   const active = mutation || accountRead;
   if (active) activeRequests++;
-  try { return await reqCtx.run({...reqCtx.getStore(),stopSnapshot:structuredClone(stopControl.data)},()=>apiRequest(req,res,url)); } finally { if (active) activeRequests--; }
+  try { return await reqCtx.run({...reqCtx.getStore(),stopSnapshot:structuredClone(stopControl.data),delegateTurn:url.pathname==='/api/delegate'?req.headers['x-hub-delegate-turn']:undefined},()=>apiRequest(req,res,url)); } finally { if (active) activeRequests--; }
 }
 async function apiRequest(req, res, url) {
   if (routes.queuecontrol.draft.matches(req, url)) return routes.queuecontrol.draft.handle(req, res, url);
@@ -1336,6 +1372,7 @@ async function apiRequest(req, res, url) {
   if (routes.remote.enrollment.matches(req,url)) return routes.remote.enrollment.handle(req,res,url);
   if (routes.remote.forget.matches(req,url)) return routes.remote.forget.handle(req,res,url);
   if (req.method === 'GET' && url.pathname === '/api/ping') return send(res, 200, { ok: true, version: VERSION, pid: process.pid, runtimePath: __dirname, instance: HUB_INSTANCE, restored: updateRestoreReady, ...(process.platform === 'win32' && process.env.HUB_WINDOW_LAUNCH ? { windowLaunch: process.env.HUB_WINDOW_LAUNCH, windowRoot: ROOT } : {}), updateConfirm: process.env.HUB_UPDATE_CONFIRM || '', ...localAuth.ping(url.searchParams.get('challenge')) });
+  if (routes.rolesettings.tiers.matches(req,url)) return routes.rolesettings.tiers.handle(req,res,url);
   if (routes.rolesettings.history.matches(req, url)) return routes.rolesettings.history.handle(req, res, url);
   if (routes.taskintegration.wait.matches(req, url)) return routes.taskintegration.wait.handle(req, res, url);
   if (req.method === 'GET' && url.pathname === '/api/discussion') return extensions.route('discussion',req,res,url,null,send);
@@ -1347,6 +1384,7 @@ async function apiRequest(req, res, url) {
   if (routes.modelinfo.tools.matches(req, url)) return routes.modelinfo.tools.handle(req, res, url);
   if (routes.modelinfo.skills.matches(req, url)) return routes.modelinfo.skills.handle(req, res, url);
   if (routes.accounts.read.matches(req, url)) return routes.accounts.read.handle(req, res, url);
+  if (routes.tokenusage.read.matches(req,url)) return routes.tokenusage.read.handle(req,res,url);
   if (routes.usage.read.matches(req, url)) return routes.usage.read.handle(req, res, url);
 
 
@@ -1364,6 +1402,7 @@ async function apiRequest(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/webchat') return extensions.route('webchat',req,res,url,null,send);
   if (routes.mcpsettings.read.matches(req, url)) return routes.mcpsettings.read.handle(req, res, url);
   if (routes.musesettings.read.matches(req, url)) return routes.musesettings.read.handle(req, res, url);
+  if (routes.jevsettings.read.matches(req, url)) return routes.jevsettings.read.handle(req, res, url);
   // 外から使う（iPhone）の設定
   if (routes.remote.read.matches(req, url)) return routes.remote.read.handle(req, res, url);
   if (routes.information.read.matches(req, url)) return routes.information.read.handle(req, res, url);
@@ -1388,6 +1427,7 @@ async function apiRequest(req, res, url) {
 
   if (routes.freetalk.status.matches(req, url)) return routes.freetalk.status.handle(req, res, url);
   if (routes.freetalk.attachment.matches(req, url)) return routes.freetalk.attachment.handle(req, res, url);
+  if (routes.chatrecovery.unfinishedList.matches(req,url)) return routes.chatrecovery.unfinishedList.handle(req,res,url);
   if (req.method !== 'POST') return send(res, 405, { error: 'method' });
 
   if (routes.ideaimage.upload.matches(req, url)) return routes.ideaimage.upload.handle(req, res, url);
@@ -1399,6 +1439,9 @@ async function apiRequest(req, res, url) {
   let b;
   try { b = await readBody(req); }
   catch (error) {
+    if (routes.jevsettings.search.matches(req, url)) return send(res, 400, { error: '操作内容を確認してください。' });
+    if (routes.jevsettings.verify.matches(req, url)) return send(res, 400, { error: '操作内容を確認してください。' });
+    if (routes.jevsettings.write.matches(req, url)) return send(res, 400, { error: '接続用キーの形式を確認してください。' });
     if (routes.conversationsearch.access.matches(req, url)) return send(res, 400, { error: lt('検索の形式が違います。') });
     if (routes.musesettings.write.matches(req, url)) return send(res, 400, { error: lt('形式が違います。ログイン情報は設定画面に送らないでください。') });
     throw error;
@@ -1445,6 +1488,7 @@ async function apiRequest(req, res, url) {
   if (routes.onboarding.write.matches(req, url)) return routes.onboarding.write.handle(req, res, url, b);
   if (routes.limits.clear.matches(req, url)) return routes.limits.clear.handle(req, res, url, b);
   if (routes.limits.write.matches(req, url)) return routes.limits.write.handle(req, res, url, b);
+  if (routes.tokenusage.write.matches(req,url)) return routes.tokenusage.write.handle(req,res,url,b);
   if (routes.usage.write.matches(req, url)) return routes.usage.write.handle(req, res, url, b);
   if (routes.taskmanagement.acceleration.matches(req, url)) return routes.taskmanagement.acceleration.handle(req, res, url, b);
   if (routes.acceleration.write.matches(req, url)) return routes.acceleration.write.handle(req, res, url, b);
@@ -1472,6 +1516,9 @@ async function apiRequest(req, res, url) {
   if (routes.mcpsettings.register.matches(req, url)) return routes.mcpsettings.register.handle(req, res, url, b);
   if (routes.mcpsettings.write.matches(req, url)) return routes.mcpsettings.write.handle(req, res, url, b);
   if (routes.musesettings.write.matches(req, url)) return routes.musesettings.write.handle(req, res, url, b);
+  if (routes.jevsettings.search.matches(req, url)) return routes.jevsettings.search.handle(req, res, url, b);
+  if (routes.jevsettings.verify.matches(req, url)) return routes.jevsettings.verify.handle(req, res, url, b);
+  if (routes.jevsettings.write.matches(req, url)) return routes.jevsettings.write.handle(req, res, url, b);
   if (routes.remote.logout.matches(req, url)) return routes.remote.logout.handle(req, res, url, b);
   if (routes.start.write.matches(req, url)) return routes.start.write.handle(req, res, url, b);
   if (routes.aiupdate.write.matches(req, url)) return routes.aiupdate.write.handle(req, res, url, b);
@@ -1598,6 +1645,7 @@ async function apiRequest(req, res, url) {
 
   // 選ぶ欄にモデルを出す・出さない
   if (routes.modelsettings.write.matches(req, url)) return routes.modelsettings.write.handle(req, res, url, b);
+  if (url.pathname.startsWith('/api/roles/tiers/')) return routes.rolesettings.tierAction.handle(req,res,url,b);
   // 役割分担の保存
   if (routes.rolesettings.write.matches(req, url)) return routes.rolesettings.write.handle(req, res, url, b);
   if (url.pathname === '/api/roles/review' || url.pathname === '/api/roles/review/cancel') return extensions.route('role_review', req, res, url, b, send);
@@ -1609,8 +1657,9 @@ async function apiRequest(req, res, url) {
 
 
 function serveStatic(req, res, pathname) {
-  if(pathname==='/extensions-ui.css')return send(res,200,extensionCSS,TYPES['.css']);
-  if(pathname==='/extensions-ui.js')return send(res,200,extensionUI,TYPES['.js']);
+  if(pathname==='/extensions-ui.css'||pathname==='/extensions-ui.js')return sendEncoded(req,res,
+    pathname==='/extensions-ui.css'?extensionCSS:extensionUI,
+    {'Content-Type':TYPES[path.extname(pathname)],'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
   if(pathname==='/locale-config.js')return send(res,200,configScript(),TYPES['.js']);
   const rel = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.normalize(path.join(PUBLIC, rel));
@@ -1732,14 +1781,14 @@ const server = http.createServer(async (req, res) => {
       // This public document contains no owner data or credentials. Native
       // windows supply a verified header to receive a fresh browser session.
       if (req.method === 'GET' && ['/', '/index.html'].includes(url.pathname)) {
-        const html = localAuth.authenticated(req) ? ownerIndex.replace('<head>', '<head>' + localAuth.bootstrap()) : ownerIndex;
+        const html = localAuth.authenticated(req) ? ownerIndex.replace('<head>', '<head>' + localAuth.bootstrap(localAuth.ownerAuthenticated(req))) : ownerIndex;
         return send(res, 200, html, 'text/html; charset=utf-8');
       }
       if (req.method === 'GET' && url.pathname === '/api/ping' && !localAuth.authenticated(req)) return send(res, 200, { ok: true, ...localAuth.ping(url.searchParams.get('challenge')) });
       if (!localAuth.authenticated(req)) {
         if (!url.pathname.startsWith('/api/') && !['/', '/index.html'].includes(url.pathname)) return serveStatic(req, res, url.pathname);
         req.resume();
-        return url.pathname.startsWith('/api/') ? send(res, 401, { error: 'Open Project Hub from its app or launcher' }) : send(res, 401, require('./lib/local-auth').lockedPage, 'text/html; charset=utf-8');
+        return url.pathname.startsWith('/api/') ? send(res, 401, { error: 'Open Project Hub from its app or launcher', code: 'local_auth_required' }) : send(res, 401, require('./lib/local-auth').lockedPage, 'text/html; charset=utf-8');
       }
       if (req.method === 'POST' && url.pathname === '/api/local-auth/launch') return send(res, 200, { ticket: localAuth.issue() });
       url.searchParams.delete('hubResource'); req.url = url.pathname + url.search;
@@ -1787,10 +1836,10 @@ const emergencyStop=new (require('./lib/emergency-stop').EmergencyStop)({control
   const terminalPids=new Set([...sessions.map.values()].map(s=>s.identity?.pid).filter(Boolean));
   return procwatch.list().filter(p=>p.project&&!chats.supervisedPid(p.pid)&&!terminalPids.has(p.pid)&&!procwatch.hasAncestor(p.pid,pid=>chats.supervisedPid(pid)||terminalPids.has(pid)));
 },ancillary:(scope,errors)=>{
-  const attempt=fn=>{try{fn();}catch(e){errors.push(e.message);}};
+  const attempt=(o,fn,blocking=true)=>{try{fn();}catch(e){errors.push({...o,message:e.message,blocking:blocking||e.message!=='ideas.auto is not a function'});}};
   const scopes=scope?[scope]:[...new Map([...emergencyStop.targets(),...store.listProjects().flatMap(p=>(p.tasks||[]).map(t=>({project:p.id,task:t.id})))].map(o=>[JSON.stringify([o.project,o.task]),o])).values()];
-  for(const o of scopes){attempt(()=>holdStoppedQueue(o.project,o.task));attempt(()=>chats.onStop?.(o.project,o.task));attempt(()=>discussion.stop(o.project,o.task));attempt(()=>integrateAuto.stop(o.project,o.task));}
-  attempt(()=>{const p=fs.existsSync(ROLES_FILE)?roleHistory.load(ROLES_FILE).journal.review:null;if(p&&(!scope||p.project===scope.project&&p.task===scope.task))roleReview.cancel?.();});
+  for(const o of scopes){attempt(o,()=>holdStoppedQueue(o.project,o.task));attempt(o,()=>chats.onStop?.(o.project,o.task),false);attempt(o,()=>discussion.stop(o.project,o.task));attempt(o,()=>integrateAuto.stop(o.project,o.task));}
+  attempt(scope,()=>{const p=fs.existsSync(ROLES_FILE)?roleHistory.load(ROLES_FILE).journal.review:null;if(p&&(!scope||p.project===scope.project&&p.task===scope.task))roleReview.cancel?.();});
 }});
 
 emergencyRestart=new (require('./lib/emergency-restart').EmergencyRestart)({control:stopControl,stop:()=>emergencyStop.stop(),restart:restartControl,boot:HUB_INSTANCE,
@@ -1812,6 +1861,8 @@ async function shutdown({graceful=false}={}) {
   museDirect.scheduler.stop();webchat.shutdown();aiUpdates.stop();appUpdate.stop();procwatch.stop();sessions.stopAll();chats.stopAll();server.close();process.exit(0);
 }
 
+tierReview = new (require('./lib/role-tier-review').TierReview)({tiers:roleTiers,roles:rolesData,store,chats,accountFor,modelError,special:()=>modelView.special().enabled,ended:chatEnded,createTopic:slot=>{freetalk.ensure();return freetalk.createTopic(slot,{title:lt('段の見直し')+' '+new Date().toLocaleDateString('ja-JP')});},saveRoles:(rows,expectedRevision)=>roles.write(ROLES_FILE,rows,undefined,false,undefined,{expectedRevision,reason:lt('段の見直し（人が承認）')})});
+if(extensions.state().included.includes('delegate'))tierReview.recover();
 roleReview = extensions.create('role_review', { license:Object.freeze({require:features=>license.require(features)}), file:ROLES_FILE, store, chats, tools:aiTools, accounts, usage, limits:limitEvidence, accountFor,
   createTopic:()=>freetalk.createTopic(specialMode.pick(modelView.special(), rolesData(), '司令塔') || modelView.initial(), {title:lt('役割分担の見直し')}),
   applyCatalog:applyModelCatalog, migrated:task=>freetalkHistory.state(task).migrated,
@@ -1874,6 +1925,7 @@ if (require.main === module) {
     process.exit(1);
   });
   server.listen(PORT, '127.0.0.1', () => {
+    if(!DRY)tokenUsage.schedule();
     if(!DRY) museDirect.scheduler.start(({project,task})=>{
       const p=store.readProject(project);
       if(!p?.tasks.some(t=>t.id===task&&t.state!=='完了'))return null;
@@ -1892,4 +1944,4 @@ if (require.main === module) {
 server.on('listening', () => require('./lib/local-auth').activateServer(localAuth, server));
 process.once('exit', () => localAuth.close());
 server.on('close', () => { localAuth.close(); bodyClosed=true;clearInterval(bodyTimer);chats.handoffScanner?.close();chats.handoffAdmission?.close(); museDirect.scheduler.stop();conversationSearch.close(); ideaRunner?.close();ideas.close(); license.stop(); clearInterval(discussionTimer); clearInterval(roleReviewTimer);clearInterval(freetalkAutomaticTimer);stateOffers.close(); clearInterval(integrateTimer);clearInterval(terminalLimitTimer);clearInterval(restartTimer); aiUpdates.stop(); });
-module.exports = { localAuth, queueRetreat, store, stopControl, emergencyStop, emergencyRestart, safeShutdown, ideas, ideaAPI, executionGate, ideaRunner, ideaDispatch, ideaLane, ideaRelease, ideaVerification, ideaReview, restoreReady, discussion, roleReview, textBudget, server, PORT, sessions, taskPrompt, aiUpdates, webchat, chats, restartControl, taskIntegrate, integrateAuto, integrationAbandon, bootModules, restartBlockers };
+module.exports = { localAuth, queueRetreat, store, stopControl, emergencyStop, emergencyRestart, safeShutdown, ideas, ideaAPI, executionGate, ideaRunner, ideaDispatch, ideaLane, ideaRelease, ideaVerification, ideaReview, restoreReady, discussion, roleReview, roleTiers, tierReview, textBudget, server, PORT, sessions, taskPrompt, aiUpdates, webchat, chats, restartControl, taskIntegrate, integrateAuto, integrationAbandon, bootModules, restartBlockers };

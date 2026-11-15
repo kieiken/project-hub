@@ -4,7 +4,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const journal=require('../lib/chat-continuation'),chat=require('../lib/chat'),spool=require('../lib/cli-spool'),P=require('../lib/owned-processes');
 const key={project:'Fixture',task:'held'},identity={pid:987601,ppid:987600,pgid:987601,uid:process.getuid?.(),since:'Fri Oct 16 12:00:00 2026',command:'fixture CLI'};
 function fixture(t){
- const pdir=fs.mkdtempSync(path.join(os.tmpdir(),'hub-held-')),b={...key,pdir,dir:pdir},runner=new chat.ChatRunner({dirOf:()=>pdir});
+ const pdir=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'hub-held-'))),b={...key,pdir,dir:pdir},runner=new chat.ChatRunner({dirOf:()=>pdir});
  const scan=P.snapshot;P.snapshot=()=>[];t.after(()=>{P.snapshot=scan;fs.rmSync(pdir,{recursive:true,force:true});});
  let starts=0,input;runner.run=o=>{starts++;input=o;return {startedP:Promise.resolve(true)};};
  const queue=[{id:'next',text:'EDITED extra',ai:'codex',model:'gpt-6.1-sol',effort:'high',images:['/fixture/edited.png']},{id:'later',text:'later FIFO',ai:'codex',model:'gpt-6.1-sol'}];runner.setQueue(key.project,key.task,queue);
@@ -163,4 +163,19 @@ test('held recovery: stop observation records first scan success and never grant
  assert.equal(good.observationComplete,true);assert.equal(good.state,'exited');assert.deepEqual(good.observed.map(x=>x.pid),[identity.pid,child.pid]);assert.equal(good.tracked.some(p=>p.pid===child.pid),false);assert.equal(kills,0);
  n=0;const failed=await terminate({identity,scan:()=>{if(++n===1)throw Error('first scan failed');return [{...identity,command:'changed'}];},kill:()=>kills++,saved:()=>true,grace:0,settle:0});
  assert.equal(failed.observationComplete,false);assert.equal(failed.state,'ownership-unknown');assert.equal(kills,0);
+});
+
+
+test('reminder: dismissed original stays closed through manual and automatic cutover, without losing stop evidence',async t=>{
+ const f=fixture(t),a=f.advance('original',{verified:true,text:'DO NOT RESURRECT'});
+ assert.equal(typeof journal.dismiss,'function');const e=journal.read(f.b.pdir,key.task).entries.original;
+ const dismissed=journal.dismiss(f.b.pdir,key.task,{id:e.id,expectedUpdated:e.updated});
+ const before=journal.read(f.b.pdir,key.task).advances.original;
+ assert.equal(await (await f.start()).started,true);assert.equal(f.input().text,'EDITED extra');assert.equal(f.input().unfinishedId,undefined);assert.deepEqual(journal.read(f.b.pdir,key.task).entries.original,dismissed);
+ assert.deepEqual(journal.read(f.b.pdir,key.task).advances.original,before);
+ // The automatic handoff uses the same stop proof, but cannot revive the dismissed original either.
+ const g=fixture(t),a2=g.advance('original',{verified:true,text:'DO NOT RESURRECT'}),e2=journal.read(g.b.pdir,key.task).entries.original;
+ const dismissed2=journal.dismiss(g.b.pdir,key.task,{id:e2.id,expectedUpdated:e2.updated});
+ assert.equal(await (await g.runner.launchAdvance(a2,g.b)).started,true);assert.equal(g.starts(),1);assert.equal(g.input().text,'EDITED extra');assert.equal(g.input().unfinishedId,undefined);
+ const after=journal.read(g.b.pdir,key.task);assert.deepEqual(after.entries.original,dismissed2);assert.equal(after.advances.original.mode,'fifo');assert.deepEqual(after.advances.original.stopEvidence,a2.stopEvidence);
 });

@@ -12,7 +12,7 @@ Before you use it, read "使う前に知っておくこと" (what to know before
 
 The app's display is in Japanese. English and Traditional Chinese language packs are available from the release page, and some screens stay in Japanese. Most detailed documents in this repository are in Japanese.
 
-Source version in this repository: 4.126.95 (released versions are listed above).
+Source version in this repository: 4.126.98 (released versions are listed above).
 
 ## How it works
 
@@ -67,7 +67,13 @@ For usage and updates, see [hub/README.md](hub/README.md) (Japanese).
 
 For Windows 11 x64 there is a browser route and an unsigned dedicated window using WebView2. For setup and launch, read the [Windows window guide](hub/app/windows/README.md) (Japanese). In a prepared folder, `hub/start-window.cmd` opens the dedicated window and `hub/start.cmd` opens the browser version. Use normal permissions and do not run as administrator. The Mac `setup.sh` is not used.
 
-Official Windows 11 x64 releases are on the [releases page](https://github.com/kieiken/project-hub/releases). There is no publisher signature, so a Windows warning may appear the first time. In-app updates replace only the processing inside the app. Some features, such as Mac-only isolated execution, are not available on Windows.
+Official Windows 11 x64 releases are on the [releases page](https://github.com/kieiken/project-hub/releases). There is no publisher signature, so a Windows warning may appear the first time. In-app updates replace only the processing inside the app.
+
+Some features, such as MetaMuse integration, are available only on Mac.
+
+Isolated execution through `hub_run_command` in ChatGPT-only child tasks also uses Codex CLI's `codex sandbox` on Windows. It requires Codex CLI and Git for Windows, including Bash and coreutils `timeout`. Run `codex sandbox setup --elevated` once before use. That setup requires administrator rights; Hub itself must still run with normal permissions. Missing prerequisites or a rejected Codex configuration stop execution, without an unsandboxed fallback.
+
+Windows isolation is weaker than on Mac: files outside the workspace, including other drives, may be readable. Reads and writes to `.git` and credential files within the workspace are denied, but deletion is not blocked. Newly created credential files may not receive deny rules until the next run. ACL changes to the workspace and granted read paths remain after execution. Do not use a folder containing important data. End-to-end Windows testing through Hub and ChatGPT has not been performed. Thanks to [kf208016 (PR #9)](https://github.com/kieiken/project-hub/pull/9) for the Windows proposal and implementation.
 
 Data goes in a fixed local NTFS location. Because this uses file write commits and same-drive replacement, administrator rights are not needed. However, reliability right after a rename or delete during a power loss may be weaker than the earlier method, which committed writes for the whole drive.
 

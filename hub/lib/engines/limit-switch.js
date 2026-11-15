@@ -198,7 +198,7 @@ function assertCapacityHandoff(o) {
     if (terminalBusy(p, t)) throw Error(lt('同じ作業で別のAIが動いているため、資料を保存して待機します'));
     assertWorkspaceIdle(p, t, false);
     if (!fs.existsSync(src.dir) || expandHome(current.workdir) && !(getTranscript()).same(expandHome(current.workdir), src.dir)) throw Error(lt('作業場所が変わったため、交代先を開始していません'));
-    const invalid = modelError(backup.ai, backup.model); if (invalid) throw Error(invalid);
+    const invalid = modelError(backup.ai, backup.model, backup.account); if (invalid) throw Error(invalid);
     (getAccounts()).available(backup.ai, backup.account, { forWork: true });
     const limitMarker = crypto.randomUUID();
     const prompt = lt`利用上限による交代です。引き継ぎ資料 ${packetFile} を読み、実物を確かめて残りを続けてください。` + '\n' + taskPrompt(p, t, file, src.dir, 'terminal', backup) + `\n[Hub terminal: ${limitMarker}]`;

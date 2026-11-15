@@ -1,7 +1,7 @@
 'use strict';
 
 module.exports = function createQueueEngine(ctx) {
-  const { getDelegateCompletedError, getLogFile, ROOT, accountFor, accounts, getAiTools, getAppUpdate, assertWorkspaceIdle, autoTick, chat, getChatEnded, getChats, codexFastFor, crypto, delegateTerminalError, getDiscussion, discussionRuntime, executionGate, getFreetalkHistory, fs, gitw, getIdeaDispatch, getIdeaRunner, ideas, getIntegrateAuto, integrationPolicyRequest, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, limitBackup, capacityBackup, assertCapacityHandoff, limitEvidence, limitIdentity, limitRoutingEnabled, lt, modelError, modelPolicy, getModelView, path, permCmd, queueActions, getQueueRetreat, readLog, record, refreshLimitEvidence, requestAccount, getRestartControl, getResultsGate, getRoleReview, roleReviewLimit, roleReviewRuntime, roles, rolesData, selectionPrompt, send, specialMode, startDir, stopControl, store, getTaskIntegrate, taskPrompt, usage, verifyIntegrationAssignmentSend, verifyIntegrationReviewSend, webchatActive, workDir } = ctx;
+  const { getRoleTiers, getTierReview, getDelegateCompletedError, getLogFile, ROOT, accountFor, accounts, getAiTools, getAppUpdate, assertWorkspaceIdle, autoTick, chat, getChatEnded, getChats, codexFastFor, crypto, delegateTerminalError, getDiscussion, discussionRuntime, executionGate, getFreetalkHistory, fs, gitw, getIdeaDispatch, getIdeaRunner, ideas, getIntegrateAuto, integrationPolicyRequest, integrationReviewPrompt, isolatedReviewDir, launch, license, licenseGuard, limitBackup, capacityBackup, assertCapacityHandoff, limitEvidence, limitIdentity, limitRoutingEnabled, lt, modelError, modelPolicy, getModelView, path, permCmd, queueActions, getQueueRetreat, getReqCtx, readLog, record, refreshLimitEvidence, requestAccount, getRestartControl, getResultsGate, getRoleReview, roleReviewLimit, roleReviewRuntime, roles, rolesData, selectionPrompt, send, specialMode, startDir, stopControl, store, getTaskIntegrate, taskPrompt, usage, verifyIntegrationAssignmentSend, verifyIntegrationReviewSend, webchatActive, workDir } = ctx;
 
   function createChatRunner() {
   return new chat.ChatRunner({stopControl,queueGuard:o=>(getQueueRetreat())?.guard(o),prepareContext:o=>{
@@ -12,11 +12,14 @@ module.exports = function createQueueEngine(ctx) {
   }, spoolRoot:path.join(ROOT,'_hub','cli-runs'),onAdoptEnd:(o,row)=>{if(!o.automation&&!o.discussionTurn&&!o.isolatedReview&&!o.selectionOnly&&row.asks?.length)store.updateTask(o.project,o.task,{state:'返事待ち',question:row.asks.map(a=>a.question).join(' / ').slice(0,300)});(getChatEnded())(o.project,o.task);}, dirOf: id => { const p = store.readProject(id); return p ? p.dir : ''; },
     delegates: (p, t) => [...readLog(5000), ...readLog(5000, (getLogFile()).replace(/\.jsonl$/, '.old.jsonl'))].filter(r => r.project === p && r.task === t),
     permFor: permCmd,
+    delegateEffort: o => o.origin === 'delegate' && !o.automation && o.delegationEffort
+      ? require('../delegate-effort').resolve(o,{data:rolesData(),catalog:getAiTools().catalog(),limits:limitEvidence,usage:require('../delegate-effort').readUsage(usage,o.account),
+        accountFor:ai=>accountFor(o.project,o.task,ai)}) : o,
     limitBackup: limitBackup,
     capacityBackup,
     limitIdentity: o => limitIdentity(rolesData(), o),
     accountFor, fastFor: codexFastFor,
-    onSettled: async (o,row) => { if(o.automation){await (getIdeaRunner()).settled(o,row);return;} if(discussionRuntime.isRequest(o.request)) { await (getDiscussion())?.settled(o,row); return; } if(roleReviewRuntime.isRequest(o.request)) { await (getRoleReview())?.settled(o,row); return; } (getIntegrateAuto()).settled(o,row);setImmediate(async()=>{
+    onSettled: async (o,row) => { if(o.origin==='tier-review'){await getTierReview()?.settled(o,row);return;} if(o.automation){await (getIdeaRunner()).settled(o,row);return;} if(discussionRuntime.isRequest(o.request)) { await (getDiscussion())?.settled(o,row); return; } if(roleReviewRuntime.isRequest(o.request)) { await (getRoleReview())?.settled(o,row); return; } (getIntegrateAuto()).settled(o,row);setImmediate(async()=>{
       try{if(stopControl.held({project:o.project,task:o.task}))return;stopControl.assert(o,o.stopTicket);await (getChats()).assertHandoffReadyAsync(o.project,o.task);stopControl.assert(o,o.stopTicket);if(stopControl.held({project:o.project,task:o.task}))return;}catch{return;}
       if(o.selectionOnly){void autoTick(o.project,o.task);return;}
       void (getIntegrateAuto()).tick();if(!o.isolatedReview)void (getResultsGate()).trigger(o.project,o.task,{row,organized:Boolean(o.resultsOrganize)}).catch(e=>record('results-organize-error',{project:o.project,task:o.task},{error:e.message}));
@@ -24,7 +27,7 @@ module.exports = function createQueueEngine(ctx) {
     limitHold: o => Boolean(discussionRuntime.isRequest(o.request) || integrationPolicyRequest(o)),
     limitPreflight: o => discussionRuntime.isRequest(o.request) ? limitEvidence.active(o.account || 'default',launch.flagFor(o.ai,o.model),true) : integrationPolicyRequest(o) ? limitEvidence.active(o.account || 'default',launch.flagFor(o.ai,o.model)) : limitRoutingEnabled() || roleReviewRuntime.isRequest(o.request) ? roleReviewLimit(o) : null,
     limitTarget: o => roleReviewLimit(o),
-    beforeQueued: async o => { void license.prepare(); await refreshLimitEvidence(o); assertCapacityHandoff(o); },
+    beforeQueued: async o => { void license.prepare(); await refreshLimitEvidence(o); await require('../delegate-effort').refreshUsage(o, usage); assertCapacityHandoff(o); },
     startBarrier:o=>{stopControl.assert(o,o.stopTicket);executionGate.assert({dir:o.dir||store.readProject(o.project)?.dir,owner:'chat:'+o.project+':'+o.task});if(o.automation&&o.automation.kind!=='idea')throw Error('不明な自動実行は開始しません');},
     beforeSend:o=>o.automation?(getIdeaDispatch()).verify(o):verifyIntegrationReviewSend(o),
     beforeAdopt:o=>{if(o.automation)(getIdeaDispatch()).verify(o,{adoption:true});},
@@ -33,7 +36,7 @@ module.exports = function createQueueEngine(ctx) {
     onHandoffError:(o,e,run)=>executionGate.block('chat-handoff:'+run,o.dir,'会話の終了保存の復旧が必要です：'+e.message),
     onHandoffRecovered:(o,run)=>executionGate.unblock('chat-handoff:'+run),
     afterCompleted:o=>{if((getIdeaRunner()))for(const p of store.listProjects())if(p.id!=='freetalk'&&ideas.readRegistry().projects[p.id])(getIdeaRunner()).wake(p.id);},
-    onStop:(project,task)=>{if(project==='freetalk'||store.readProject(project)?.kind==='freetalk')return;const d=ideas.read(project);if(d.projectUid!=='uninitialized'&&(d.settings.lane?.task===task||Object.values(d.runs).some(r=>!r.closed&&r.task===task)))ideas.auto(project,{opId:require('../idea-utils').uuid(),settingsRev:d.settings.rev,enabled:false});},
+    onStop:(project,task)=>{if(project==='freetalk'||store.readProject(project)?.kind==='freetalk')return;const d=ideas.read(project);if(d.projectUid!=='uninitialized'&&(d.settings.lane?.task===task||Object.values(d.runs).some(r=>!r.closed&&r.task===task)))ideas.pauseAuto(project,{opId:require('../idea-utils').uuid(),settingsRev:d.settings.rev});},
     onLimit: o => {
       try { limitEvidence.record(o,o.discussionTurn?(getDiscussion()).limitModels():undefined,discussionRuntime.isRequest(o.request)); }
       catch (e) { record('limit-save-error', o); throw e; }
@@ -43,6 +46,7 @@ module.exports = function createQueueEngine(ctx) {
     refreshQueued: o => {
       const p = store.readProject(o.project), t = p?.tasks.find(t => t.id === o.task);
       if (!p || !t) throw Error(lt('作業が見つかりません'));
+      if(o.origin==='tier-review')return getTierReview().refresh(o);
       if(o.automation)return (getIdeaDispatch()).refresh(o);
       if(discussionRuntime.isRequest(o.request)){(getDiscussion()).verify(o);return {dir:isolatedReviewDir(p,t),basePrompt:discussionRuntime.basePrompt,policy:discussionRuntime.basePrompt};}
       if(roleReviewRuntime.isRequest(o.request)){(getRoleReview()).verify(o);return {dir:isolatedReviewDir(p,t),basePrompt:roleReviewRuntime.basePrompt,policy:roleReviewRuntime.basePrompt};}
@@ -60,7 +64,7 @@ module.exports = function createQueueEngine(ctx) {
       if ((getAppUpdate()).applying()) return (getAppUpdate()).busyMessage();
       if ((getRestartControl())?.committed) return lt('再起動を開始しています');
       if ((getAiTools()).isOperating(ai)) return Object.assign(Error(lt('AI の更新・モデル再取得が進行中です')),{code:'HUB_AI_MAINTENANCE'});
-      const invalid=modelError(ai,model); if(invalid)return invalid;
+      const invalid=modelError(ai,model,o?.account); if(invalid)return invalid;
       if (o && (getModelView()).special().enabled && limitEvidence.forRequest({ ...o, ai, model })) return Object.assign(Error(lt('特殊モードのAIが上限中です。解除後に再開してください')),{code:'HUB_LIMIT_WAIT'});
       if(o) { const p=store.readProject(o.project), t=p?.tasks.find(t=>t.id===o.task);
         if(!p || !t)return lt('作業が見つかりません');
@@ -101,11 +105,13 @@ module.exports = function createQueueEngine(ctx) {
   }
 
   function delegateRequest(b,res,options={}) {
-    return require('../request-delivery').createDelivery({license,licenseGuard,send,store,launch,lt,discussion: (getDiscussion()),aiTools: (getAiTools()),specialMode,modelView: (getModelView()),rolesData,modelError,delegateTerminalError,chats: (getChats()),webchatActive,ideaDispatch: (getIdeaDispatch()),ideas,assertWorkspaceIdle,isolatedReviewDir,startDir,roles,taskIntegrate: (getTaskIntegrate()),gitw,integrateAuto: (getIntegrateAuto()),requestAccount,stopControl,permCmd,record,selectionPrompt,integrationReviewPrompt,taskPrompt,chatEnded: (getChatEnded()),refreshLimitEvidence,verifyIntegrationAssignmentSend,limitEvidence,modelPolicy,DELEGATE_COMPLETED_ERROR: (getDelegateCompletedError())})(b,res,{...options,origin:options.automation?'delegate':'hub-internal'});
+    return require('../request-delivery').createDelivery({roleTiers:getRoleTiers?.(),chat,license,licenseGuard,send,store,launch,lt,discussion: (getDiscussion()),aiTools: (getAiTools()),specialMode,modelView: (getModelView()),rolesData,modelError,delegateTerminalError,chats: (getChats()),webchatActive,ideaDispatch: (getIdeaDispatch()),ideas,assertWorkspaceIdle,isolatedReviewDir,startDir,roles,taskIntegrate: (getTaskIntegrate()),gitw,integrateAuto: (getIntegrateAuto()),requestAccount,stopControl,permCmd,record,selectionPrompt,integrationReviewPrompt,taskPrompt,chatEnded: (getChatEnded()),refreshLimitEvidence,verifyIntegrationAssignmentSend,limitEvidence,usage,modelPolicy,DELEGATE_COMPLETED_ERROR: (getDelegateCompletedError())})(b,res,{...options,origin:options.automation?'delegate':'hub-internal'});
   }
 
   function userDelivery(b,res,options) {
-    return require('../request-delivery').createDelivery({license,licenseGuard,send,store,launch,lt,discussion: (getDiscussion()),aiTools: (getAiTools()),specialMode,modelView: (getModelView()),rolesData,modelError,delegateTerminalError,chats: (getChats()),webchatActive,ideaDispatch: (getIdeaDispatch()),ideas,assertWorkspaceIdle,isolatedReviewDir,startDir,roles,taskIntegrate: (getTaskIntegrate()),gitw,integrateAuto: (getIntegrateAuto()),requestAccount,stopControl,permCmd,record,selectionPrompt,integrationReviewPrompt,taskPrompt,chatEnded: (getChatEnded()),refreshLimitEvidence,verifyIntegrationAssignmentSend,limitEvidence,modelPolicy,DELEGATE_COMPLETED_ERROR: (getDelegateCompletedError())})(b,res,{...options,origin:'delegate'});
+    const resumed=getReqCtx?.().getStore()?.delegateResume;
+    if(resumed&&resumed.project===b.project&&resumed.task===b.task)options={...options,stopTicket:resumed.ticket};
+    return require('../request-delivery').createDelivery({roleTiers:getRoleTiers?.(),chat,license,licenseGuard,send,store,launch,lt,discussion: (getDiscussion()),aiTools: (getAiTools()),specialMode,modelView: (getModelView()),rolesData,modelError,delegateTerminalError,chats: (getChats()),webchatActive,ideaDispatch: (getIdeaDispatch()),ideas,assertWorkspaceIdle,isolatedReviewDir,startDir,roles,taskIntegrate: (getTaskIntegrate()),gitw,integrateAuto: (getIntegrateAuto()),requestAccount,stopControl,permCmd,record,selectionPrompt,integrationReviewPrompt,taskPrompt,chatEnded: (getChatEnded()),refreshLimitEvidence,verifyIntegrationAssignmentSend,limitEvidence,usage,modelPolicy,DELEGATE_COMPLETED_ERROR: (getDelegateCompletedError())})(b,res,{...options,origin:'delegate'});
   }
 
   return { createChatRunner, createQueueRetreat, dispatchAfterWebchat, delegateRequest, userDelivery };

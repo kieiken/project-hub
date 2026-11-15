@@ -18,16 +18,22 @@ fs.mkdirSync(path.join(dir, '.ai/tasks'), { recursive: true });
 fs.mkdirSync(path.join(root, '_hub'), { recursive: true });
 fs.writeFileSync(path.join(dir, 'PROJECT.md'), '---\nname: Size fixture\nstatus: 進行中\nphases: []\nfolders: {}\nrelated: []\n---\n');
 fs.writeFileSync(path.join(dir, '.ai/tasks', 'existing.md'), '---\nid: existing\ntitle: 指示の効率化\nrole: 司令塔\nstate: 実行中\n---\n## 手順\n- [x] before\n- [ ] after\n\n## メモ\n- latest progress\n');
-fs.writeFileSync(path.join(root, '_hub/roles.yaml'), `models:\n  claude-code: [Fable 5.1, Opus 5.5]\n  codex: [GPT-6-Astra, GPT-6.1-Sol]\nroles:\n  司令塔: { main: [claude-code, Fable 5.1, 極高], backup: [codex, GPT-6-Astra, 極高] }\n  調査: { main: [claude-code, Opus 5.5, 高], backup: [codex, GPT-6.1-Sol, 高] }\n  デザイン: { main: [claude-code, Opus 5.5, 高], backup: [codex, GPT-6.1-Sol, 高] }\n  画像生成: { main: [codex, GPT-6.1-Sol, 高], backup: [claude-code, Opus 5.5, 高] }\n  コーディング: { main: [codex, GPT-6.1-Sol, 高], backup: [claude-code, Opus 5.5, 高] }\n  チェック: { main: [claude-code, Fable 5.1, 極高], backup: [codex, GPT-6-Astra, 極高] }\n  文章: { main: [claude-code, Opus 5.5, 高], backup: [codex, GPT-6.1-Sol, 高] }\nswitch:\n  auto: true\n`);
-fs.writeFileSync(path.join(root, '_hub/ai-tools-models.json'), JSON.stringify({ claude:{models:[{id:'claude-fable-5-1',label:'Fable 5.1'},{id:'claude-opus-5-5',label:'Opus 5.5'}]}, agy:{models:[{id:'gemini-current',label:'Current Gemini'}]}, codex: { models: [{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }, { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' }] } }));
+fs.writeFileSync(path.join(root, '_hub/roles.yaml'), `models:\n  claude-code: [Fable 5.2, Opus 5.5]\n  codex: [GPT-6-Astra, GPT-6.1-Sol]\nroles:\n  司令塔: { main: [claude-code, Fable 5.2, 極高], backup: [codex, GPT-6-Astra, 極高] }\n  調査: { main: [claude-code, Opus 5.5, 高], backup: [codex, GPT-6.1-Sol, 高] }\n  デザイン: { main: [claude-code, Opus 5.5, 高], backup: [codex, GPT-6.1-Sol, 高] }\n  画像生成: { main: [codex, GPT-6.1-Sol, 高], backup: [claude-code, Opus 5.5, 高] }\n  コーディング: { main: [codex, GPT-6.1-Sol, 高], backup: [claude-code, Opus 5.5, 高] }\n  チェック: { main: [claude-code, Fable 5.2, 極高], backup: [codex, GPT-6-Astra, 極高] }\n  文章: { main: [claude-code, Opus 5.5, 高], backup: [codex, GPT-6.1-Sol, 高] }\nswitch:\n  auto: true\n`);
+fs.writeFileSync(path.join(root, '_hub/ai-tools-models.json'), JSON.stringify({ claude:{models:[{id:'claude-fable-5-2',label:'Fable 5.2'},{id:'claude-opus-5-5',label:'Opus 5.5'}]}, agy:{models:[{id:'gemini-current',label:'Current Gemini'}]}, codex: { models: [{ id: 'gpt-6-astra', label: 'GPT-6-Astra' }, { id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' }] } }));
 Object.assign(process.env, { HUB_ROOT: root, HUB_DRY_RUN: '1', HUB_PORT: '4545', HUB_AI_HOME: path.join(tmp, 'home') });
 const { Store } = require('../lib/store');
+const migration = require('../lib/rules-migration');
+fs.writeFileSync(path.join(dir, '.ai/rules.md'), migration.REPLACEMENTS[0][0] + '\r\ncustom tail');
 const store = new Store(root), { taskPrompt, server } = require('../server');
 const p = store.readProject('Size fixture'), t = p.tasks[0];
 const prompt = () => taskPrompt(p, t, store.taskFile(p.id, t.id), dir);
-const options = { ai: 'claude', model: 'Fable 5.1', rows: [], text: 'unique-current', basePrompt: prompt(), meta: {} };
+const options = { ai: 'claude', model: 'Fable 5.2', rows: [], text: 'unique-current', basePrompt: prompt(), meta: {} };
 const git = args => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 const stateFile = path.join(root, '_hub/limits.json');
+
+test('起動時に既存プロジェクトの指定行だけを移行する', () => {
+  assert.equal(fs.readFileSync(path.join(dir, '.ai/rules.md'), 'utf8'), migration.REPLACEMENTS[0][1] + '\r\ncustom tail');
+});
 
 test('節の索引だけが会話依頼文に増え、固定規則・その他の依頼文・端末用は不変', () => {
   const file = store.taskFile(p.id, t.id), original = fs.readFileSync(file, 'utf8');
@@ -110,7 +116,7 @@ test('作業記録が1行増えても固定hashは同じで、再開時は短い
 test('確認方針は通常・自由対話の会話/ターミナルと全文へ一回届き、旧版の再開時は更新される', () => {
   const roleFile = path.join(root, '_hub/roles.yaml'), beforeRoles = fs.readFileSync(roleFile);
   const beforeLimits = fs.existsSync(stateFile) ? fs.readFileSync(stateFile) : null;
-  assert.match(prompt(),/Current Gemini（gemini-current）/);assert.doesNotMatch(prompt(),/Gemini 3\.1 Pro|gemini-3\.1-pro-high/);
+  assert.match(prompt(),/候補は全文 ## モデルと上限/);assert.match(fs.readFileSync(path.join(dir,'.ai/chat/existing.rules.md'),'utf8'),/Current Gemini（gemini-current）/);assert.doesNotMatch(prompt(),/Gemini 3\.1 Pro|gemini-3\.1-pro-high/);
   const base = prompt(), first = chat.buildTurn({ ...options, basePrompt: base });
   const topic = { ...t, freetalk: true }, fp = { id: 'freetalk', kind: 'freetalk', dir };
   const texts = [
@@ -120,6 +126,7 @@ test('確認方針は通常・自由対話の会話/ターミナルと全文へ�
     ...['chat', 'terminal'].map(where => taskPrompt(fp, topic, '', dir, where)),
   ];
   for (const text of texts) {
+    if(!text.includes(instructions.WORKFLOW_RULE)){assert.match(text,/軽微でない変更・影響の大きい操作の前・人の依頼時だけ一回チェック/);assert.match(text,/詳細は全文 ## モデルと上限/);continue;}
     assert.equal(text.split(instructions.WORKFLOW_RULE).length - 1, 1);
     for (const required of [
       '全役割を毎回呼ぶ指定ではない', '現在の担当が必要箇所を確認',
@@ -148,11 +155,11 @@ test('確認方針は通常・自由対話の会話/ターミナルと全文へ�
   }
   const previousRule = instructions.WORKFLOW_RULE.replace('チェック後に変更がなければ、本体反映・公開の前に再チェックしない。人の承認が要る操作の承認は残す。読み取り・診断だけの手順や確認済み操作のやり直しにはチェックを挟まず、書き込む中身・公開する中身・対象が変わる時だけチェックする。', '');
   assert.notEqual(previousRule, instructions.WORKFLOW_RULE);
-  const previous = chat.buildTurn({ ...options, basePrompt: base.replace(instructions.WORKFLOW_RULE, previousRule) });
+  const previous = chat.buildTurn({ ...options, basePrompt: base.replace(/【役割呼び出しと検証】[^\n]+/, previousRule) });
   const meta = { sessions: { claude: 'sid' }, rulesSent: { claude: { ...previous.rules, sid: 'sid' } } };
   const updated = chat.buildTurn({ ...options, basePrompt: base, meta });
   assert.equal(updated.shortRules, false);
-  assert.ok(updated.fixed.includes(instructions.WORKFLOW_RULE));
+  assert.match(updated.fixed,/詳細は全文 ## モデルと上限/);
   assert.notEqual(updated.rules.hash, previous.rules.hash);
   assert.deepEqual(fs.readFileSync(roleFile), beforeRoles);
   assert.deepEqual(fs.existsSync(stateFile) ? fs.readFileSync(stateFile) : null, beforeLimits);
@@ -167,7 +174,7 @@ test('Approved credit scope stays consistent in full and compact rules and updat
     const nextPrompt = prompt(), turn = chat.buildTurn({ ...options, basePrompt: nextPrompt });
     const full = fs.readFileSync(path.join(dir, '.ai/chat/existing.rules.md'), 'utf8');
     for (const text of [turn.fixed, full]) {
-      assert.match(text, /対象はCodexの確認ON側だけ/);assert.match(text, /購入・自動チャージ・APIキー課金/);
+      assert.match(text, text===full?/対象はCodexの確認ON側だけ/:/有効な対象と条件は全文/);assert.match(text, /購入・自動チャージ・APIキー課金/);
       assert.doesNotMatch(text, /従量課金禁止。|追加課金・API従量課金は使わない。/);
     }
     const resumed = chat.buildTurn({ ...options, basePrompt: nextPrompt, meta: { sessions: { claude: 'sid' }, rulesSent: { claude: { ...first.rules, sid: 'sid' } } } });
@@ -192,17 +199,22 @@ test('前置きは基点1回・既存指示を40%以上削減、新しい必須�
   // 比較元にない必須規則だけを各一回追加し、既存指示の上限と重複禁止を保つ。
   const ownerRule = '（ローカル認証は curl -H @"$HUB_HEADERS" を使用。秘密を本文に書かない）';
   assert.equal(text.split(ownerRule).length - 1, 1);
-  const addedRule = instructions.SEND_TEXT_RULE.length + instructions.WORKFLOW_RULE.length + chat.PLAIN_CHOICE_RULE.length + ownerRule.length + 3;
+  assert.equal(baseline.reportingRuleChars, chat.REPORT_RULE.length);
+  assert.equal(baseline.workflowRuleChars, instructions.WORKFLOW_RULE.length);
+  assert.equal(baseline.pathRuleChars.ja, instructions.PATH_RULE.length);
+  assert.equal(text.split(chat.REPORT_RULE).length - 1, 1);
+  assert.equal(copyText.split(chat.REPORT_RULE).length - 1, 1);
+  const addedRule = instructions.SEND_TEXT_RULE.length + instructions.PATH_RULE.length + instructions.WORKFLOW_RULE.length + chat.PLAIN_CHOICE_RULE.length + chat.REPORT_RULE.length + ownerRule.length + baseline.delegateGuideExtraChars + baseline.delegateUltraRuleChars.ja.off + 5;
   assert.equal(text.split(chat.PLAIN_CHOICE_RULE).length - 1, 1);
   assert.equal(text.split(instructions.SEND_TEXT_RULE).length - 1, 1);
   assert.equal(copyText.split(instructions.SEND_TEXT_RULE).length - 1, 1);
-  assert.equal(text.split(instructions.WORKFLOW_RULE).length - 1, 1);
-  assert.equal(copyText.split(instructions.WORKFLOW_RULE).length - 1, 1);
+  assert.equal(text.split('【役割呼び出しと検証】').length - 1, 1);
+  assert.equal(copyText.split('【役割呼び出しと検証】').length - 1, 1);
   assert.match(instructions.WORKFLOW_RULE, /説明だけで番を終えず/);
   assert.ok(after <= before * .6 + addedRule, `${after}/${before} + ${addedRule}`);
   assert.ok(copyText.length <= baseline.copyPrompt.length * .6 + addedRule, `${copyText.length}/${baseline.copyPrompt.length} + ${addedRule}`);
   assert.match(copyText, /作業用コピー.*本体には触らない/);
-  for (const word of ['司令塔＝Claude Code・Fable 5.1', '調査＝', 'デザイン＝', '画像生成＝', 'コーディング＝', 'チェック＝', '文章＝', 'claude-opus-4-6 などの古いモデルは使わない', '裏で起動しない', 'model欄は必須', '新しいプロジェクト', 'やっていない手順に [x]', 'workdir・state・question', '書き換えない', '自分で担当を変えない', '台帳/.ai/chat/existing.rules.md']) assert.ok(text.includes(word), word);
+  for (const word of ['司令塔＝Claude Code・Fable 5.2', '調査＝', 'デザイン＝', '画像生成＝', 'コーディング＝', 'チェック＝', '文章＝', 'claude-opus-4-6 などの古いモデルは使わない', '裏で起動しない', 'model欄は必須', '新しいプロジェクト', 'やっていない手順に [x]', 'workdir・state・question', '書き換えない', '自分で担当を変えない', '台帳/.ai/chat/existing.rules.md']) assert.ok(text.includes(word), word);
   assert.equal(text.split('台帳=').length - 1, 1);
   assert.equal(text.split(dir).length - 1, 1); // 台帳の絶対パスは1回、cwdは台帳から参照
   const full = fs.readFileSync(path.join(dir, '.ai/chat/existing.rules.md'), 'utf8');
@@ -217,7 +229,7 @@ test('固定指示の委任例は実際のproject・taskと必須ai・model・te
   const fixed = instructions.split(prompt()).fixed;
   const line = fixed.split('\n').find(line => line.startsWith('【委任】'));
   const example = JSON.parse(line.match(/例(\{[^\n]+\})）/)[1]);
-  assert.deepEqual(example, { project: p.id, task: t.id, ai: 'codex', model: 'gpt-6.1-sol', text: '差分' });
+  assert.deepEqual(example, { project: p.id, task: t.id, ai: 'codex', model: 'gpt-6.1-sol', role: 'コーディング', text: '差分' });
   // The fallback uses the ledger folder name; JSON serialization must escape IDs.
   const unusual = instructions.packet({ pdir: dir, task: 'task"quote', policy: '', port: 4545 });
   const fallback = JSON.parse(instructions.split(unusual).fixed.match(/例(\{[^\n]+\})）/)[1]);
@@ -228,7 +240,8 @@ test('同じセッションは短文とコピー規則、版・session・5番目
   const first = chat.buildTurn(options);
   const meta = { sessions: { claude: 'sid' }, rulesSent: { claude: { ...first.rules, sid: 'sid' } } };
   let turn = chat.buildTurn({ ...options, meta });
-  assert.ok(turn.shortRules); assert.ok(turn.fixed.length < 200);
+  assert.ok(turn.shortRules); assert.ok(turn.fixed.length < 200 + instructions.PATH_RULE.length + 1);
+  assert.equal(turn.fixed.split(instructions.PATH_RULE).length - 1, 1);
   assert.match(turn.stdin, /操作情報/); assert.match(turn.stdin, /この番の起動/); assert.match(turn.stdin, /長い会話/); assert.match(turn.stdin, /\[\[質問\]\]/);
   for (const sent of [{ ...meta.rulesSent.claude, hash: 'changed' }, { ...meta.rulesSent.claude, sid: 'other' }, { ...meta.rulesSent.claude, turns: 4 }, { ...meta.rulesSent.claude, restore: true }]) {
     assert.equal(chat.buildTurn({ ...options, meta: { ...meta, rulesSent: { claude: sent } } }).shortRules, false);
@@ -240,10 +253,10 @@ test('同じセッションは短文とコピー規則、版・session・5番目
 });
 
 test('送信用本文の決まりは全文・初回・再開・担当交代で省略されない', () => {
-  assert.match(prompt(),/Current Gemini（gemini-current）/);assert.doesNotMatch(prompt(),/Gemini 3\.1 Pro|gemini-3\.1-pro-high/);
+  assert.match(prompt(),/候補は全文 ## モデルと上限/);assert.match(fs.readFileSync(path.join(dir,'.ai/chat/existing.rules.md'),'utf8'),/Current Gemini（gemini-current）/);assert.doesNotMatch(prompt(),/Gemini 3\.1 Pro|gemini-3\.1-pro-high/);
   const base = prompt(), first = chat.buildTurn({ ...options, basePrompt: base });
   const full = fs.readFileSync(path.join(dir, '.ai/chat/existing.rules.md'), 'utf8');
-  assert.match(full, /## 人がコピーして送る文/);
+  assert.match(full, /## 人がコピーする文と場所/);
   assert.ok(full.includes(instructions.SEND_TEXT_RULE));
   assert.ok(first.fixed.includes(instructions.SEND_TEXT_RULE));
   const meta = { sessions: { claude: 'sid' }, rulesSent: { claude: { ...first.rules, sid: 'sid' } } };
@@ -334,4 +347,16 @@ test('成果と保管ルールは全PJの全文・固定1行と新規ひな形�
  const text=prompt(),full=fs.readFileSync(path.join(dir,'.ai/chat/existing.rules.md'),'utf8');
  assert.ok(full.includes(ARTIFACT_POLICY));assert.match(full,/内部で必要な同内容ファイルは間引かない/);assert.match(full,/未受領の内容があるフォルダは残す/);assert.match(text,/成果は作業ファイルの ## 成果 に書く。ZIPは配布時だけ/);
  for(const file of ['../../docs/project-hub/templates/project/.ai/rules.md','../../docs/project-hub/DESIGN.md'])assert.ok(fs.readFileSync(path.join(__dirname,file),'utf8').includes(ARTIFACT_POLICY));
+});
+
+test('Ultraの許可の決まりは両状態とも会話の固定・全文・自由対話・端末へ一回ずつ届く',()=>{
+ const roleFile=path.join(root,'_hub/roles.yaml'),original=fs.readFileSync(roleFile,'utf8');
+ try { for(const allowed of [false,true]){
+  fs.writeFileSync(roleFile,original+`\nallowDelegateUltra: ${allowed}\n`);
+  const rule=instructions.delegateUltraRule({allowDelegateUltra:allowed});
+  const ordinary=prompt(),full=fs.readFileSync(path.join(dir,'.ai/chat/existing.rules.md'),'utf8');
+  const free=taskPrompt({...p,id:'ultra-freetalk-fixture',kind:'freetalk'},t,store.taskFile(p.id,t.id),dir);
+  const terminal=taskPrompt(p,t,store.taskFile(p.id,t.id),dir,'terminal');
+  for(const text of [instructions.split(ordinary).fixed,full,free,terminal])assert.equal(text.split(rule).length-1,1);
+ }}finally{fs.writeFileSync(roleFile,original);}
 });

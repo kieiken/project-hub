@@ -32,7 +32,7 @@ test('launch failure, restart, stale token and task preview do not retry or acce
  const h=fixture(t),r=await h.review.begin(h.r.preview('P').token);h.state.busy=false;h.state.queued=true;h.rows.push({role:'assistant',request:r.id,error:'Fable limit'});assert.equal(h.review.status('P').status,'running');h.state.queued=false;assert.equal(h.review.status('P').status,'failed');
 });
 test('read-only launch removes unrestricted permissions and blocks write/exec/MCP tools',()=>{
- const opts={model:'claude-fable-5-1',meta:{},rows:[],text:'JSON only',readOnly:true,perm:'claude --dangerously-skip-permissions'};
+ const opts={model:'claude-fable-5-2',meta:{},rows:[],text:'JSON only',readOnly:true,perm:'claude --dangerously-skip-permissions'};
  const c=buildTurn({...opts,ai:'claude'});assert.ok(!c.args.includes('--dangerously-skip-permissions'));assert.equal(c.args[c.args.indexOf('--tools')+1],'Read,Glob,Grep');assert.ok(c.args.includes('--strict-mcp-config'));assert.equal(c.args[c.args.indexOf('--permission-mode')+1],'dontAsk');
  const d=buildTurn({...opts,ai:'codex',model:'gpt-6-astra',perm:'codex --dangerously-bypass-approvals-and-sandbox'});assert.ok(!d.args.includes('--dangerously-bypass-approvals-and-sandbox'));assert.equal(d.args[d.args.indexOf('--sandbox')+1],'read-only');
  for(const ai of ['agy','grok'])assert.throws(()=>buildTurn({...opts,ai,perm:ai}),/読み取り専用の確認担当を確かめてください/);

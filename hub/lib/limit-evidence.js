@@ -1,8 +1,9 @@
 'use strict';
+const { FABLE_MODEL } = require('./fable-model');
 // 正式なCLI上限だけを保持。利用率からフラグを作ったり解除したりしない。
 const fs = require('./platform/file-io');
 const path = require('node:path');
-const MODEL = 'claude-fable-5-1';
+const MODEL = FABLE_MODEL;
 const stamp = value => typeof value === 'string' ? Date.parse(value) : NaN;
 const relevant = w => w && (['five_hour', 'seven_day'].includes(w.id) ||
   /^model:/.test(w.id || '') && /^Fable(?:\s|・|$)/i.test(w.label || ''));

@@ -47,7 +47,6 @@ class QueueRetreat {
     }
   }
   attachments(p, q) {
-    U.check(!q.images || Array.isArray(q.images) && !q.images.length, 'queue-images', '旧添付情報の所属を照合できません。待ち列に残します');
     const ids = new Set(), views = new Set();
     // Only canonical reference blocks are interpreted. Arbitrary prose paths
     // are retained as text and are never opened.
@@ -66,6 +65,7 @@ class QueueRetreat {
         }
       }
     }
+    U.check(!q.images || Array.isArray(q.images) && q.images.every(file => views.has(file)), 'queue-images', '旧添付情報の所属を照合できません。待ち列に残します');
     if (q.projectImages !== undefined) {
       U.check(Array.isArray(q.projectImages), 'queue-images', '添付画像の情報を確認してください');
       const declared = new Set(q.projectImages);

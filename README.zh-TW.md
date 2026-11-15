@@ -10,6 +10,8 @@ Project Hub 將專案與任務集中管理，並在同一個畫面中執行 Clau
 
 使用前請閱讀 [hub/README.zh-TW.md](hub/README.zh-TW.md) 的「使用前須知」。
 
+原始碼版本：4.126.98（公開發行版如上所列）。
+
 ## 運作方式
 
 需求經過 Hub 交給 AI，最後由人決定取入與公開，這張圖呈現整體關係。本圖依 2026 年 11 月的開發中原始碼簡化繪製，並未呈現所有功能，部分內容可能與發行版不同。
@@ -62,7 +64,13 @@ HUB_LANG=zh-TW HUB_APP_DIR=/Applications HUB_ROOT="/Volumes/External/AI-Workspac
 
 ### Windows
 
-Windows 11 x64 的正式版在 [發行頁面](https://github.com/kieiken/project-hub/releases) 提供。使用 WebView2 專用視窗，準備與啟動步驟見 [Windows 專用視窗說明](hub/app/windows/README.md)。請以一般權限使用，不要以系統管理員身分啟動。由於沒有發行者簽章，第一次啟動時 Windows 可能顯示警告。App 內的自動更新只會替換 App 內的處理程式。僅限 Mac 的隔離執行等功能，在 Windows 上無法使用。
+Windows 11 x64 的正式版在 [發行頁面](https://github.com/kieiken/project-hub/releases) 提供。使用 WebView2 專用視窗，準備與啟動步驟見 [Windows 專用視窗說明](hub/app/windows/README.md)。請以一般權限使用，不要以系統管理員身分啟動。由於沒有發行者簽章，第一次啟動時 Windows 可能顯示警告。App 內的自動更新只會替換 App 內的處理程式。
+
+MetaMuse 連動等部分功能僅限 Mac 使用。
+
+ChatGPT 專用子工作中的 `hub_run_command` 隔離執行，在 Windows 也會使用 Codex CLI 的 `codex sandbox`。需要 Codex CLI 與 Git for Windows（含 Bash 和 coreutils 的 `timeout`）。使用前請先執行一次 `codex sandbox setup --elevated`。這項準備需要系統管理員權限，但 Hub 本身仍須以一般權限啟動。缺少必要元件或 Codex 設定遭拒時，就不執行指令，不會改用未隔離的方式執行。
+
+Windows 的隔離限制比 Mac 弱：可能讀取工作資料夾以外的檔案，包括其他磁碟。工作資料夾內的 `.git` 與機密檔案會拒絕讀寫，但無法防止刪除。執行開始後新建的機密檔案，可能到下次執行才套用拒絕規則。執行後，工作資料夾及獲准讀取路徑的存取權限變更仍會保留。請勿在含重要資料的資料夾使用。經由 Hub 與 ChatGPT 的 Windows 實機確認尚未進行。感謝 [kf208016（PR #9）](https://github.com/kieiken/project-hub/pull/9) 提供 Windows 支援的提案與實作。
 
 ## 每日自動更新
 

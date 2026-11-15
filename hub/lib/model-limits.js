@@ -1,17 +1,18 @@
 'use strict';
+const { FABLE_MODEL, LEGACY_FABLE_MODEL } = require('./fable-model');
 // 契約CLIの確定上限と新鮮な100%だけを保存。表示の丸め値は使わない。
 const fs = require('./platform/file-io');
 const path = require('node:path');
 const launch = require('./launch');
 const {lt}=require('./locale');
 const credit = require('./credit-exception');
-const MODELS = Object.freeze({ claude: ['claude-fable-5-1', 'claude-opus-5-5'], codex: ['gpt-6-astra', 'gpt-6.1-sol'] });
+const MODELS = Object.freeze({ claude: [FABLE_MODEL, 'claude-opus-5-5'], codex: ['gpt-6-astra', 'gpt-6.1-sol'] });
 const stamp = value => typeof value === 'string' ? Date.parse(value) : NaN;
 const MAX_AGE = 5 * 60 * 1000;
 function relevant(ai, model, w) {
   if (ai === 'claude') return w.id === 'model:' + model || ['five_hour', 'seven_day'].includes(w.id) ||
     model === 'claude-opus-5-5' && (w.id === 'seven_day_opus' || /^model:/.test(w.id) && /^Opus(?:\s|・|$)/i.test(w.label)) ||
-    model === 'claude-fable-5-1' && /^model:/.test(w.id) && /^Fable(?:\s|・|$)/i.test(w.label);
+    model === FABLE_MODEL && /^model:/.test(w.id) && /^Fable(?:\s|・|$)/i.test(w.label);
   const bucket = String(w.id || '').replace(/:(primary|secondary)$/, '');
   return bucket === 'codex' || bucket === model;
 }
@@ -37,7 +38,7 @@ class ModelLimits {
     const tmp = this.file + `.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n'); fs.renameSync(tmp, this.file); this.data = next;
   }
-  active(account = 'default', model = 'claude-fable-5-1', contractOnly = false) {
+  active(account = 'default', model = FABLE_MODEL, contractOnly = false) {
     this.reload();
     const shared = contractOnly ? this.active(account, model) : null;
     const e = (contractOnly ? this.data._discussion : this.data)?.[this.key(model, account)];
@@ -122,9 +123,23 @@ class ModelLimits {
     }
     this.save(contractOnly ? { ...this.data, _discussion: next } : next);
   }
-  clear(account = 'default', model = 'claude-fable-5-1', models = this.models()) {
+  // Retired identities remain visible/clearable, but never enter detection or routing
+  // for the current model. Saved roles can still explicitly select the old model.
+  clearableModels(models = this.models()) {
     this.reload();
-    if (!Object.values(models).flat().includes(model)) throw Error('unknown limit model');
+    const out = { ...models, claude: [...new Set([...(models.claude || []), LEGACY_FABLE_MODEL])] };
+    // Display/clear saved identities without adding them to detection or routing.
+    for (const [key, entry] of Object.entries(this.data)) {
+      const [model, ...parts] = key.split(':'), account = parts.join(':') || 'default';
+      const ai = entry?.ai || (model.startsWith('claude-') ? 'claude' : model.startsWith('gpt-') ? 'codex' : '');
+      if (!['claude', 'codex'].includes(ai) || !this.active(account, model)) continue;
+      out[ai] = [...new Set([...(out[ai] || []), model])];
+    }
+    return out;
+  }
+  clear(account = 'default', model = FABLE_MODEL, models = this.models()) {
+    this.reload();
+    if (!Object.values(this.clearableModels(models)).flat().includes(model)) throw Error('unknown limit model');
     const key = this.key(model, account), next = { ...this.data, _cleared: { ...this.data._cleared, [key]: new Date(this.now()).toISOString() } };
     delete next[key];
     if (next._discussion) { next._discussion = { ...next._discussion }; delete next._discussion[key]; }
@@ -132,7 +147,7 @@ class ModelLimits {
   }
   clearAccount(ai, account = 'default') {
     this.reload();
-    const models = this.models()[ai]; if (!models) throw Error('unknown limit provider');
+    const models = this.clearableModels()[ai]; if (!models) throw Error('unknown limit provider');
     const next = { ...this.data, _cleared:{ ...this.data._cleared } }, at = new Date(this.now()).toISOString();
     for (const model of models) { const key = this.key(model, account); delete next[key]; next._cleared[key] = at; }
     if (next._discussion) { next._discussion = { ...next._discussion }; for (const model of models) delete next._discussion[this.key(model, account)]; }
@@ -173,7 +188,7 @@ class ModelLimits {
     if (changed) this.save(contractOnly ? { ...this.data, _discussion: next } : next);
   }
   list(selection = {}) {
-    return Object.entries(this.models()).flatMap(([ai, models]) => models.map(model => this.active(selection[ai] || 'default', model)).filter(Boolean).map(e => ({ ...e, ai, until: e.validUntil, creditPriority: this.creditPriority({ ai, model: e.model, account: e.account }, e) })));
+    return Object.entries(this.clearableModels()).flatMap(([ai, models]) => models.map(model => this.active(selection[ai] || 'default', model)).filter(Boolean).map(e => ({ ...e, ai, until: e.validUntil, creditPriority: this.creditPriority({ ai, model: e.model, account: e.account }, e) })));
   }
   success() {}
   needsRefresh() { return false; }

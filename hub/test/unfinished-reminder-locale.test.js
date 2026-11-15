@@ -1,0 +1,14 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),vm=require('node:vm');
+const {app,snapshot}=require('./fixtures/app-ui-harness.cjs');
+for(const lang of ['en','zh-TW'])test('reminder locale: badges, actions, drafts and conditional guidance use '+lang+' while keeping user text',t=>{
+ const dir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'hub-reminder-locale-'));t.after(()=>{fs.rmSync(dir,{recursive:true,force:true});process.env.HUB_LANG='ja';});
+ const messages=JSON.parse(fs.readFileSync(path.join(__dirname,'../../langpacks',lang,'ui.json'))),f=app(),c=f.context;
+ f.document.documentElement={style:{setProperty(){}}};c.HUB_LOCALE={locale:lang,messages};vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/locale.js'),'utf8'),c);vm.runInContext('UI=HubI18n',c);
+ assert.equal(typeof c.unfinishedBadge,'function');const badge=c.unfinishedBadge({id:'p'},{id:'t',unfinishedCount:2});assert.ok(badge.includes(lang==='en'?'Unfinished: 2':'未完成 2 件'));assert.doesNotMatch(badge,/未完 2件/);
+ const original='未完の依頼 <user>',html=c.unfinishedListHtml([{original,reason:'private reason',at:'private date'}]);assert.match(html,/未完の依頼 &lt;user&gt;/);assert.ok(html.includes(messages['続ける']));assert.ok(html.includes(messages['もう不要']));
+ c.data=snapshot();vm.runInContext("state=data;view={kind:'work',project:'p',task:'t'};",c);c.draftUnfinished('p','t',{original,id:'ID'});assert.ok(f.element('#chat-in').value.includes(original));assert.ok(f.element('#chat-in').value.includes(lang==='en'?'Continue the following unfinished request':'請先確認以下未完成請求'));
+ process.env.HUB_LANG=lang;const journal=require('../lib/chat-continuation');journal.update(dir,'t',d=>{d.entries.one={id:'one',status:'open',original,updated:'revision'};});const prompt=journal.prompt(dir,'t');assert.ok(prompt.includes(lang==='en'?'When asked to clean up':'受託大掃除或整理時'));assert.ok(prompt.includes(path.join(dir,'.ai/chat/*.unfinished.json')));assert.ok(prompt.includes(lang==='en'?'only when the owner has decided':'只有在人已決定'));assert.ok(prompt.includes('/api/chat/unfinished/dismiss'));assert.ok(prompt.includes(lang==='en'?'original task is missing':'原本的工作已不存在'));assert.doesNotMatch(prompt,/\$\{\d+\}/);
+ assert.throws(()=>journal.dismiss(dir,'t',{id:'one',expectedUpdated:'revision'},{taskMissing:true,project:'P'}),lang==='en'?/Verify the unfinished request record/:/請核對未完成請求的紀錄/);
+ const source=fs.readFileSync(path.join(__dirname,'../lib/chat.js'),'utf8').match(/const REPORT_RULE = lt`([^`]+)`/)[1];const translated=require('../lib/locale').lt(source);assert.ok(translated.includes(lang==='en'?'agreed work that has not started':'已決定但尚未開始的工作'));journal.dismiss(dir,'t',{id:'one',expectedUpdated:'revision'});assert.equal(journal.prompt(dir,'t'),'');
+});

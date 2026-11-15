@@ -1,4 +1,5 @@
 'use strict';
+const { FABLE_MODEL, FABLE_LABEL } = require('./fable-model');
 const { lt } = require('./locale');
 // 会話画面（Goose のような形）：1本の会話で、送るたびに答える AI とモデルを選べる
 // - Claude Code は `claude -p --output-format stream-json`、Codex は `codex exec --json` を1回ずつ動かす
@@ -131,6 +132,8 @@ function contextPacket(rows, { limit = LIMIT, exclude, archive = false, task, re
 
 // 選択肢は、答える人を初心者として書く（人の指定、全プロジェクト共通）。
 const PLAIN_CHOICE_RULE = lt('答える人はまったくの初心者だと思って書く。専門用語や内部の記号（commit番号・ファイル名・API名など）を使わず、何を決めるのか、それぞれを選ぶとどうなるかを短く平易に書く。おすすめには理由を一言添える。');
+const REPORT_RULE = lt`# 報告の書き方
+返事を読む人は、道具の実行結果・考えた過程・開いたファイルを見ていない。その返事だけ読んで分かるように書く。結論と、人にしてほしいことを最初の数文に置く。作業中に自分で付けた呼び名や略語は使わず、何のことかを言葉で書く。つながる内容は文章で書き、並ぶ項目だけ箇条書きにする。細かい経緯は聞かれた時だけ書く。止まったままの依頼の記録や、決めたのに始めていない作業がある時は、返事の最後に件数と中身を一行ずつ書く。無い時は書かない。`;
 // 途中で人の判断が要る時の質問の形。画面で選択肢のボタンにする（-p / exec では質問の道具で止まれないため）
 const ASK_RULE = [
   lt('# 人に質問する時（この画面の決まり）'),
@@ -161,7 +164,7 @@ function parseAsk(text) {
 }
 
 // 1回分の起動のしかたを決める。rows は今回の依頼を足す前の会話
-function buildTurn({ ai, model, effort, meta, rows, text, basePrompt, policy, perm, noEffort, images = [], limitSwitch, task, account = 'default', fast = false, readOnly = false, readDirs = [], isolatedReview = false, selectionOnly = false, discussionTurn = false, freshContext = false, contextMode, reviewKind }) {
+function buildTurn({ ai, model, effort, origin, delegationEffort, dir, meta, rows, text, basePrompt, policy, perm, noEffort, images = [], limitSwitch, task, account = 'default', fast = false, readOnly = false, readDirs = [], isolatedReview = false, selectionOnly = false, discussionTurn = false, freshContext = false, contextMode, reviewKind, roleTier, tierReview = false }) {
   if(contextMode==='idea'&&(!freshContext||readOnly&&!['claude','codex'].includes(ai)))throw Error('台帳の専用実行を確認できません');
   if(discussionTurn&&!['claude','codex'].includes(ai))throw Error('話し合い用の読み取り専用実行を確認できません');
   if(isolatedReview&&!['claude','codex'].includes(ai))throw Error(lt('読み取り専用の確認担当を確かめてください'));
@@ -176,21 +179,22 @@ function buildTurn({ ai, model, effort, meta, rows, text, basePrompt, policy, pe
     let last = -1;
     // Discussion answers belong to fresh, isolated sessions. The resumed
     // normal session has not seen them, even when the AI/model is identical.
-    rows.forEach((r, i) => { if (r.role === 'assistant' && !r.discussion && r.ai === ai && (r.account || 'default') === account) last = i; });
+    rows.forEach((r, i) => { if (r.role === 'assistant' && !r.discussion && !r.roleTierFresh && r.ai === ai && (r.account || 'default') === account) last = i; });
     unseen = rows.slice(last + 1);
   }
   // 整理担当は原文を行番号付きで一度読む。長い既存セッションや重複の履歴は渡さない。
-  const ctx = freshContext || discussionTurn || isolatedReview || selectionOnly ? '' : contextPacket(unseen, {
-    task, resolved: resolvedRequests(rows), current: text,
+  const ctx = (freshContext && contextMode !== 'role-tier') || discussionTurn || isolatedReview || selectionOnly ? '' : contextPacket(unseen, {
+    task, resolved: resolvedRequests(rows), current: text, ...(contextMode === 'role-tier' ? {limit: HANDOFF_LIMIT, archive:task} : {}),
     ...(limitSwitch ? { limit: HANDOFF_LIMIT, exclude: { request: limitSwitch.sourceRequest, original: limitSwitch.original, card: text }, archive: task } : {}),
   });
   // 同一セッションの固定部分は版を照合して短縮し、変わる情報は毎回つける。
   const selected = instructions.select(basePrompt, { meta, ai, sid, resume, restore: Boolean(rows.findLast(r => r.role === 'assistant')?.error) });
   const prefix = selected.rules ? selected.prefix : resume ? policy : basePrompt;
   const m = launch.flagFor(ai, model);
-  const prompt = [prefix, launch.startupInfo(ai, model, m, fast) + (limitSwitch ? lt`（${limitSwitch.from || 'Fable'} の${limitSwitch.reason === 'capacity' ? lt('モデル混雑') : lt('利用上限')}による自動の引き継ぎ）` : ''), discussionTurn || selectionOnly || String(prefix || '').includes(launch.CONTEXT_RULE) ? '' : launch.CONTEXT_RULE, discussionTurn || selectionOnly ? '' : ASK_RULE, ctx, lt`# 今回の依頼\n${text}`].filter(Boolean).join('\n\n');
+  const prompt = [prefix, launch.startupInfo(ai, model, m, fast) + (limitSwitch ? lt`（${limitSwitch.from || 'Fable'} の${limitSwitch.reason === 'capacity' ? lt('モデル混雑') : lt('利用上限')}による自動の引き継ぎ）` : ''), discussionTurn || selectionOnly || String(prefix || '').includes(launch.CONTEXT_RULE) ? '' : launch.CONTEXT_RULE, discussionTurn || selectionOnly ? '' : ASK_RULE, discussionTurn || selectionOnly ? '' : REPORT_RULE, ctx, lt`# 今回の依頼\n${text}`].filter(Boolean).join('\n\n');
   const base = (readOnly ? ai === 'claude' ? 'claude' : ai === 'agy' ? 'agy' : 'codex' : perm || launch.DEFAULT_CMD[ai]).trim().split(/\s+/).filter(Boolean);
-  const e = noEffort ? '' : effort && launch.EFFORT_FLAG[ai][effort];
+  const workflow = ai === 'claude' && origin === 'delegate' && delegationEffort?.workflow === true;
+  const e = workflow ? 'xhigh' : noEffort ? '' : launch.effortFlag(ai, effort, model);
   let args;
   if (ai === 'agy') {
     launch.agyModelId(model);
@@ -204,22 +208,24 @@ function buildTurn({ ai, model, effort, meta, rows, text, basePrompt, policy, pe
     args.push('-p', prompt);
   } else if (ai === 'claude') {
     args = [...base.slice(1), '-p', '--output-format', 'stream-json', '--verbose'];
-    if(readOnly){args.push('--tools',discussionTurn ? '' : 'Read,Glob,Grep','--allowedTools',discussionTurn ? '' : 'Read,Glob,Grep','--permission-mode','dontAsk','--strict-mcp-config','--mcp-config','{"mcpServers":{}}');for(const dir of readDirs)args.push('--add-dir',dir);}
+    if(readOnly){args.push('--tools',discussionTurn ? '' : tierReview ? 'WebSearch,WebFetch' : 'Read,Glob,Grep','--allowedTools',discussionTurn ? '' : tierReview ? 'WebSearch,WebFetch' : 'Read,Glob,Grep','--permission-mode','dontAsk','--strict-mcp-config','--mcp-config','{"mcpServers":{}}');if(!tierReview)for(const dir of readDirs)args.push('--add-dir',dir);}
+    if (origin === 'delegate') require('./claude-workflow').configure(args, { workflow, dir });
+    if(tierReview)args.push('--setting-sources','','--safe-mode');
     if(discussionTurn)args.push('--safe-mode','--no-session-persistence','--no-chrome');
     if (m) args.push('--model', m);
     if (e) args.push('--effort', e);
     if (resume) args.push('--resume', sid);
   } else {
     args = ['exec', ...base.slice(1), '--json', '--skip-git-repo-check', ...launch.CODEX_CONTEXT_ARGS, ...launch.accountArgs(ai, account), ...launch.accelerationArgs(ai, fast)];
-    if(readOnly)args.push('--sandbox','read-only','-c','approval_policy="never"','-c','mcp_servers={}','-c','web_search="disabled"');
-    if(discussionTurn)for(const feature of ['shell_tool','unified_exec','apps','multi_agent','browser_use','computer_use','image_generation','view_image','hooks','plugins','code_mode','code_mode_host'])args.push('-c',`features.${feature}=false`);
+    if(readOnly)args.push('--sandbox','read-only','-c','approval_policy="never"','-c','mcp_servers={}','-c',tierReview ? 'web_search="live"' : 'web_search="disabled"');
+    if(discussionTurn||tierReview)for(const feature of ['shell_tool','unified_exec','apps','multi_agent','browser_use','computer_use','image_generation','view_image','hooks','plugins','code_mode','code_mode_host'])args.push('-c',`features.${feature}=false`);
     if (m) args.push('--model', m);
     if (e) args.push('-c', `model_reasoning_effort=${e}`);
     if (resume) args.push('resume', sid);
     for (const image of images) args.push('-i', image);
     args.push('-'); // 依頼は標準入力から渡す（長い引き継ぎでも入るように）
   }
-  return { command: ai === 'grok' && base[0] === 'grok' ? launch.grokCommand() : base[0], args, stdin: ['agy', 'grok'].includes(ai) ? '' : prompt, resume, isolatedReview, selectionOnly, discussionTurn, freshContext, contextMode, reviewKind, modelFlag: m, effortFlag: e, rules: selected.rules, fixed: selected.fixed, shortRules: selected.short };
+  return { command: ai === 'grok' && base[0] === 'grok' ? launch.grokCommand() : base[0], args, stdin: ['agy', 'grok'].includes(ai) ? '' : prompt, resume, isolatedReview, selectionOnly, discussionTurn, freshContext, contextMode, reviewKind, modelFlag: m, effortFlag: e, ...(workflow ? {workflow:true,env:{CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL:m,CLAUDE_CODE_SUBAGENT_MODEL:m,CLAUDE_CODE_SUBAGENT_MODEL_FORCE:'1'}} : {}), rules: selected.rules, fixed: selected.fixed, shortRules: selected.short };
 }
 
 // 道具の使い方を1行にする
@@ -238,7 +244,7 @@ const MODEL_CAPACITY = 'Selected model is at capacity. Please try a different mo
 const USAGE_LIMIT = /^\s*You[’']ve (?:reached your [^\r\n]{1,40} limit|hit your (?:session|weekly|usage) limit)\b/i;
 
 // 出力の1行（JSON）を、画面に出す出来事に変える
-function parse(ai, o, expectedModel) {
+function parse(ai, o, expectedModel, { workflow = false } = {}) {
   const ev = [];
   if (!o || typeof o !== 'object') return ev;
   if (ai === 'agy') {
@@ -284,7 +290,7 @@ function parse(ai, o, expectedModel) {
         else if (c.type === 'tool_use') ev.push({ kind: 'tool', text: toolLine(c.name, c.input) });
       }
     }
-    if (o.type === 'result') ev.push({ kind: 'done', error: o.is_error ? String(o.result || lt('エラー')) : '', result: typeof o.result === 'string' ? o.result : '', usage: inputUsage('claude', o.usage) });
+    if (o.type === 'result') ev.push({ kind: 'done', error: o.is_error ? String(o.result || lt('エラー')) : '', result: typeof o.result === 'string' ? o.result : '', usage: workflow ? require('./claude-workflow').modelUsage(o.modelUsage) : inputUsage('claude', o.usage) });
     return ev;
   }
   // A quote, stderr, tool result or generic network error is not capacity evidence.
@@ -326,7 +332,7 @@ function inputUsage(ai, usage) {
 // 実行中の会話（作業ごとに1つまで）
 function sourceOptions(o, permFor) {
   const sw = o.limitSwitch;
-  const ai = sw.sourceAI || 'claude', model = sw.sourceModel || 'Fable 5.1';
+  const ai = sw.sourceAI || 'claude', model = sw.sourceModel || FABLE_LABEL;
   return { ...o, ai, model, effort: sw.sourceEffort || o.effort, requireModel: true, requiredModel: launch.flagFor(ai, model),
     perm: permFor?.(ai) || launch.DEFAULT_CMD[ai], text: sw.original || o.shown || o.text, shown: sw.original || o.shown || o.text,
     account: sw.sourceAccount || 'default', limitSlot: sw.sourceLimitSlot, limitSwitch: undefined };
@@ -334,7 +340,7 @@ function sourceOptions(o, permFor) {
 
 class ChatRunner {
   // dirOf: プロジェクトID → 台帳の場所（待っている指示を保存して、再起動しても残すため）
-  constructor(opts) { this.queueGuard=opts?.queueGuard; this.running = new Map(); this.watchers = new Map(); this.queues = new Map(); this.queueSaveErrors = new Set(); this.base = new Map(); this.stops = new Map(); this.dirOf = (opts && opts.dirOf) || null; this.canStart = (opts && opts.canStart) || null; this.refreshQueued = (opts && opts.refreshQueued) || null; this.limitBackup = (opts && opts.limitBackup) || null; this.capacityBackup = opts?.capacityBackup || null; this.limitHold=opts?.limitHold || null; this.limitIdentity = opts?.limitIdentity || null; this.limitPreflight = opts?.limitPreflight || null; this.limitTarget = opts?.limitTarget || null; this.beforeQueued = opts?.beforeQueued || null; this.beforeSend = opts?.beforeSend || null; this.onLimit = opts?.onLimit || null; this.onFableSuccess = opts?.onFableSuccess || null; this.onSettled = opts?.onSettled || null; this.delegates = opts?.delegates; this.permFor = opts?.permFor; this.accountFor = opts?.accountFor; this.fastFor = opts?.fastFor; this.spoolRoot=opts?.spoolRoot; this.serverId=randomUUID(); this.onAdoptEnd=opts?.onAdoptEnd; this.adoptErrors=[]; this.spoolRuns=new Set(); this.startGate=opts?.startGate;this.endGate=opts?.endGate;this.afterCompleted=opts?.afterCompleted;this.beforeAdopt=opts?.beforeAdopt;this.onStop=opts?.onStop;this.startBarrier=opts?.startBarrier;this.prepareContext=opts?.prepareContext;this.onHandoffError=opts?.onHandoffError;this.onHandoffRecovered=opts?.onHandoffRecovered;this.deferredDispatches=new Map();this.stopControl=opts?.stopControl; }
+  constructor(opts) { this.delegateEffort=opts?.delegateEffort; this.queueGuard=opts?.queueGuard; this.running = new Map(); this.watchers = new Map(); this.queues = new Map(); this.queueSaveErrors = new Set(); this.base = new Map(); this.stops = new Map(); this.dirOf = (opts && opts.dirOf) || null; this.canStart = (opts && opts.canStart) || null; this.refreshQueued = (opts && opts.refreshQueued) || null; this.limitBackup = (opts && opts.limitBackup) || null; this.capacityBackup = opts?.capacityBackup || null; this.limitHold=opts?.limitHold || null; this.limitIdentity = opts?.limitIdentity || null; this.limitPreflight = opts?.limitPreflight || null; this.limitTarget = opts?.limitTarget || null; this.beforeQueued = opts?.beforeQueued || null; this.beforeSend = opts?.beforeSend || null; this.onLimit = opts?.onLimit || null; this.onFableSuccess = opts?.onFableSuccess || null; this.onSettled = opts?.onSettled || null; this.delegates = opts?.delegates; this.permFor = opts?.permFor; this.accountFor = opts?.accountFor; this.fastFor = opts?.fastFor; this.spoolRoot=opts?.spoolRoot; this.serverId=randomUUID(); this.onAdoptEnd=opts?.onAdoptEnd; this.adoptErrors=[]; this.spoolRuns=new Set(); this.startGate=opts?.startGate;this.endGate=opts?.endGate;this.afterCompleted=opts?.afterCompleted;this.beforeAdopt=opts?.beforeAdopt;this.onStop=opts?.onStop;this.startBarrier=opts?.startBarrier;this.prepareContext=opts?.prepareContext;this.onHandoffError=opts?.onHandoffError;this.onHandoffRecovered=opts?.onHandoffRecovered;this.deferredDispatches=new Map();this.stopControl=opts?.stopControl; }
   key(p, t) { return `${p}\u0000${t}`; }
   busy(p, t) { return this.running.get(this.key(p, t)) || null; }
   pendingIntegration(p, t, key, phase, sourceRequest) {
@@ -419,6 +425,7 @@ class ChatRunner {
     // 添付を指定する経路だけ更新する。保存キューと起動条件を同じ一覧にそろえる。
     const attachments = images === undefined ? {} : { images: mode === 'amend'
       ? [...new Set([...(q[index]?.images || o.images || []), ...images])] : [...images] };
+    if(attachments.images?.length>20)throw Error(lt('動画から抜き出した場面を含め、画像は1回20枚までです。添付を減らして送ってください'));
     // 旧確認の遅延完了・失敗通知が、新しい依頼を取り消したり復活させないようIDを分ける。
     const request = randomUUID();
     const replacement = { ...q[index], id: request, ai: o.ai, account: o.account || 'default', model: o.model, effort: o.effort, role: o.role, perm: o.perm,
@@ -491,6 +498,7 @@ class ChatRunner {
     }
     o = { ...o, account: o.account ?? this.accountFor?.(o.project, o.task, o.ai) ?? 'default' };
     if (!o.limitSlot) o = { ...o, ...this.limitIdentity?.(o) };
+    o = { ...o, effort: launch.normalizeEffort(o.ai, o.effort) };
     ({ ai, model } = o);
     const original = o.shown || o.text;
     const repeated = o.request && read(pdir, task).findLast(r => r.role === 'user' && r.request === o.request &&
@@ -512,7 +520,7 @@ class ChatRunner {
     // 自動の順番待ちは前の番の prompt を引き継ぐため、起動前に表示情報を更新する。
     if ((o.mode === 'queued' || ['amend','redo'].includes(o.mode) && o.request) && this.refreshQueued) o = { ...o, ...this.refreshQueued(o) };
     let preflight = null;
-    const held = this.limitPreflight && (this.limitTarget || ai === 'claude' && modelFlag === 'claude-fable-5-1') ? this.limitPreflight(o) : null;
+    const held = this.limitPreflight && (this.limitTarget || ai === 'claude' && modelFlag === FABLE_MODEL) ? this.limitPreflight(o) : null;
     if(held&&this.limitHold?.(o))throw Object.assign(Error('指定した統合担当が上限中です。担当を替えず解除まで待機します'),{code:'HUB_LIMIT_WAIT'});
     const backup = held && !o.limitSwitch && this.limitBackup?.(o);
     if (held) {
@@ -527,6 +535,8 @@ class ChatRunner {
       const unavailable = this.canStart?.(o.ai, o.model, o); if (unavailable) throw unavailable instanceof Error ? unavailable : Error(unavailable);
       preflight = { role: 'event', ai, limitSwitch, text: lt`${from} 上限保持中（解除${held.validUntil || lt('手動解除まで')}）。最初から ${to} で開始` };
     }
+    o = this.delegateEffort?.(o) || o;
+    o = { ...o, effort: launch.normalizeEffort(o.ai, o.effort) };
     ({ ai, model } = o);
     const { effort, text } = o;
     const rows = read(pdir, task);
@@ -541,7 +551,7 @@ class ChatRunner {
     beforeSend?.(); // All start guards passed; the next operation can save a request.
     this.base.set(this.key(project, task), o); // 追加の指示を送る時に使う
     const existing = repeated || o.request && rows.findLast(r => r.role === 'user' && r.request === o.request && r.text === (o.shown || text));
-    const userRow = existing || append(pdir, task, { role: 'user', ...(typeof o.readIndex==='boolean'?{readIndex:o.readIndex}:{}), ...(o.automation ? { automation:o.automation,contextMode:o.contextMode,freshContext:o.freshContext,preserveTaskState:o.preserveTaskState,readOnly:o.readOnly,reviewKind:o.reviewKind } : {}), ...(o.discussion ? { discussion: o.discussion } : {}), ...(o.origin ? { origin: o.origin } : {}), ...(ai === 'codex' ? { fast: o.fast } : {}), account: o.account, text: o.shown || text, to: ai, model, effort, turn: randomUUID(), startedAt: new Date().toISOString(), ...snapshot(o.dir), ...(o.limitSwitch ? { limitSwitch: o.limitSwitch, handoff: o.text } : {}), ...(o.request ? { request: o.request } : {}), ...(o.mode ? { mode: o.mode } : {}) });
+    const userRow = existing || append(pdir, task, { role: 'user', ...(o.roleTier?{roleTier:o.roleTier,roleTierFresh:o.freshContext===true}:{}), ...(typeof o.readIndex==='boolean'?{readIndex:o.readIndex}:{}), ...(o.automation ? { automation:o.automation,contextMode:o.contextMode,freshContext:o.freshContext,preserveTaskState:o.preserveTaskState,readOnly:o.readOnly,reviewKind:o.reviewKind } : {}), ...(o.discussion ? { discussion: o.discussion } : {}), ...(o.origin ? { origin: o.origin } : {}), ...(o.delegationEffort ? { delegationEffort: o.delegationEffort } : {}), ...(ai === 'codex' ? { fast: o.fast } : {}), account: o.account, text: o.shown || text, to: ai, model, effort, turn: randomUUID(), startedAt: new Date().toISOString(), ...snapshot(o.dir), ...(o.limitSwitch ? { limitSwitch: o.limitSwitch, handoff: o.text } : {}), ...(o.request ? { request: o.request } : {}), ...(o.mode ? { mode: o.mode } : {}) });
     if (!existing) this.emit(project, task, { type: 'row', row: userRow });
     if (preflight && !rows.some(r => r.role === 'event' && r.limitSwitch?.request === preflight.limitSwitch.request)) {
       this.emit(project, task, { type: 'row', row: append(pdir, task, preflight) });
@@ -662,18 +672,25 @@ class ChatRunner {
     o={...o,stopTicket:o.stopTicket||this.stopControl?.ticket(o)};
     // Re-adopting a running process is preservation, not a new start.
     if (!adopted) {this.stopControl?.assert(o,o.stopTicket);this.licenseGuard?.(o, 'start');}
-    if(this.stopControl)o={...o,stopSafety:{dir:this.stopControl.dir,ticket:o.stopTicket}};
+    if(this.stopControl)o={...o,stopSafety:{dir:this.stopControl.dir,ticket:o.stopTicket,instance:this.stopControl.instance}};
     const { project, task, pdir, dir, ai, model, effort, env, onEnd, account = 'default' } = o;
-    const cliEnv = launch.childEnv(ai, launch.accountEnv(ai, account, { ...process.env, ...(env || {}) }));
+    const cliEnv = launch.childEnv(ai, launch.accountEnv(ai, account, { ...process.env, ...(env || {}), ...(turn.env || {}) }));
+    // Caller proof lives only for this running CLI, outside saved requests.
+    delete cliEnv.HUB_DELEGATE_TURN;
+    const delegateToken=!adopted&&this.stopControl?.manualChain(o,o.stopTicket)?randomUUID():undefined;
+    if(delegateToken)cliEnv.HUB_DELEGATE_TURN=delegateToken;
     if (!o.started) o.started=Date.now();
     if(!adopted)this.assertQueueStart(o);
     if(!adopted&&!this.spoolRoot)require('./owned-processes').assertLaunchOwnership();
     this.startGate?.(o,{adoption:Boolean(adopted)});
     // Windows は .exe / .cmd を解決し、spool の worker にも解決済みの実行ファイルを渡す
-    const argv = launch.resolveCli(turn.command, turn.args, cliEnv), runTurn = argv.file === turn.command && argv.args === turn.args ? turn : { ...turn, command: argv.file, args: argv.args };
-    let child;try{child = adopted || (this.spoolRoot ? require('./cli-spool').start(this.spoolRoot,this.serverId,o,runTurn,meta,rows,cliEnv) : spawn(runTurn.command, runTurn.args, { cwd: dir, env: cliEnv, stdio: ['pipe', 'pipe', 'pipe'] }));}catch(e){this.endGate?.(o);throw e;}
+    let child;try{
+      const argv = adopted ? { file: turn.command, args: turn.args } : launch.resolveCli(turn.command, turn.args, cliEnv, ai);
+      const runTurn = argv.file === turn.command && argv.args === turn.args ? turn : { ...turn, command: argv.file, args: argv.args };
+      child = adopted || (this.spoolRoot ? require('./cli-spool').start(this.spoolRoot,this.serverId,o,runTurn,meta,rows,cliEnv) : spawn(runTurn.command, runTurn.args, { cwd: dir, env: cliEnv, stdio: ['pipe', 'pipe', 'pipe'] }));}catch(e){this.endGate?.(o);throw e;}
     if (!o.started) o.started = Date.now(); // 思考の指定をやり直しても、最初に送った時から数える
     const run = { child, automation:o.automation, options:o, ai, account, model, effort, userRow: o.userRow, texts: [], err: '', done: null, sid: null, stopped: false, started: o.started, limitSwitch: o.limitSwitch, last: '', stopVersion: this.stops.get(this.key(project, task)) || 0 };
+    run.delegateToken=delegateToken;
     run.supervised=Boolean(child.dir);if(run.supervised){this.spoolRuns.add(child);child.run=run;Object.assign(run,require('./cli-spool').read(child.dir,'control.json',{}));if(adopted)this.stops.set(this.key(project,task),Math.max(this.stops.get(this.key(project,task))||0,run.stopVersion));}
     run.startedP = new Promise(resolve => { child.once('spawn', () => { run.spawned = true; if(!run.supervised)try{run.identity=require('./owned-processes').capture(child.pid);}catch(e){run.ownershipError=e.message;} resolve(true); }); child.once('error', () => resolve(false)); });
     run.finishedP = new Promise(r => { run.resolveFinished = r; });
@@ -695,7 +712,8 @@ class ChatRunner {
       if(run.supervised&&!child.owns())return;let eventIndex=0;
       let x; try { x = JSON.parse(l); } catch (e) { return; }
       if (run.blocked&&!replay) return;
-      for (const ev of parse(ai, x, turn.modelFlag)) {
+      if (ai === 'claude' && (x.type === 'task_progress' || x.type === 'system' && x.subtype === 'task_progress')) run.workflow = true;
+      for (const ev of parse(ai, x, turn.modelFlag, {workflow:turn.workflow || run.workflow})) {
         const eventId=run.supervised?path.basename(child.dir)+':'+seq+':'+eventIndex++:null;
         if (ev.kind === 'session') run.sid = ev.id;
         else if (ev.kind === 'text') { run.texts.push(ev.text); if(!replay)this.emit(project, task, { type: 'partial', ai, text: run.texts.join(['agy', 'grok'].includes(ai) ? '' : '\n\n') }); }
@@ -704,7 +722,7 @@ class ChatRunner {
         else if (ev.kind === 'limit') run.limit = ev.error;
         else if (ev.kind === 'capacity') run.capacity = ev.error;
         else if (ev.kind === 'compact') run.compact = true;
-        else if (ev.kind === 'done') { run.done = ev; if (ev.abort) { run.blocked = true; run.sid = null; if(!replay)child.kill('SIGTERM'); } }
+        else if (ev.kind === 'done') { run.resultCount = (run.resultCount || 0) + 1; run.done = ev; if (ev.abort) { run.blocked = true; run.sid = null; if(!replay)child.kill('SIGTERM'); } }
       }
       // 正式上限の後もCLIが内部で再試行することがある。自然終了は待たず、
       // 保存した交代先がある時だけ終了させる。交代の保存・起動はclose後に行う。
@@ -736,8 +754,9 @@ class ChatRunner {
       phase('meta');
       clearTimeout(run.limitKillTimer);
       let text = run.texts.join(['agy', 'grok'].includes(ai) ? '' : '\n\n') || (run.done && run.done.result) || '';
-      // Keep progress in the visible transcript, but parse only the final CLI
-      // response for the idea result contract. Streaming providers use all chunks.
+      // Claude workflows can emit a preliminary result. Only the last result
+      // becomes the saved answer; progress remains transient while running.
+      if (ai === 'claude' && (turn.workflow || run.workflow || run.resultCount > 1) && typeof run.done?.result === 'string') text = run.done.result;
       const ideaResultText = ['claude','codex'].includes(ai) ? (run.done?.result || run.texts.at(-1) || '') : text;
       let error = '';
       if (run.stopped) error = lt('止めました');
@@ -778,7 +797,7 @@ class ChatRunner {
       const answerCompletion=require('./integration-question').selectedQuestion(rows,o.userRow)?{turn:o.userRow.turn,closed,...snapshot(dir)}:null;
       const organizerCompletion=['organize','order'].includes(integrationMarker?.[2])?{dir:path.resolve(dir),...snapshot(dir)}:null;
       phase('final-row');
-      const row = appendOnce(pdir, task, { role: 'assistant', ...(o.automation?{automation:{metadata:o.automation,resultText:ideaResultText,closed,limit:Boolean(run.limit&&closed&&run.spawned&&!run.stopped&&!modelRejected&&!run.blocked),isolation:{readOnly:o.readOnly===true,fresh:turn.freshContext===true,resumed:turn.resume},git:snapshot(dir)}}:{}), ...(o.discussion ? { discussion: o.discussion, discussionLimit: Boolean(run.limit && closed && run.spawned && !run.stopped && !modelRejected && !run.blocked) } : {}), ...(answerCompletion?{answerCompletion}:{}), ...(ai === 'codex' ? { generatedImages: images } : {}), ...(integrationMarker?{integrationAuto:{key:integrationMarker[1],phase:integrationMarker[2],closed,...(organizerCompletion?{saved:organizerCompletion}:{}),...(turn.isolatedReview?{isolation:{version:1,request:o.integrationReviewRequest,resumed:turn.resume,session:run.sid||null}}:{}),limit:Boolean(run.limit && closed && run.spawned && !run.stopped && !modelRejected && !run.blocked)}}:{}), ai, account, model, effort, text, error, ms: Date.now() - o.started, ...(o.request ? { request: o.request } : {}), ...(run.done?.usage ? { usage: run.done.usage } : {}), ...(asks.length ? { asks } : {}) },run.supervised?path.basename(child.dir)+':final':null);
+      const row = appendOnce(pdir, task, { role: 'assistant', ...(o.roleTier?{roleTier:o.roleTier,roleTierFresh:turn.freshContext===true}:{}), ...(o.automation?{automation:{metadata:o.automation,resultText:ideaResultText,closed,limit:Boolean(run.limit&&closed&&run.spawned&&!run.stopped&&!modelRejected&&!run.blocked),isolation:{readOnly:o.readOnly===true,fresh:turn.freshContext===true,resumed:turn.resume},git:snapshot(dir)}}:{}), ...(o.discussion ? { discussion: o.discussion, discussionLimit: Boolean(run.limit && closed && run.spawned && !run.stopped && !modelRejected && !run.blocked) } : {}), ...(answerCompletion?{answerCompletion}:{}), ...(ai === 'codex' ? { generatedImages: images } : {}), ...(integrationMarker?{integrationAuto:{key:integrationMarker[1],phase:integrationMarker[2],closed,...(organizerCompletion?{saved:organizerCompletion}:{}),...(turn.isolatedReview?{isolation:{version:1,request:o.integrationReviewRequest,resumed:turn.resume,session:run.sid||null}}:{}),limit:Boolean(run.limit && closed && run.spawned && !run.stopped && !modelRejected && !run.blocked)}}:{}), ai, account, model, effort, text, error, ms: Date.now() - o.started, ...(o.request ? { request: o.request } : {}), ...(run.done?.usage ? { usage: run.done.usage } : {}), ...(asks.length ? { asks } : {}) },run.supervised?path.basename(child.dir)+':final':null);
       this.emit(project, task, { type: 'row', row });
       phase('on-end');
       if (onEnd) { const ended=onEnd(row);if(run.supervised)await ended; }
@@ -825,7 +844,7 @@ class ChatRunner {
                 (o.limitSwitch.sourceTurn ? r.turn === o.limitSwitch.sourceTurn : o.limitSwitch.sourceRequest && r.request === o.limitSwitch.sourceRequest)) || o.userRow : o.userRow;
               const sourceTurns = user !== o.userRow ? [o.userRow?.turn] : [];
               const shown = o.isolatedReview || o.freshContext ? buildHandoffCard({ original, from, to, direct:true }) : buildHandoffCard({ original, from, to, reason: capacity ? 'capacity' : undefined, user, sourceTurns, rows, dir, pdir, task, queue: this.queue(project, task), delegates: this.delegates?.(project, task) || [] });
-              const item = { ...backup, automation:o.automation,contextMode:o.contextMode,freshContext:o.freshContext,preserveTaskState:o.preserveTaskState,reviewKind:o.reviewKind,origin:o.origin, account: backup.account ?? this.accountFor?.(project, task, backup.ai) ?? 'default', id: `${capacity ? 'capacity' : 'limit'}-${request}`, readOnly:o.readOnly, readDirs:o.readDirs, isolatedReview:o.isolatedReview, selectionOnly:o.selectionOnly, readIndex:o.readIndex, integrationReviewRequest:o.integrationReviewRequest, at: new Date().toISOString(), text: shown, shown, limitSwitch };
+              const item = { ...backup, roleTier:o.roleTier,tierReview:o.tierReview,automation:o.automation,contextMode:o.contextMode,freshContext:o.freshContext,preserveTaskState:o.preserveTaskState,reviewKind:o.reviewKind,origin:o.origin, account: backup.account ?? this.accountFor?.(project, task, backup.ai) ?? 'default', id: `${capacity ? 'capacity' : 'limit'}-${request}`, readOnly:o.readOnly, readDirs:o.readDirs, isolatedReview:o.isolatedReview, selectionOnly:o.selectionOnly, readIndex:o.readIndex, integrationReviewRequest:o.integrationReviewRequest, at: new Date().toISOString(), text: shown, shown, limitSwitch };
               this.setQueue(project, task, [item, ...this.queue(project, task)], true);
               this.emit(project, task, { type: 'row', row: append(pdir, task, { role: 'event', ai, limitSwitch, text: capacity ? lt`${from} がモデル混雑で終了したため、保存済みの作業を確認し ${to} で一回だけ続けます` : lt`${from} が利用上限で止まったため、同じ作業を ${to} で続けます` }) });
               if (capacity) run.limitSaveFailed = false; // The allowed return is durable; dispatch it after close.
@@ -844,16 +863,20 @@ class ChatRunner {
       phase('queue');
       if (!this.stopControl && cancelled() && !run.interrupting) { if (q.length) this.setQueue(project, task, q.filter(x=>x.automation?.kind==='idea'),run.supervised); }
       const dispatchNext=()=>{
-      if(this.stopControl?.held({project,task}))return;
+      const held=this.stopControl?.held({project,task});
+      if(held&&!this.stopControl.manualChain(o,o.stopTicket))return;
       try{this.stopControl?.assert(o,o.stopTicket);this.startBarrier?.(o);}catch(e){if(e.code==='restore-barrier')this.deferredDispatches.set(k,dispatchNext);return;}
       this.deferredDispatches.delete(k);
       const q = this.queue(project,task); // Re-read after restoration; edits and cancellation remain authoritative.
+      // Stopped instructions retain their position and stopHeld marker. Only
+      // newly admitted delegates from this live manual chain may pass them.
+      const next=held?q.find(x=>this.stopControl.delegated({...x,project,task},x.stopTicket)):q[0];
+      if(held&&next&&(next.error||next.limitWaiting))return;
 
       // CLI を起動できなかった時は、待ち順の同じ依頼や後続を勝手に再送しない。
-      if (!cancelled() && q.length && !q[0].stopHeld && q[0].id !== o.request && !run.interrupting && run.spawned && !run.limitSaveFailed && !this.busy(project, task)) {
+      if (!cancelled() && next && !next.stopHeld && next.id !== o.request && !run.interrupting && run.spawned && !run.limitSaveFailed && !this.busy(project, task)) {
         // Queue removal can fail or be interrupted. Never resend this turn's
         // own leftover entry, even when its result was an ordinary error.
-        const next = q[0];
         try { this.assertQueueStart({project,task,request:next.id}); } catch { return; }
         const b = { ...(this.base.get(k) || o), unfinishedId: undefined };
         const retain = error => {
@@ -866,7 +889,7 @@ class ChatRunner {
           this.emit(project, task, { type: 'row', row: append(pdir, task, { role: 'event', ai: next.ai, text: lt`順番待ちの依頼を始められませんでした：${error}` }) });
         };
         try {
-          this.sendQueued({ ...b, automation:next.automation,contextMode:next.contextMode,freshContext:next.freshContext,preserveTaskState:next.preserveTaskState,reviewKind:next.reviewKind,origin:next.origin, integrationAssignment:next.integrationAssignment, limitPolicy:next.limitPolicy, isolatedReview:next.isolatedReview, selectionOnly:next.selectionOnly, readIndex:next.readIndex, integrationReviewRequest:next.integrationReviewRequest, readOnly:next.readOnly, readDirs:next.readDirs, resultsOrganize: Boolean(next.resultsOrganize), ai: next.ai, account: next.account || 'default', model: next.model, effort: next.effort, text: next.text, perm: next.perm, requireModel: Boolean(next.requireModel), requiredModel: next.requiredModel, role: next.role || '', limitSlot: next.limitSlot, limitSwitch: next.limitSwitch, images: project === 'freetalk' && next.ai === 'codex' ? next.images || [] : [], mode: 'queued', shown: next.shown, request: next.id, started: undefined, noEffort: false })
+          this.sendQueued({ ...b, stopTicket:next.stopTicket||(!held?o.stopTicket:undefined), roleTier:next.roleTier,tierReview:next.tierReview,automation:next.automation,contextMode:next.contextMode,freshContext:next.freshContext,preserveTaskState:next.preserveTaskState,reviewKind:next.reviewKind,origin:next.origin, delegationEffort:next.delegationEffort, integrationAssignment:next.integrationAssignment, limitPolicy:next.limitPolicy, isolatedReview:next.isolatedReview, selectionOnly:next.selectionOnly, readIndex:next.readIndex, integrationReviewRequest:next.integrationReviewRequest, readOnly:next.readOnly, readDirs:next.readDirs, resultsOrganize: Boolean(next.resultsOrganize), ai: next.ai, account: next.account || 'default', model: next.model, effort: next.effort, text: next.text, perm: next.perm, requireModel: Boolean(next.requireModel), requiredModel: next.requiredModel, role: next.role || '', limitSlot: next.limitSlot, limitSwitch: next.limitSwitch, images: next.ai === 'codex' ? next.images || [] : [], mode: 'queued', shown: next.shown, request: next.id, started: undefined, noEffort: false })
             .then(async r => {
               if (await r.started) this.unqueue(project, task, next.id);
               else retain(lt('AIを起動できませんでした。CLIの導入状態を確認してください'));
@@ -994,4 +1017,4 @@ class ChatRunner {
 
 Object.assign(ChatRunner.prototype,require('./chat-continuation').methods);
 
-module.exports = { CHATGPT_RETIRED, files, HANDOFF_LIMIT, inputUsage, ChatRunner, read, append, appendOnce, readMeta, writeMeta, buildTurn, parse, parseAsk, contextPacket, LIMIT, ASK_RULE, PLAIN_CHOICE_RULE };
+module.exports = { CHATGPT_RETIRED, files, HANDOFF_LIMIT, inputUsage, ChatRunner, read, append, appendOnce, readMeta, writeMeta, buildTurn, parse, parseAsk, contextPacket, LIMIT, ASK_RULE, REPORT_RULE, PLAIN_CHOICE_RULE };

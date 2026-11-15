@@ -412,3 +412,35 @@ test('resuming auth Terminal selects its TTY without running any login command',
   assert.equal((await focus(123,true)).dry,true);assert.equal(calls.length,3);
   tty='ttys123';scriptError=true;await assert.rejects(focus(123,false));
 });
+
+test('unclaimed auth ticket protects for 20 seconds, then expires and a late handoff restores protection',()=>{
+ let now=Date.now();const a=fixture({now:()=>now,processProbe:()=>{}});
+ const launchTicket=a.terminalCommand('codex','default','true',launch.sq,'auth','login');
+ const file=path.join(a.termDir,fs.readdirSync(a.termDir)[0]);
+ now+=19999;assert.equal(a.terminalBusy('codex','default',true),true);assert.equal(a.authTerminalPid('codex','default'),process.pid);assert.throws(()=>a.assertIdle('codex','default'));
+ now++;assert.equal(a.authTerminalPid('codex','default'),null);assert.equal(fs.existsSync(file),false);assert.doesNotThrow(()=>a.assertIdle('codex','default'));
+ fs.writeFileSync(file,JSON.stringify({ai:'codex',account:'default',kind:'auth',authAction:'login',pid:424242}));
+ now+=60000;assert.equal(a.terminalBusy('codex','default'),true);assert.equal(a.authTerminalPid('codex','default'),424242);assert.throws(()=>a.assertIdle('codex','default'));
+ launchTicket.cancel();launchTicket.cancel();
+});
+test('legacy unclaimed ticket uses mtime; prior Hub ESRCH ticket is removed on either lookup',()=>{
+ for(const lookup of ['terminalBusy','authTerminalPid']){
+  const a=fixture({processProbe:()=>{throw Object.assign(Error('gone'),{code:'ESRCH'});}});
+  const marker=a.terminalCommand('codex','default','true',launch.sq,'auth');
+  const file=path.join(a.termDir,fs.readdirSync(a.termDir)[0]);fs.writeFileSync(file,JSON.stringify({ai:'codex',account:'default',kind:'auth',pid:424242}));
+  assert.equal(a[lookup]('codex','default'),lookup==='terminalBusy'?false:null);assert.equal(fs.existsSync(file),false);marker.cancel();
+ }
+ const a=fixture();const marker=a.terminalCommand('codex','default','true',launch.sq,'auth');const file=path.join(a.termDir,fs.readdirSync(a.termDir)[0]);
+ fs.writeFileSync(file,JSON.stringify({ai:'codex',account:'default',kind:'auth',pid:process.pid}));fs.utimesSync(file,new Date(0),new Date(0));
+ assert.equal(a.terminalBusy('codex','default'),false);assert.equal(fs.existsSync(file),false);marker.cancel();
+});
+test('live work, handed-off auth, malformed and EPERM tickets keep protection',()=>{
+ let now=Date.now();const a=fixture({now:()=>now,processProbe:()=>{}});
+ const work=a.terminalCommand('codex','default','true',launch.sq,'work');const file=path.join(a.termDir,fs.readdirSync(a.termDir)[0]);
+ now+=60000;fs.utimesSync(file,new Date(0),new Date(0));assert.equal(a.terminalBusy('codex','default'),true);work.cancel();
+ const auth=a.terminalCommand('codex','default','true',launch.sq,'auth');const authFile=path.join(a.termDir,fs.readdirSync(a.termDir)[0]);
+ fs.writeFileSync(authFile,JSON.stringify({ai:'codex',account:'default',kind:'auth',pid:process.pid,createdAt:'bad'}));
+ assert.equal(a.terminalBusy('codex','default'),true);a.processProbe=()=>{throw Object.assign(Error('denied'),{code:'EPERM'});};
+ assert.equal(a.terminalBusy('codex','default'),true);assert.equal(fs.existsSync(authFile),true);
+ fs.writeFileSync(authFile,'{broken');assert.equal(a.terminalBusy('codex','default'),true);auth.cancel();
+});

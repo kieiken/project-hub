@@ -6,8 +6,8 @@ const {Store}=require('../lib/store'),{Freetalk}=require('../lib/freetalk'),{Fre
 const {FreetalkAttachments,PACKAGE_LIMIT,xmlText}=require('../lib/freetalk-attachments'),chat=require('../lib/chat');
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64');
 function fixture(t){
- const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'hub-ft-attachments-'));t.after(()=>fs.rmSync(tmp,{recursive:true,force:true}));
- const ft=new Freetalk(new Store(path.join(tmp,'root')),path.join(tmp,'home'));assert.equal(ft.ensure().ready,true);
+ const tmp=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'hub-ft-attachments-')));t.after(()=>fs.rmSync(tmp,{recursive:true,force:true}));
+ const ft=new Freetalk(new Store(path.join(tmp,'root')),path.join(tmp,'home'));const ensured=ft.ensure();assert.equal(ensured.ready,true,ensured.reason);
  const a=ft.createTopic({ai:'codex',model:'GPT-6.1-Sol'}),b=ft.createTopic({ai:'codex',model:'GPT-6.1-Sol'});
  const h=new FreetalkHistory(ft),l=new FreetalkLifecycle(h),attachments=new FreetalkAttachments(ft);
  return {tmp,ft,a,b,h,l,attachments};
@@ -24,6 +24,29 @@ function pdf(text='') {
  let out='%PDF-1.4\n',offsets=[0];for(const [i,obj]of objects.entries()){offsets.push(Buffer.byteLength(out));out+=(i+1)+' 0 obj\n'+obj+'\nendobj\n';}
  const xref=Buffer.byteLength(out);out+='xref\n0 6\n0000000000 65535 f \n'+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n'+xref+'\n%%EOF\n';return Buffer.from(out);
 }
+test('実動画：MP4/MOV/縦型HEVC/WebMから場面と時刻を保存し、CLI画像と本文参照へ渡す',async t=>{
+ const {tmp,ft,a,b,attachments:x}=fixture(t),platform=require('../lib/platform');
+ const search=[process.env.PATH,'/opt/homebrew/bin','/usr/local/bin'].join(path.delimiter),ffmpeg=platform.findExecutable('ffmpeg',search);
+ if(!ffmpeg||!platform.findExecutable('ffprobe',search))return t.skip('ローカルffmpegなし。実動画抽出は未確認');
+ for(const [ext,codec,size] of [['mp4','libx264','128x72'],['MOV','libx265','72x128'],['webm','libvpx-vp9','128x72']]){
+  const source=path.join(tmp,'phone.'+ext);
+  execFileSync(ffmpeg,['-nostdin','-v','error','-f','lavfi','-i',`testsrc2=size=${size}:rate=8:duration=2`,'-c:v',codec,'-threads','1',...(codec==='libx265'?['-x265-params','pools=1:frame-threads=1:log-level=error']:[]),source],{stdio:'pipe',timeout:15000});
+  const before=fs.readFileSync(source),video=await x.fromPath(a.id,source,1);
+  assert.equal(video.kind,'file');assert.equal(video.media,'video');assert.equal(video.status,'partial');assert.match(video.message,/音声/);
+  assert.equal(video.frames.length,4);assert.deepEqual(x.images(a.id,[video.id]),video.imagePaths);
+  assert.equal(video.referencePaths.length,7);assert.equal(video.subtitleSheet.status,'done');assert.equal(video.imagePaths.length,5);assert.ok(video.referencePaths.includes(video.subtitleSheet.path));assert.ok(video.referencePaths.includes(video.path));assert.match(fs.readFileSync(video.referencePaths[1],'utf8'),/1.500s:/);
+  assert.equal(x.preview(a.id,video.id).type,'image/jpeg');assert.ok(x.preview(a.id,video.id).data.length>100);
+  assert.deepEqual(fs.readFileSync(source),before);assert.throws(()=>x.images(b.id,[video.id]));
+  const qe=require('../lib/queue-edit'),p={id:'freetalk',kind:'freetalk'},text=qe.format('この動画を確認',[video]);
+  const draft=qe.accept(p,a.id,{text:'この動画を確認',attachments:[{id:video.id}]},text,x);
+  assert.deepEqual(qe.draft(p,a.id,{text,attachmentDraft:draft},x),draft);assert.match(text,/frame-04.jpg/);
+ }
+ const videos=fs.readdirSync(path.join(ft.dir,'topics',a.id,'.derived')).map(id=>x.descriptor(a.id,id));
+ assert.throws(()=>x.images(a.id,[...videos.map(x=>x.id),...videos.map(x=>x.id)]),/1回20枚/);
+ const before=fs.readdirSync(path.join(ft.dir,'topics',a.id)).sort(),derived=fs.readdirSync(path.join(ft.dir,'topics',a.id,'.derived')).sort();
+ await assert.rejects(x.upload(a.id,'broken.mov',Buffer.from('invalid'),1),/読み取れません/);
+ assert.deepEqual(fs.readdirSync(path.join(ft.dir,'topics',a.id)).sort(),before);assert.deepEqual(fs.readdirSync(path.join(ft.dir,'topics',a.id,'.derived')).sort(),derived);
+});
 test('文字・画像・ネイティブ原本は話題コピーだけを参照し、別話題やリンクを配信しない',async t=>{
  const {tmp,ft,a,b,attachments:x}=fixture(t),source=path.join(tmp,'原本.txt');fs.writeFileSync(source,'元資料');
  const file=await x.fromPath(a.id,source,1);assert.equal(file.status,'ok');assert.notEqual(file.path,source);assert.equal(fs.readFileSync(file.path,'utf8'),'元資料');assert.ok(!JSON.stringify(file).includes(source));
@@ -98,4 +121,19 @@ test('プロジェクト化の候補は原本だけで派生を含めない、�
  const {ft,a,b,l,attachments:x}=fixture(t),file=await x.upload(a.id,'slides.pptx',Buffer.from('invalid'),1),other=await x.upload(b.id,'note.txt',Buffer.from('other'),1);
  assert.deepEqual(l.files(a.id).map(f=>path.join(ft.dir,f.path)),[file.path]);const r=l.clean({confirm:true});assert.equal(fs.existsSync(file.path),false);assert.equal(fs.existsSync(other.path),false);
  const moved=JSON.parse(fs.readFileSync(path.join(r.trash,'manifest.json'))).planned.find(x=>x.from===path.join(ft.dir,'topics'));assert.ok(fs.existsSync(path.join(moved.to,a.id,'.derived',file.id,'attachment.json')));
+});
+
+test('時刻付き本文を添付の正式な参照として保存し、偽の参照は採用せず取り消し時も残さない',async t=>{
+ const {ft,a}=fixture(t);
+ const x=new FreetalkAttachments(ft,{video:async(file,dir)=>{
+  const frame=path.join(dir,'frame-01.jpg'),manifest=path.join(dir,'video.txt'),transcript=path.join(dir,'transcript.txt');
+  fs.writeFileSync(frame,png);fs.writeFileSync(transcript,'[00:01] 試験の発話\n');fs.writeFileSync(manifest,'[00:01] '+frame+'\n'+transcript+'\n');
+  return {duration:2,frames:[{seconds:1,path:frame}],manifest,message:'音声を文字にしました',transcript:{status:'done',path:transcript}};
+ }});
+ const video=await x.upload(a.id,'audio.mov',Buffer.from('video fixture'),1),transcript=video.referencePaths.find(f=>f.endsWith('/transcript.txt'));
+ assert.ok(transcript);assert.equal(video.transcriptStatus,'done');assert.equal(x.descriptor(a.id,video.id).transcriptStatus,'done');
+ const qe=require('../lib/queue-edit'),p={id:'freetalk',kind:'freetalk'},text=qe.format('確認',[video]);
+ const draft=qe.accept(p,a.id,{text:'確認',attachments:[{...video,referencePaths:['/fake/transcript.txt']}]},text,x);
+ assert.ok(draft.attachments[0].referencePaths.includes(transcript));assert.ok(text.includes(transcript));assert.equal(draft.attachments[0].referencePaths.includes('/fake/transcript.txt'),false);
+ x.discard(a.id,video);assert.equal(fs.existsSync(transcript),false);assert.equal(fs.existsSync(video.path),false);
 });

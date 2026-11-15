@@ -19,6 +19,6 @@ function gitRaw(dir,args){return execFileSync('git',['--no-optional-locks','-C',
 function git(dir, args) { return execFileSync('git', ['--no-optional-locks', '-C', dir, ...args], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } }).trimEnd(); }
 function snapshot(dir) { return { head: git(dir, ['rev-parse', 'HEAD']), tree: git(dir, ['rev-parse', 'HEAD^{tree}']), dirty: git(dir, ['status', '--porcelain=v1', '--untracked-files=all']), merging: fs.existsSync(git(dir, ['rev-parse', '--absolute-git-dir']) + '/MERGE_HEAD') }; }
 function ancestor(dir, a, b) { try { git(dir, ['merge-base', '--is-ancestor', a, b]); return true; } catch (e) { if (e.status === 1) return false; throw e; } }
-function identity(dir) { const s = fs.statSync(dir); return [s.dev, s.ino]; }
+const { identity, sameIdentity } = require('./idea-directory-identity');
 function inside(base, file) { const r = path.relative(base, file); return !r.startsWith('..' + path.sep) && r !== '..' && !path.isAbsolute(r); }
-module.exports = { canonical, bytes, hash, clone, uuid, fail, check, opId, strictRead, json, git, gitRaw, snapshot, ancestor, identity, inside };
+module.exports = { canonical, bytes, hash, clone, uuid, fail, check, opId, strictRead, json, git, gitRaw, snapshot, ancestor, identity, sameIdentity, inside };

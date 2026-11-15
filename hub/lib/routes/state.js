@@ -2,7 +2,7 @@
 
 module.exports = function stateRoutes(ctx) {
   const platform = ctx.platform || process.platform;
-  const { gitw, __dirname, pruneUnread, getDiscussion, rolesData, modelView, stepSummary, chats, restartBlockers, extensions, stopControl, ROOT, HUB_INSTANCE, VERSION, readVersion, BOOT_HEAD, license, appUpdate, appShell, freetalkStatus, onboarding, aiUpdates, aiTools, updateBusy, getRestartControl, bodyNoticeState, github, accounts, store, projectOrder, taskTransfer, stateOffers, taskIntegrate, launch, handoff, baseOf, githubProject, start, workRoot, copyMissing, chat, path, expandHome, fs, resultsGate, freetalkHistory, inWork, getWebchat, getMuseDirect, sessions, modelError, roles, unread, procwatch, acceleration, remote, gpt, crypto, fromRemote, getUpdateRestoreReady, record, sendEncoded, lt } = ctx;
+  const { roleTiers, gitw, __dirname, pruneUnread, getDiscussion, rolesData, modelView, stepSummary, chats, restartBlockers, extensions, stopControl, ROOT, HUB_INSTANCE, VERSION, readVersion, BOOT_HEAD, license, appUpdate, appShell, freetalkStatus, onboarding, aiUpdates, aiTools, updateBusy, getRestartControl, bodyNoticeState, github, accounts, store, projectOrder, taskTransfer, stateOffers, taskIntegrate, launch, handoff, baseOf, githubProject, start, workRoot, copyMissing, chat, path, expandHome, fs, resultsGate, freetalkHistory, inWork, getWebchat, getMuseDirect, sessions, modelError, roles, unread, procwatch, acceleration, remote, gpt, crypto, fromRemote, getUpdateRestoreReady, record, sendEncoded, lt } = ctx;
   return {
     read: {
       matches: (req, url) => req.method === 'GET' && url.pathname === '/api/state',
@@ -22,13 +22,13 @@ module.exports = function stateRoutes(ctx) {
           // and validate current receipts before sending, starting or restarting.
           const restartWaiting = restartBlockers(handoffErrors);
           return {
-            museSupported: platform === 'darwin', extensions:extensions.state(), stopControl:stopControl.view(), root: ROOT, hubInstance: HUB_INSTANCE, roles: roleData, version: VERSION, latest: readVersion(), runtime:{version:VERSION,bootHead:BOOT_HEAD}, saved:{version:readVersion(),mainHead:null}, license: license.status(), appUpdate: appUpdate.status(), appShell: appShell.status(req.headers['user-agent']), freetalk: freetalkStatus(),
+            museSupported: platform === 'darwin', extensions:extensions.state(), stopControl:stopControl.view(), root: ROOT, hubInstance: HUB_INSTANCE, roles: roleData, ...(extensions.state().included.includes('delegate')?{roleTiers:roleTiers?.view({safe:true})}:{}), version: VERSION, latest: readVersion(), runtime:{version:VERSION,bootHead:BOOT_HEAD}, saved:{version:readVersion(),mainHead:null}, license: license.status(), appUpdate: appUpdate.status(), appShell: appShell.status(req.headers['user-agent']), freetalk: freetalkStatus(),
             ...(process.platform === 'win32' ? { windowsStorage: 'Windowsではファイル単位の書き込み確定と名前変更の完了待ちを使います。保存直後の停電では、ファイル名の変更や削除が残らない可能性があります。管理者として起動する必要はありません。' } : {}),
             onboarding: onboarding.state(),
             aiCliUpdate: { available: Object.values(aiUpdates.status().tools).some(t => t.eligible && t.installed && t.updateCheck?.ok && t.updateCheck.available === true && t.updateCheck.applicable === true), busyCount: aiTools.busy() },
             updateBlocked: Boolean(updateBusy(handoffErrors)), restart: getRestartControl().status(restartWaiting), restartBusy:restartWaiting.length>0, restartWaiting, chatHandoffErrors:handoffErrors,
             bodyNotices:bodyNoticeState(),
-            github: github.summary(), accounts: accounts.list(),
+            github: github.summary(), accounts: accounts.list(), codexModelCatalogs: aiTools.codexCatalogs(), codexHiddenModels: modelSettings.codexHidden || {},
             completionWarning: store.completion.warning, projectOrder: projectOrder.read(), projectPins: projectOrder.readPins(),
             taskHandoffs: taskTransfer.pending(),
             taskOffers: stateOffers.view(store.listProjects()), taskIntegrations: taskIntegrate.pending(),
@@ -44,7 +44,7 @@ module.exports = function stateRoutes(ctx) {
                 const queue = chats.queue(p.id, t.id);
                 const githubFolder = t.workdir && !missing ? path.join(expandHome(t.workdir), githubRemote.target || '.') : '';
                 const taskGithub = githubFolder && (githubRemote.target === '.' || fs.existsSync(path.join(githubFolder, '.git'))) ? gitw.remoteSummary(githubFolder).value : null;
-                return { ...slim(resultsGate.decorate(p,t,all,{issue:stateOffers.issue(p,t)})), discussion: (()=>{const d=discussionSessions[JSON.stringify([p.id,t.id])];return d?{id:d.id,status:d.status}:null;})(), chatQueueCount: queue.length, chatQueueHeld: queue.some(q => Boolean(q?.stopHeld)), chatQueueBlocked: queue.some(q => !q || typeof q !== 'object' || Array.isArray(q) || Boolean(q.stopHeld || q.error || q.limitWaiting)), ...(p.kind === 'freetalk' ? { freetalkHistory: (()=>{try{return freetalkHistory.status(t.id);}catch(e){return {reason:e.message};}})() } : {}), accounts: meta.accounts || {}, codexFast: meta.codexFast === true, copy: inWork(p, t) && !missing, copyMissing: missing, webchatReason: (()=>{try{getWebchat().availability(p,t,undefined,handoffErrors);return '';}catch(e){return /^(?:webchat_[a-z_]+|feature_not_included)$/.test(e.message)?e.message:'webchat_task_busy';}})(), ...(t.workdir && !missing ? { github: taskGithub } : {}) };
+                return { ...slim(resultsGate.decorate(p,t,all,{issue:stateOffers.issue(p,t)})), discussion: (()=>{const d=discussionSessions[JSON.stringify([p.id,t.id])];return d?{id:d.id,status:d.status}:null;})(), ...require('../chat-continuation').summary(p.dir,t.id), chatQueueCount: queue.length, chatQueueHeld: queue.some(q => Boolean(q?.stopHeld)), chatQueueBlocked: queue.some(q => !q || typeof q !== 'object' || Array.isArray(q) || Boolean(q.stopHeld || q.error || q.limitWaiting)), ...(p.kind === 'freetalk' ? { freetalkHistory: (()=>{try{return freetalkHistory.status(t.id);}catch(e){return {reason:e.message};}})() } : {}), accounts: meta.accounts || {}, codexFast: meta.codexFast === true, copy: inWork(p, t) && !missing, copyMissing: missing, webchatReason: (()=>{try{getWebchat().availability(p,t,undefined,handoffErrors);return '';}catch(e){return /^(?:webchat_[a-z_]+|feature_not_included)$/.test(e.message)?e.message:'webchat_task_busy';}})(), ...(t.workdir && !missing ? { github: taskGithub } : {}) };
               }) };
             }); })(store.listProjects()),
             sessions: sessions.list(), terminal: sessions.available(),

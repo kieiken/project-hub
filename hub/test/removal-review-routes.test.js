@@ -11,7 +11,7 @@ function fixture(){const project='P'+ ++count,dir=path.join(root,'Product',proje
 async function wait(pred){for(let i=0;i<300;i++){if(pred())return;await new Promise(r=>setTimeout(r,10));}assert.ok(pred(),'mock completed');}
 test.before(async()=>{
  fs.mkdirSync(path.join(root,'_hub'),{recursive:true});fs.mkdirSync(path.join(root,'Product'));fs.mkdirSync(bin);fs.mkdirSync(home);
- fs.writeFileSync(path.join(root,'_hub/roles.yaml'),'models:\n  claude-code: [Fable 5.1, Opus 5.5]\n  codex: [Astra, GPT-6.1-Sol]\nroles:\n  チェック: { main: [claude-code, Fable 5.1, 高], backup: [codex, Astra, 高] }\nswitch:\n  auto: true\n');
+ fs.writeFileSync(path.join(root,'_hub/roles.yaml'),'models:\n  claude-code: [Fable 5.2, Opus 5.5]\n  codex: [Astra, GPT-6.1-Sol]\nroles:\n  チェック: { main: [claude-code, Fable 5.2, 高], backup: [codex, Astra, 高] }\nswitch:\n  auto: true\n');
  for(const ai of ['claude','codex'])fs.writeFileSync(path.join(bin,ai),`#!${process.execPath}
 const fs=require('node:fs'),path=require('node:path');let input='';process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{
  const dir=process.cwd(),project=path.basename(dir),args=process.argv.slice(2),out=x=>console.log(JSON.stringify(x));
@@ -35,7 +35,7 @@ test.after(async()=>{
 test('HTTP review uses fixed Fable and read tools, refuses concurrent deletion/review and refreshes token before removal/restore',async()=>{
  const f=fixture(),d=await ok('/api/hierarchy/remove/preview',{project:f.project});assert.equal((await post('/api/hierarchy/remove/review/start',{token:d.token},{'X-Hub':''})).status,403);
  const r=await ok('/api/hierarchy/remove/review/start',{token:d.token});await wait(()=>fs.existsSync(path.join(tmp,f.project+'-args-claude.json')));
- const info=JSON.parse(fs.readFileSync(path.join(tmp,f.project+'-args-claude.json')));assert.equal(info.args[info.args.indexOf('--model')+1],'claude-fable-5-1');assert.equal(info.args[info.args.indexOf('--tools')+1],'Read,Glob,Grep');assert.equal(info.cwd,f.dir);assert.ok(info.args.includes(f.outside));assert.ok(info.args.includes(path.join(root,'Product')));assert.equal(info.args[info.args.indexOf('--allowedTools')+1],'Read,Glob,Grep');assert.equal(info.api,null);assert.ok(!info.args.includes('--dangerously-skip-permissions'));
+ const info=JSON.parse(fs.readFileSync(path.join(tmp,f.project+'-args-claude.json')));assert.equal(info.args[info.args.indexOf('--model')+1],'claude-fable-5-2');assert.equal(info.args[info.args.indexOf('--tools')+1],'Read,Glob,Grep');assert.equal(info.cwd,f.dir);assert.ok(info.args.includes(f.outside));assert.ok(info.args.includes(path.join(root,'Product')));assert.equal(info.args[info.args.indexOf('--allowedTools')+1],'Read,Glob,Grep');assert.equal(info.api,null);assert.ok(!info.args.includes('--dangerously-skip-permissions'));
  assert.equal((await post('/api/hierarchy/remove/apply',{token:d.token,confirm:true})).status,409);assert.equal((await post('/api/hierarchy/remove/review/start',{token:d.token})).status,409);
  assert.equal((await post('/api/chat/send',{project:f.project,task:r.task,ai:'claude',text:'modify files',model:'claude-opus-5-5'})).status,409);
  assert.equal((await ok('/api/hierarchy/remove/review/status',{project:f.project})).review.status,'running');

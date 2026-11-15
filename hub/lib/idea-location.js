@@ -8,7 +8,7 @@ function binding(dir) {
   const branchRef = U.git(realpath, ['symbolic-ref', '-q', 'HEAD']);
   return { realpath, identity: U.identity(realpath), gitCommonReal, branchRef };
 }
-function sameBinding(expected, actual) { return ['realpath','identity','gitCommonReal','branchRef'].every(k => U.hash(expected[k]) === U.hash(actual[k])); }
+function sameBinding(expected, actual) { return U.sameIdentity(expected.identity, actual.identity) && ['realpath','gitCommonReal','branchRef'].every(k => U.hash(expected[k]) === U.hash(actual[k])); }
 class IdeaLocation {
   constructor({ideas,store=ideas.store,baseOf=ideas.baseOf||(p=>p.dir),gate}={}) {Object.assign(this,{ideas,store,baseOf,gate});}
   inspect(project, task) {
@@ -24,7 +24,9 @@ class IdeaLocation {
     const lane = this.ideas.read(project).settings.lane; U.check(lane, 'lane-missing', '実行先を設定してください');
     U.check(!expectedRev || lane.bindingRev === expectedRev,'lane-changed','実行先が変更されました');
     const fresh = this.inspect(project,lane.task);
-    U.check(U.hash(fresh) === U.hash(Object.fromEntries(Object.entries(lane).filter(([k])=>k!=='bindingRev'))),'lane-binding','実行先の場所・Git・ブランチが変わっています');
+    const identitiesMatch = U.sameIdentity(lane.workdirIdentity, fresh.workdirIdentity) && sameBinding(lane.targetBinding, fresh.targetBinding);
+    const comparable = { ...fresh, workdirIdentity: lane.workdirIdentity, targetBinding: lane.targetBinding };
+    U.check(identitiesMatch && U.hash(comparable) === U.hash(Object.fromEntries(Object.entries(lane).filter(([k])=>k!=='bindingRev'))),'lane-binding','実行先の場所・Git・ブランチが変わっています');
     this.gate?.register(project,lane.workdirReal); return lane;
   }
 }

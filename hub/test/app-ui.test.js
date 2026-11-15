@@ -648,8 +648,8 @@ for (const action of ['child', 'branch']) test(`ツリーの${action === 'child'
   const a = app(), data = snapshot(), calls = [];
   const parent = data.projects[0].tasks[0];
   Object.assign(parent, { owner: 'claude-code', role: '司令塔', phase: '設計', parent: 'grandparent', model: 'Opus 5.5', effort: 'MAX' });
-  data.roles.models = { codex: ['Astra', 'GPT-6.1-Sol'], 'claude-code': ['Fable 5.1', 'Opus 5.5'] };
-  data.roles.roles = [{ name: '司令塔', main: { ai: 'claude-code', model: 'Fable 5.1', effort: '極高' }, backup: { ai: 'codex', model: 'Astra', effort: '極高' } }];
+  data.roles.models = { codex: ['Astra', 'GPT-6.1-Sol'], 'claude-code': ['Fable 5.2', 'Opus 5.5'] };
+  data.roles.roles = [{ name: '司令塔', main: { ai: 'claude-code', model: 'Fable 5.2', effort: '極高' }, backup: { ai: 'codex', model: 'Astra', effort: '極高' } }];
   data.efforts = ['中', '高', '極高', 'MAX'];
   data.initialPick = { ai: 'claude', model: 'Opus 5.5', effort: '中' };
   vm.runInContext('state = ' + JSON.stringify(data), a.context);
@@ -1547,8 +1547,8 @@ test('除外確認のキャンセルは変更せず、確定と再登録は明�
 });
 
 test('保存のない始める欄はSol・高、前回選択とローカル下書きは初期値より優先する', () => {
-  const a = app(), data = snapshot(), saved = { ai: 'claude', model: 'Fable 5.1', effort: '極高' };
-  data.roles.models = { codex: ['Astra', 'GPT-6.1-Sol'], 'claude-code': ['Fable 5.1'] };
+  const a = app(), data = snapshot(), saved = { ai: 'claude', model: 'Fable 5.2', effort: '極高' };
+  data.roles.models = { codex: ['Astra', 'GPT-6.1-Sol'], 'claude-code': ['Fable 5.2'] };
   data.efforts = ['中', '高', '極高'];
   data.hiddenModels = { codex: ['GPT-6.1-Sol'] };
   vm.runInContext('state = ' + JSON.stringify(data), a.context);
@@ -1559,12 +1559,12 @@ test('保存のない始める欄はSol・高、前回選択とローカル下�
   assert.match(html, /<option[^>]*selected>GPT-6.1-Sol<\/option>/);
   assert.match(html, /<option selected>高<\/option>/);
   const prior = a.context.quickDraft({ id: 'prior', startSpec: saved });
-  assert.equal(prior.ai, 'claude'); assert.equal(prior.model, 'Fable 5.1'); assert.equal(prior.effort, '極高');
+  assert.equal(prior.ai, 'claude'); assert.equal(prior.model, 'Fable 5.2'); assert.equal(prior.effort, '極高');
   a.context.localStorage.getItem = key => key === 'hub-start-local' ? JSON.stringify({ text: '保存した依頼', ai: 'agy', model: 'Gemini 3.1 Pro (High)', effort: '高', images: [] }) : null;
   const local = a.context.quickDraft({ id: 'local', startSpec: saved });
   assert.equal(local.ai, 'agy'); assert.equal(local.text, '保存した依頼');
   const roleTask = { ...data.projects[0].tasks[0], owner: 'claude-code', role: '司令塔' };
-  vm.runInContext('state.roles.roles = [{name:"司令塔",main:{ai:"claude-code",model:"Fable 5.1",effort:"極高"},backup:{ai:"codex",model:"Astra",effort:"極高"}}]', a.context);
+  vm.runInContext('state.roles.roles = [{name:"司令塔",main:{ai:"claude-code",model:"Fable 5.2",effort:"極高"},backup:{ai:"codex",model:"Astra",effort:"極高"}}]', a.context);
   assert.deepEqual(JSON.parse(JSON.stringify(a.context.chatPick(data.projects[0], roleTask))), saved);
   a.context.localStorage.getItem = key => key === 'hub-chat-p/t' ? JSON.stringify({ ai: 'codex', model: 'Astra', effort: '中' }) : null;
   assert.equal(a.context.chatPick(data.projects[0], roleTask).model, 'Astra');
@@ -1841,10 +1841,10 @@ test('会話の＋は送信しないファイル選択ボタンで、captureと�
   assert.match(vm.runInContext('EMPTY_CHAT',a.context), /［＋］で選ぶ/);
 });
 
-test('＋は押した時の画面幅で写真／全ファイルを選び、選択値を空にして同期的に開く', () => {
+test('＋は押した時の画面幅で写真・動画／全ファイルを選び、選択値を空にして同期的に開く', () => {
   const a = conversationApp(), input = a.element('#chat-files'); let phone = true, clicks = 0;
   a.context.matchMedia = query => { assert.equal(query, '(max-width:720px)'); return {matches:phone}; };
-  input.click = () => { clicks++; assert.equal(input.value, ''); assert.equal(input.accept, phone ? 'image/*' : ''); };
+  input.click = () => { clicks++; assert.equal(input.value, ''); assert.equal(input.accept, phone ? vm.runInContext('FREETALK_ACCEPT',a.context) : ''); };
   for (const mode of [true, false, true]) {
     phone = mode; input.value = '以前の選択'; a.element('#chat-attach').handlers.click();
   }
@@ -1987,9 +1987,9 @@ test('送信直後に入力欄を空にし、受付待ちの新しい下書き�
   a.element('#composer').handlers.submit({preventDefault(){}});
   assert.equal(a.element('#chat-in').value, '');
   assert.equal(a.element('#chat-send').disabled, true);
-  assert.equal(a.element('#chat-send').textContent, '送っています…');
+  assert.equal(a.element('#chat-send').textContent, '送信中');
   assert.equal(a.element('#chat-send-status').hidden, false);
-  assert.equal(a.element('#chat-send-status').textContent, '送信を確認しています…');
+  assert.equal(a.element('#chat-send-status').textContent, '送信前の確認・受付結果を待っています…');
   assert.equal(vm.runInContext('chatBusy', a.context), null); // HTTP acceptance is still pending.
   a.element('#chat-in').value = '次の下書き'; a.element('#chat-in').handlers.input();
   finish({queued:true,queue:1}); await new Promise(setImmediate);
@@ -2609,7 +2609,7 @@ test('質問の一括回答は選択モデルへ1回送信し、会話欄の別�
 test('稼働中の質問回答は同じ作業の順番待ちへ送り、使えないモデルなら送らない',async()=>{
   const a=app(),s=snapshot();let send,calls=0,body;
   vm.runInContext('state='+JSON.stringify(s)+';view={kind:"work",project:"p",task:"t"};chatBusy={ai:"codex"}',a.context);
-  a.context.bindAskAnswers=(_box,cb)=>{send=cb;};a.element('#chat-ai').value='claude-code|Fable 5.1';a.context.openChat(s.projects[0],s.projects[0].tasks[0]);
+  a.context.bindAskAnswers=(_box,cb)=>{send=cb;};a.element('#chat-ai').value='claude-code|Fable 5.2';a.context.openChat(s.projects[0],s.projects[0].tasks[0]);
   a.context.api=async(_r,b)=>{calls++;body=b;return {queued:true,queue:1};};
   assert.equal(await send('自由回答'),true);assert.equal(body.mode,'queue');assert.equal(body.project,'p');assert.equal(body.task,'t');
   a.element('#chat-ai').selectedOptions=[{disabled:true}];assert.equal(await send('自由回答'),false);assert.equal(calls,1);
@@ -2892,9 +2892,9 @@ test('GitHub polling updates only the status during input and preserves confirma
 
 test('初期AI設定カードの即保存・失敗戻し・入力優先・利用不可表示', async () => {
   const a = app(), data = snapshot(), calls = [], notices = [], storage = new Map();
-  data.roles.models = { codex: ['GPT-6.1-Sol'], 'claude-code': ['Fable 5.1', 'Opus 5.5'] };
+  data.roles.models = { codex: ['GPT-6.1-Sol'], 'claude-code': ['Fable 5.2', 'Opus 5.5'] };
   data.efforts = ['中', '高', '極高'];
-  data.hiddenModels = { 'claude-code': ['Fable 5.1'] };
+  data.hiddenModels = { 'claude-code': ['Fable 5.2'] };
   vm.runInContext('state = ' + JSON.stringify(data) + '; view.kind = "settings"', a.context);
   a.context.localStorage.getItem = key => storage.get(key) || null;
   a.context.localStorage.setItem = (key, value) => storage.set(key, value);
@@ -2961,7 +2961,7 @@ test('子プロジェクトに分けて始める入口も共通の初期AIを使
 
 test('スマホAI一覧は指定の短い名前、PCは従来名、表示名変更は選択/役割を保持', () => {
   const a = app(), s = snapshot();
-  s.roles.models = { 'claude-code': ['Opus 5.5', 'Fable 5.1'], codex: ['GPT-6.1-Sol', 'GPT-6-Astra'], agy: ['Gemini 3.1 Pro (High)'] };
+  s.roles.models = { 'claude-code': ['Opus 5.5', 'Fable 5.2'], codex: ['GPT-6.1-Sol', 'GPT-6-Astra'], agy: ['Gemini 3.1 Pro (High)'] };
   s.projects[0].tasks[0].model = 'GPT-6.1-Sol'; s.agyAvailable = true;
   vm.runInContext('state=' + JSON.stringify(s), a.context);
   a.context.matchMedia = () => ({ matches: true });
@@ -3192,6 +3192,48 @@ test('通知refreshTree先行と304/null後も表示名を同期し、blur後も
   a.context.matchMedia = () => ({ matches: false }); await a.context.pollState(); assert.equal(option.textContent, 'Codex・GPT-6.1-Sol');
 });
 
+test('Codexアカウント別の候補は定期取得と304後も同期し、入力中の会話を保持する', async () => {
+  const a = app(), s = snapshot();
+  s.roles.models.codex = ['GPT-6.1-Sol', 'GPT-6-Luna'];
+  s.cliFlags.codex = { 'GPT-6.1-Sol': 'gpt-6.1-sol', 'GPT-6-Luna': 'gpt-6-luna' };
+  s.accounts = [{ ai: 'codex', id: 'default', name: '既定' }, { ai: 'codex', id: 'spare', name: '予備用' }];
+  s.codexModelCatalogs = { default: { models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' }], source: 'fixture' }, spare: { models: [{ id: 'gpt-6-luna', label: 'GPT-6-Luna' }], source: 'fixture' } };
+  s.codexHiddenModels = {};
+  s.projects[0].tasks[0].model = 'GPT-6.1-Sol';
+  vm.runInContext('state=' + JSON.stringify(s) + ';view={kind:"work",project:"p",task:"t"};renderedMainKey=mainKey()', a.context);
+  const select = a.element('#chat-ai'), input = a.element('#chat-in');
+  input.value = '入力中の本文'; input.tagName = 'TEXTAREA'; a.document.activeElement = input;
+  let renders = 0; a.context.render = () => { renders++; }; a.context.renderTree = () => {};
+  const next = JSON.parse(JSON.stringify(s)); next.projects[0].tasks[0].accounts = { codex: 'spare' };
+  a.context.fetchState = async () => next;
+  await a.context.pollState();
+  assert.match(select.innerHTML, /value="codex\|GPT-6\.1-Sol"[^>]*selected disabled/);
+  assert.match(select.innerHTML, /value="codex\|GPT-6-Luna"/);
+  // 全体の候補は同じでも、アカウント別の非表示だけが変わる。
+  const hidden = JSON.parse(JSON.stringify(next)); hidden.codexHiddenModels.spare = ['GPT-6-Luna'];
+  a.context.fetchState = async () => hidden; await a.context.pollState();
+  assert.doesNotMatch(select.innerHTML, /value="codex\|GPT-6-Luna"/);
+  a.context.fetchState = async () => null; await a.context.pollState();
+  assert.doesNotMatch(select.innerHTML, /value="codex\|GPT-6-Luna"/);
+  assert.equal(input.value, '入力中の本文'); assert.equal(a.element('#chat-in'), input); assert.equal(renders, 0);
+});
+
+test('Codexのアカウント別表示設定だけの定期更新も設定のチェックへ反映する', async () => {
+  const a = app(), s = snapshot();
+  s.roles.models.codex = ['GPT-6.1-Sol']; s.cliFlags.codex = { 'GPT-6.1-Sol': 'gpt-6.1-sol' };
+  s.accounts = [{ ai: 'codex', id: 'default', name: '既定' }];
+  s.codexModelCatalogs = { default: { models: [{ id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' }], source: 'fixture' } };
+  s.codexHiddenModels = {};
+  vm.runInContext('state=' + JSON.stringify(s) + ';view={kind:"settings",project:"p"};accountAutoChecked=true', a.context);
+  a.context.drawModelOrder();
+  assert.match(a.element('#model-order-list').innerHTML, /data-mv="GPT-6\.1-Sol" checked/);
+  const next = JSON.parse(JSON.stringify(s)); next.codexHiddenModels.default = ['GPT-6.1-Sol'];
+  a.context.fetchState = async () => next; a.context.renderTree = () => {};
+  await a.context.pollState();
+  assert.doesNotMatch(a.element('#model-order-list').innerHTML, /data-mv="GPT-6\.1-Sol" checked/);
+  assert.match(a.element('#model-order-list').innerHTML, /data-mv="GPT-6\.1-Sol"/);
+});
+
 test('役割AIは追加アカウントを含むログイン状態で制限し、Geminiのモデル選択とChatGPT行を表示する', () => {
   const a = app(), data = snapshot(); data.agyAvailable = true;
   data.roles.models = {codex:['GPT-6.1-Sol'], 'claude-code':['Opus 5.5'], agy:['Gemini 3.1 Pro (High)']};
@@ -3267,7 +3309,7 @@ for (const failure of ['HTTP 503', '通信拒否']) test(`アカウント確認�
   assert.match(a.element('#ai-accounts').innerHTML,/data-account-action="status" disabled/);
   reject(Error(failure)); await pending;
   assert.doesNotMatch(a.element('#ai-accounts').innerHTML,/data-account-action="status" disabled/);
-  assert.match(a.element('#ai-accounts').innerHTML,/data-account-action="login" disabled/); // busyは保持
+  assert.match(a.element('#ai-accounts').innerHTML,/data-account-action="login" data-account-held="true"/); // busyは保持し、クリックで理由を表示
   assert.equal(a.element('#account-message').textContent,failure);
   a.context.api=async()=>({accounts:data.accounts});
   await a.context.operateAccount(button);
@@ -4088,6 +4130,7 @@ test('auth button resumes existing Terminal without changing cached auth or star
   vm.runInContext('state='+JSON.stringify(data)+';accountStatusRows=state.accounts;view={kind:"settings"}',a.context);
   const calls=[]; a.context.api=async (route,body)=>{
     if(route === '/api/chatgpt') return {work:false};
+    if(route === '/api/jev') return {supported:false}; // unrelated settings read
     calls.push({route,body}); return {existingTerminal:true,warning:'Terminal focused'};
   };
   a.context.confirm=()=>{throw Error('focus does not log out');};
@@ -4136,11 +4179,11 @@ test('省スペース：通常会話とfreetalkの設定を直接使え、AI別�
 
 test('queue model draft is local, survives redraw, blocks unsaved start and saves only selected instruction',async()=>{
  const a=queuedUI();a.queue([queuedItem]);await a.click({qedit:'q1'});
- const el=a.element('#chat-queue');el.handlers.change({target:{dataset:{queueModel:'q1'},value:'claude|Fable 5.1'}});
- a.queue([queuedItem,{...queuedItem,id:'q2',text:'other'}]);assert.match(el.innerHTML,/data-queue-model/);assert.match(el.innerHTML,/value="claude\|Fable 5.1"[^>]*selected/);
- let request;a.context.api=async(route,body)=>{request={route,body};return {queue:[{...queuedItem,ai:'claude',model:'Fable 5.1'}]};};
+ const el=a.element('#chat-queue');el.handlers.change({target:{dataset:{queueModel:'q1'},value:'claude|Fable 5.2'}});
+ a.queue([queuedItem,{...queuedItem,id:'q2',text:'other'}]);assert.match(el.innerHTML,/data-queue-model/);assert.match(el.innerHTML,/value="claude\|Fable 5.2"[^>]*selected/);
+ let request;a.context.api=async(route,body)=>{request={route,body};return {queue:[{...queuedItem,ai:'claude',model:'Fable 5.2'}]};};
  await a.click({run:'q1'});assert.equal(request,undefined);assert.match(a.lastToast,/保存してから/);
- await a.click({qsave:'q1'});assert.equal(request.body.ai,'claude');assert.equal(request.body.model,'Fable 5.1');assert.equal(request.body.expectedItem,JSON.stringify(queuedItem));assert.equal(a.element('#chat-in').value,'composer draft');
+ await a.click({qsave:'q1'});assert.equal(request.body.ai,'claude');assert.equal(request.body.model,'Fable 5.2');assert.equal(request.body.expectedItem,JSON.stringify(queuedItem));assert.equal(a.element('#chat-in').value,'composer draft');
 });
 
 test('queue image viewer deletes only selected reference on save; Back and stale save preserve source and draft',async()=>{
@@ -4314,4 +4357,18 @@ test('通知：返事待ちの一括解除は成果確認の状態・質問・�
  await a.context.appWorkCallback693()({target:{closest:s=>s==='#turn-answer-all'?{}:null}});
  assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/task');assert.equal(calls[0].body.task,'ask');
  assert.equal(vm.runInContext('JSON.stringify(state.projects[0].tasks[1])',a.context),before);
+});
+
+test('video upload progress stays task-scoped, allows another composer and clears after failure',async()=>{
+ const a=conversationApp();let reject;const pending=new Promise((resolve,no)=>reject=no);
+ a.context.api=()=>pending;
+ const upload=a.context.addTaskAttachment('p','t','/tmp/video.mov',true);
+ assert.match(a.element('#chat-image-state').textContent,/通常数分、環境により最大30分/);assert.equal(a.element('#chat-image-state').hidden,false);
+ const other=a.context.chatHtml({id:'p'}, {id:'other',owner:'codex'});assert.doesNotMatch(other,/role="status"[^>]*>動画を準備中/);
+ reject(Error('fixture failure'));await assert.rejects(upload,/fixture failure/);
+ assert.equal(a.element('#chat-image-state').hidden,true);assert.doesNotMatch(a.element('#chat-image-state').textContent,/最大30分/);
+});
+
+test('disclosures: Token acknowledgement actions preserve opened tables while unrelated actions still close them',()=>{
+ const a=disclosureUI(),fold=a.fold();for(const action of ['[data-token-ack]','[data-token-ack-all]']){a.fire('click',{target:{closest:selector=>selector.includes(action)?{}:null}});assert.equal(fold.open,true);}a.fire('click',{target:{}});assert.equal(fold.open,false);
 });
