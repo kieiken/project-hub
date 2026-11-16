@@ -401,6 +401,7 @@ webchat = extensions.create('webchat', { root: ROOT, gpt, store, chat, admit:act
       try { store.updateTask(p.id,t.id,{state:'返事待ち',question:row.asks.map(a=>a.question).filter(Boolean).join(' / ').slice(0,300)}); }
       catch(e) { record('webchat-metadata-error',{project:p.id,task:t.id},{error:e.message}); }
     }
+    require('./lib/task-wait').ended(store,{project:p.id,task:t.id},row,{queued:chats.queue(p.id,t.id).length>0});
   }, changed: () => {
   for (const j of webchat?.jobs || []) for (const task of new Set([j.task, j.parent].filter(Boolean))) chats.emit(j.project, task, { type: 'webchat' });
 } });
@@ -716,7 +717,7 @@ function modelPolicy(p, t, where = 'chat', projects) {
   const credits = instructions.creditRule(d);
   const paidModelRule = credits ? modelRule.replace(lt('従量課金・認証変更はしない。'), lt('購入・自動チャージ・APIキー課金・認証変更は禁止。')) : modelRule;
   const paidPolicy = credits ? limitPolicy.replace(lt('追加課金・API従量課金は使わない。'), lt('購入・自動チャージ・APIキー課金は禁止。')) : limitPolicy;
-  return `${paidModelRule}\n${paidPolicy}${credits ? '\n' + credits : ''}\n${instructions.delegateUltraRule(d)}\n${instructions.WORKFLOW_RULE}${p.kind === 'freetalk' || where === 'terminal' ? '\n' + instructions.SEND_TEXT_RULE + '\n' + instructions.PATH_RULE : ''}\n${delegateRule(p, t)}\n\n${p.kind === 'freetalk' ? '自由対話の会話画面。新しい話題は人が［新しい話題］から作る。手順・完了・統合・取り込みの操作はありません。' : guidance(p, resultsGate.decorate(p,t,projects || store.listProjects()), { where, projects: projects || (t.kind === 'derived' && t.derivedFrom?.includes('/') && !t.derivedFrom.startsWith(p.id + '/') ? store.listProjects() : [p]), copy: inWork(p, t) && !copyMissing(p, t), copyMissing: copyMissing(p, t) })}`;
+  return `${paidModelRule}\n${paidPolicy}${credits ? '\n' + credits : ''}\n${instructions.delegateUltraRule(d)}\n${instructions.WORKFLOW_RULE}${p.kind === 'freetalk' || where === 'terminal' ? '\n' + instructions.SEND_TEXT_RULE + '\n' + instructions.PATH_RULE + '\n' + instructions.WAIT_RULE : ''}\n${delegateRule(p, t)}\n\n${p.kind === 'freetalk' ? '自由対話の会話画面。新しい話題は人が［新しい話題］から作る。手順・完了・統合・取り込みの操作はありません。' : guidance(p, resultsGate.decorate(p,t,projects || store.listProjects()), { where, projects: projects || (t.kind === 'derived' && t.derivedFrom?.includes('/') && !t.derivedFrom.startsWith(p.id + '/') ? store.listProjects() : [p]), copy: inWork(p, t) && !copyMissing(p, t), copyMissing: copyMissing(p, t) })}`;
 }
 
 function taskPrompt(p, t, file, dir, where = 'chat', startup, { readIndex = true } = {}) {

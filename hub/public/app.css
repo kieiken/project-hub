@@ -1277,3 +1277,10 @@ label.pref-row{cursor:pointer}
 .tier-slot{display:grid;grid-template-columns:minmax(92px,1fr) minmax(0,3fr) minmax(72px,1fr);gap:8px;margin:14px 0;max-width:660px}
 .tier-slot > span{grid-column:1/-1}
 .tier-slot select{min-width:0;width:100%;max-width:100%}
+
+/* A finished turn waiting for a person, time, or external process. */
+.s-処理待ち,.waiting-process,.notice-wait{color:#6d3aa8;background:#f2eafa;border-color:#c9afe2}
+[data-theme="dark"] .s-処理待ち,[data-theme="dark"] .waiting-process,[data-theme="dark"] .notice-wait{color:#d9b6ff;background:#342343;border-color:#795393}
+.work-wait{flex:none;min-width:0;padding:10px 14px;border:1px solid;border-radius:8px;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere}
+.work-wait[hidden]{display:none}.wait-detail{overflow-wrap:anywhere}
+.sdot.process-wait{background:#9756c5;box-shadow:0 0 0 3px #f2eafa}.turn-tabs button[data-turn-tab="wait"]{color:#6d3aa8}.turn-tabs [data-turn-tab="wait"].on{background:#f2eafa}

@@ -17,7 +17,7 @@ function fixture(){
   blur(){doc.activeElement=null;}
  }
  const elements=new Map();const el=s=>{if(!elements.has(s))elements.set(s,new Element());return elements.get(s);};
- const work=el('.work'),chat=el('.chat'),composer=el('#composer');work.appendChild(el('.whead'));work.appendChild(chat);work.appendChild(el('.wfoot'));chat.appendChild(composer);composer.appendChild(el('#chat-in'));el('#chat-images').hidden=true;
+ const work=el('.work'),chat=el('.chat'),composer=el('#composer');work.appendChild(el('.whead'));work.appendChild(chat);work.appendChild(el('.wfoot'));chat.appendChild(composer);composer.appendChild(el('#chat-in'));el('#chat-images').hidden=true;el('[data-work-wait]').hidden=true;
  const values=new Map(),media={matches:true,addEventListener(n,cb){this[n]=cb;}},vv={scale:1,height:700,offsetTop:0,addEventListener(n,cb){this[n]=cb;}};
  const properties={},doc={querySelector(s){if(s==='#mobile-work-info'||s==='#mobile-compose')return [...elements.values()].flatMap(e=>e.children).find(e=>e.id===s.slice(1))||null;if(s==='.working'||s==='.whead .s-実行中')return null;return el(s);},createElement(){return new Element();},body:new Element(),documentElement:{style:{setProperty(n,v){properties[n]=v;}}}};
  const scrollCalls=[],frames=[];
@@ -115,4 +115,10 @@ test('Width change replaces only model option text, retaining select/input/attac
  a.media.matches=true;a.media.change();assert.equal(option.textContent,'6.1-Sol');
  assert.equal(a.el('#chat-ai'),select);assert.equal(select.value,option.value);assert.equal(a.el('#chat-in'),input);assert.equal(input.value,'書きかけ');assert.equal(a.el('#chat-images').hidden,false);assert.equal(a.el('#chat-effort').value,'極高');
  option.dataset.short='Codex・GPT-6.1-Sol';a.api.labels();assert.equal(option.textContent,'Codex・GPT-6.1-Sol');
+});
+
+test('Processing wait stays visible in the mobile title and clears when the banner is hidden',()=>{
+ const a=fixture();a.el('.whead h2').textContent='待つ作業';a.api.mount('p/t');
+ a.el('[data-work-wait]').hidden=false;a.api.badges();assert.equal(a.el('#mobile-badges').textContent,'待つ作業・処理待ち');
+ a.el('[data-work-wait]').hidden=true;a.api.badges();assert.equal(a.el('#mobile-badges').textContent,'待つ作業');
 });

@@ -80,6 +80,20 @@ async function fixture(t, saved = null, locale = 'ja', blocked = false) {
   return { page, errors, requests };
 }
 const options = { skip: !chromium || !chrome };
+test('update polling keeps the overview and details aligned with verified packaged versions', options, async t => {
+  const { page, errors } = await fixture(t);
+  for (const [latest, expected] of [['', '更新状態は未確認です。'], ['4.126.98', '新しい版のお知らせはありません。'], ['4.126.97', '新しい版のお知らせはありません。'], ['4.126.99', '新しい版があります。']]) {
+    await page.evaluate(latest => {
+      state.latest = '9.0.0'; state.version = '4.126.98';
+      appUpdateData = { mode: 'packaged', supported: true, currentVersion: '4.126.98', latestVersion: latest, phase: 'idle' };
+      appUpdateRender(document.querySelector('#app-update-box'), appUpdateData);
+    }, latest);
+    const overview = await page.locator('#settings-layout-panel-manage [data-layout-status]').textContent();
+    assert.ok(overview.includes(expected), overview);
+    assert.ok((await page.locator('#app-update-box').textContent()).includes(expected));
+  }
+  assert.deepEqual(errors, []);
+});
 for (const saved of [null, '0', '1']) {
   test('settings always opens the fixed layout with legacy flag ' + String(saved), options, async t => {
     const { page, errors } = await fixture(t, saved);

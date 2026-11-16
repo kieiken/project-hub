@@ -8,6 +8,7 @@ const { ARTIFACT_POLICY } = require('./artifact-policy');
 const START = '\n<fixed_rules>\n', END = '\n</fixed_rules>\n';
 const SEND_TEXT_RULE = lt('人が他のAI・アプリ・会話へ送る文は、本文だけを独立した ```text 枠に入れ、送り先と「枠内を全部コピーして送る」は枠外に書く。引用記号・説明を枠に入れず、送り先・送信ごとに枠を分ける。');
 const PATH_RULE = lt("【場所の伝え方】フォルダ・ファイルの場所は省略しない絶対パスで書く（Mac は /Users/ から、Windows は C:\\ など実際のドライブから）。~ や「…」で略さない。1つの場所を独立した1つの ```text 枠に入れ、枠内には場所だけを書く。枠外に貼り先を一言添える（Finder やアプリの「開く」画面用／ブラウザのアドレス欄用／ターミナル用など）。file:// はブラウザのアドレス欄用に限る。フォルダを選ぶ画面用はファイル名を付けずフォルダまでにする。出す前に実在を確かめ、確かめられない時はそう書く。");
+const WAIT_RULE = lt("【処理待ちの時は番を終える】\n決まった時刻の自動処理・外部の処理・人の操作など、待つしかない状態になったら、作業中のまま待たない。そこまでの結果を記録して番を終える。同じ番の中で時刻が来るのを待ったり、繰り返し様子を見たりしない。\n番を終える時の報告には、①済んだこと ②何を待っているか（いつ・何が動くか）③待っている間もほかの作業を頼めること ④結果の確かめ方 を書く。作業ファイルの手順は済んだ行だけ[x]にし、待ちの行は未完のまま残す。待ちが終わった後の確認は、人の連絡を受けてから行う。\n待つだけで番を終える時は、返事の最後に、独立した行で [[待ち]]、次の行に待つ内容（いつ・何が動くか）、最後の行に [[/待ち]] を書く（本文は500字以内、コード枠や引用の中に入れない）。この印は自動再開の予約ではなく状態表示だけで、質問や順番待ちがある時はそちらを優先する。");
 const WORKFLOW_RULE = lt('【役割呼び出しと検証】役割分担は担当先の指定であり、全役割を毎回呼ぶ指定ではない。相談・アイデア・短い説明・軽微な修正は現在の担当が必要箇所を確認する。軽微かどうかは行数ではなく、既存の動作・権限・データ構造・外部連携を変えず影響範囲が明確かで判断する。関連変更はまとめて実施し、依頼された一連の変更が揃い確認できる時点で必要な検証を行う。チェック担当を呼ぶのは、軽微でない変更を含む時・影響の大きい操作の前・人が求めた時だけ。該当する場合は独立確認を一回行う。指示一通・返信一回を自動の区切りにしない。再確認は変更箇所と影響範囲だけ。共通部への影響・新しい不具合など根拠がある時だけ範囲を広げる。新しい変更・問題がなければ繰り返さず、チェック後に変更がなければ最終確認も兼ねる。チェック後に変更がなければ、本体反映・公開の前に再チェックしない。人の承認が要る操作の承認は残す。読み取り・診断だけの手順や確認済み操作のやり直しにはチェックを挟まず、書き込む中身・公開する中身・対象が変わる時だけチェックする。チェック後の修正が軽微なら、修正担当の自己確認で終え、チェック担当を再び呼ばない。ただし、影響の大きい操作の個別確認や人が求めた再確認は行う。公開・認証・金銭・データ削除など影響の大きい操作の個別確認は維持する。原因と次の手が実質1つに決まり既存の承認の範囲で行える時は、説明だけで番を終えず、修正・検証・保存・記録や必要な委任まで進める。止めて人に確かめるのは、結果が変わる選択肢が複数ある時・公開/push/本体反映/削除/認証/金銭の承認が要る時・他の作業中の変更を上書きする恐れがある時・前提を確かめられない時だけで、その前に進められる部分は済ませる。');
 const SHORT_WORKFLOW_RULE = lt('【役割呼び出しと検証】役割は担当先の指定で毎回全員を呼ばない。軽微（既存の動作・権限・データ構造・外部連携を変えず影響が明確）なら自己確認。軽微でない変更・影響の大きい操作の前・人の依頼時だけ一回チェック。変更・問題がなければ繰り返さず最終確認も兼ねる。詳細は全文 ## モデルと上限。\n原因と次の手が一つで承認内なら修正・検証・保存・記録・必要な委任まで進める。選択肢・前提不明・他の変更の上書き・公開/push/本体反映/削除/認証/金銭の承認時だけ止める。');
 const MUSE_RULE = lt('【Muse】会話準備→同作業画面で本人承認→正式キュー。承認・決定API禁止。docs/metamuse.md通り、台帳/.ai/muse-approvals/<id>.jsonへ全文/期限/回数/同作業の続き（role/text）を保存。番号/確認番号/場所の手入力・承認後の再依頼禁止。ローカル整理は承認不要。');
@@ -37,7 +38,7 @@ function delegateUltraRule(data) {
 }
 function packet({ pdir, task, project, policy, issues, common, dynamic = '', contextRule, askRule, reportRule, port, roleData, freetalk = false }) {
   // 全文・固定指示に同じ方針を一回ずつ置き、モデル・上限の分割に混ぜない。
-  policy = policy.replace(SEND_TEXT_RULE + '\n', '').replace(PATH_RULE + '\n', '');
+  policy = policy.replace(SEND_TEXT_RULE + '\n', '').replace(PATH_RULE + '\n', '').replace(WAIT_RULE + '\n', '');
   policy = policy.replace(WORKFLOW_RULE + '\n', '');
   policy = policy.replace(delegateUltraRule(roleData) + '\n', '');
   const at = policy.indexOf(lt('【人への操作案内の決まり】'));
@@ -49,7 +50,7 @@ function packet({ pdir, task, project, policy, issues, common, dynamic = '', con
   const delegateAt = models.indexOf(lt('【別の AI'));
   const modelPart = models.slice(0, delegateAt < 0 ? models.length : delegateAt);
   const delegate = delegateAt < 0 ? '' : models.slice(delegateAt);
-  const full = [ARTIFACT_POLICY, lt('## 本文量'), TEXT_RULE, lt('## 人がコピーする文と場所'), SEND_TEXT_RULE, PATH_RULE, lt('## モデルと上限'), modelPart, WORKFLOW_RULE, lt('## 委任'), delegate, delegateUltraRule(roleData), DIFFERENCE, templates(roleData), tierInstructions.full(roleData), lt('## Muse'), MUSE_RULE, lt('## 問題点'), issues, lt('## 操作案内'), fixedGuidance, lt('## 長い会話'), contextRule, lt('## 質問'), askRule, reportRule].filter(Boolean).join('\n\n');
+  const full = [ARTIFACT_POLICY, lt('## 本文量'), TEXT_RULE, lt('## 人がコピーする文と場所'), SEND_TEXT_RULE, PATH_RULE, WAIT_RULE, lt('## モデルと上限'), modelPart, WORKFLOW_RULE, lt('## 委任'), delegate, delegateUltraRule(roleData), DIFFERENCE, templates(roleData), tierInstructions.full(roleData), lt('## Muse'), MUSE_RULE, lt('## 問題点'), issues, lt('## 操作案内'), fixedGuidance, lt('## 長い会話'), contextRule, lt('## 質問'), askRule, reportRule].filter(Boolean).join('\n\n');
   const file = path.join(pdir, '.ai', 'chat', `${task}.rules.md`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   let old; try { old = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -75,7 +76,7 @@ function packet({ pdir, task, project, policy, issues, common, dynamic = '', con
     !freetalk && lt('成果は作業ファイルの ## 成果 に書く。ZIPは配布時だけ。共通優先。全文 ## 成果と保管。'),
     !freetalk && lt('【操作案内】画面未確認。AI終了後、名前/［ボタン名］/場所で条件付き案内。委任がターミナル稼働で断られた時だけ対象AI欄［停止］を頼む。'),
     !freetalk && lt('issues変更：全文 ## 問題点・同PJ要約更新。'),
-    SEND_TEXT_RULE, PATH_RULE,
+    SEND_TEXT_RULE, PATH_RULE, WAIT_RULE,
     lt('【Muse】使う時は全文 ## Muse と docs/metamuse.md に従う。本人承認は同作業の画面で。承認・決定API禁止。'),
     common,
   ].filter(Boolean).join('\n');
@@ -94,7 +95,7 @@ function select(prompt, { meta, ai, sid, resume, restore = false }) {
   if (!part) return { prefix: prompt };
   const sent = meta.rulesSent?.[ai];
   const short = resume && sent?.sid === sid && sent.hash === part.hash && sent.turns < 4 && !sent.restore && !restore;
-  const fixed = short ? lt`【決まり】前回と同じ（版 ${part.hash}）。全文：${part.file}。思い出せない時はその全文を読む。` + '\n' + SEND_TEXT_RULE + '\n' + PATH_RULE : part.fixed;
+  const fixed = short ? lt`【決まり】前回と同じ（版 ${part.hash}）。全文：${part.file}。思い出せない時はその全文を読む。` + '\n' + SEND_TEXT_RULE + '\n' + PATH_RULE + '\n' + WAIT_RULE : part.fixed;
   return { prefix: [fixed, part.dynamic].filter(Boolean).join('\n\n'), rules: { hash: part.hash, sid, turns: short ? sent.turns + 1 : 1, restore: false }, fixed, short };
 }
-module.exports = { packet, select, split, SEND_TEXT_RULE, PATH_RULE, WORKFLOW_RULE, DIFFERENCE, TEMPLATES, templates, creditRule, delegateUltraRule };
+module.exports = { packet, select, split, SEND_TEXT_RULE, PATH_RULE, WAIT_RULE, WORKFLOW_RULE, DIFFERENCE, TEMPLATES, templates, creditRule, delegateUltraRule };

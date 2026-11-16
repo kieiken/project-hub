@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const TRUST = require('./update-trust');
-const DAY = 86400000, HOUR = 3600000, MAX_ASSET = 256 * 1024 * 1024;
+const DAY = 86400000, MINUTE = 60000, MAX_ASSET = 256 * 1024 * 1024;
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA = /^[a-f0-9]{64}$/;
 const REASONS = {
@@ -233,8 +233,9 @@ class PackagedUpdate {
     return { mode: this.mode, unsupportedReason: this.stateError ? 'state' : this.reason(), supported: this.supported(), enabled: this.enabled,
       currentVersion: this.currentVersion, sourceVersion: this.currentVersion, latestVersion: m?.version || '', latestKind: m?.kind || '', notes: m?.notes?.ja || '',
       phase: this.data.phase || 'idle', pending: Boolean(this.data.prepared || p), eligibility: this.data.eligibility || '',
-      reason: this.reason() ? REASONS[this.reason()] : this.data.reason || '', error: this.stateError ? '更新の保存場所を確認できません' : this.data.error || '',
-      lastCheck: this.data.lastCheck || null, nextCheck: this.data.retryAfter ? new Date(this.data.retryAfter).toISOString() : null,
+      reason: this.reason() ? REASONS[this.reason()] : !m && this.data.eligibility === 'up-to-date' ? '更新状態は未確認です。手動で更新を確認してください。' : this.data.reason || '', error: this.stateError ? '更新の保存場所を確認できません' : this.data.error || '',
+      lastCheck: this.data.lastCheck || null, nextCheck: this.nextCheckTime() ? new Date(this.nextCheckTime()).toISOString() : null,
+      ...this.manualCheckStatus(),
       rejected: this.data.rejected || null, previousVersion: this.data.previousVersion || '', restartNeeded: this.restartNeeded,
       autoTranslate: false, publishEnabled: false, upstream: this.trust.feedUrl || '', appPath: this.appPath };
   }
@@ -255,10 +256,34 @@ class PackagedUpdate {
     writeJSON(this.settingsFile, { enabled }, this.root); this.enabled = enabled;
     if (enabled && !this.dry) this.tick(); return this.status();
   }
-  due(manual = false) {
-    if (this.data.retryAfter > this.now()) return false;
-    const last = Date.parse(this.data.lastCheck || ''); return !Number.isFinite(last) || this.now() - last >= (manual ? HOUR : DAY);
+  nextCheckTime(manual = false) {
+    const last = Date.parse((manual ? this.data.lastManualCheck : this.data.lastCheck) || '');
+    // Older journals used retryAfter for both normal cadence and failure backoff.
+    // Only a completed, error-free legacy check can shorten that old deadline.
+    const interval = !this.data.error && !['failed', 'error', 'rolled-back'].includes(this.data.phase) &&
+      (this.data.retryAfterKind === 'interval' || (!this.data.retryAfterKind && ['idle', 'ready', 'deferred'].includes(this.data.phase)));
+    // Automatic checks do not consume the manual click cooldown. Legacy journals
+    // without lastManualCheck allow the first click immediately after success.
+    return Math.max(Number.isFinite(last) ? last + (manual ? MINUTE : DAY) : 0, interval ? 0 : Number(this.data.retryAfter) || 0);
   }
+  due(manual = false) { return this.now() >= this.nextCheckTime(manual); }
+  manualCheckProcessing(includeRunning = true) {
+    return Boolean(includeRunning && this.running) || ['checking', 'downloading', 'preparing', 'verifying', 'installing', 'confirming'].includes(this.data.phase);
+  }
+  manualCheckStatus(includeRunning = true) {
+    const processing = this.manualCheckProcessing(includeRunning), next = this.nextCheckTime(true);
+    return { nextManualCheck: !processing && next ? new Date(next).toISOString() : null,
+      manualCheckBlockedReason: processing || !this.due(true) ? this.manualWaitReason(includeRunning) : '' };
+  }
+  manualWaitReason(includeRunning = true) {
+    if (this.manualCheckProcessing(includeRunning)) return '更新の処理中です。終わるまで手動確認はできません。';
+    if (this.data.error || ['failed', 'error', 'rolled-back'].includes(this.data.phase)) return '前回の更新を確認できなかったため、24時間の再確認待ちです。';
+    const last = Date.parse(this.data.lastManualCheck || '');
+    return this.nextCheckTime(true) > (Number.isFinite(last) ? last + MINUTE : 0)
+      ? '次に手動確認できる時刻まで待っています。'
+      : '連続した確認を防ぐため、前回の手動確認から60秒は再確認できません。';
+  }
+  skippedCheck(reason, includeRunning = true) { return { ...this.status(), ...this.manualCheckStatus(includeRunning), checkPerformed: false, checkSkippedReason: reason }; }
   start() {
     if (!this.supported() || this.dry || this.timer) return;
     void this.lock(() => this.recover()).then(() => this.tick()).catch(() => {});
@@ -271,11 +296,15 @@ class PackagedUpdate {
     else if (this.due()) void this.check(false).catch(() => {});
   }
   async check(manual = true) {
-    if (!this.supported() || this.dry || this.running || this.data.pendingConfirm) return this.status();
+    if (!this.supported() || this.dry) return this.skippedCheck('このインストールでは更新を確認できません。');
+    if (this.running) return this.skippedCheck('更新の処理中のため、重ねて確認しません。');
+    if (this.data.pendingConfirm) return this.skippedCheck('新版の適用・開き直し後の確認を待っています。');
     return this.lock(async () => {
-      await this.recover(); if (!this.due(manual)) return this.status();
-      if (this.data.prepared) { if (this.enabled) await this.install(); return this.status(); }
-      this.phase('checking', { lastCheck: new Date(this.now()).toISOString(), error: '', reason: '', retryAfter: this.now() + (manual ? HOUR : DAY) });
+      // Report a completed/cached result without mistaking its still-held lock for work in progress.
+      await this.recover(); if (!this.due(manual)) return this.skippedCheck(manual ? this.manualWaitReason(false) : '次の自動確認時刻まで待っています。', false);
+      if (this.data.prepared) { if (this.enabled) await this.install(); return this.skippedCheck('準備済みの更新があるため、配信元への再確認はしていません。'); }
+      // An interrupted attempt also retains the conservative failure deadline.
+      this.phase('checking', { lastCheck: new Date(this.now()).toISOString(), ...(manual ? { lastManualCheck: new Date(this.now()).toISOString() } : {}), error: '', reason: '', retryAfter: this.now() + DAY, retryAfterKind: 'failure' });
       let m;
       try {
         const raw = await this.receive(this.trust.feedUrl, { limit: 65536, timeout: 15000 });
@@ -288,20 +317,25 @@ class PackagedUpdate {
           // The signed release is unchanged, but entitlement or runtime
           // requirements may now be satisfied. Re-evaluate before preparing.
         }
-        if (!newer(m.version, this.currentVersion)) { this.phase('idle', { eligibility: 'up-to-date', reason: '最新版を使用しています' }); return this.status(); }
         this.data.maxSeq = m.seq; this.data.manifest = m; this.data.envelope = envelope;
-        this.data.eligibility = compatible(m, { platform: this.platform, arch: this.arch, macOS: await this.macOS(), node: this.node }) ? eligibility(m, this.license?.status(), this.license?.config?.build) : 'requirements';
-        this.persist();
-        if (this.data.eligibility !== 'install') { this.phase('idle', { reason: this.data.eligibility === 'purchase-scope' ? '新しい版があります（購入した版の対象外）' : (this.platform === 'win32' ? 'このWindowsのOS・CPU・Node.jsでは使えない版です' : 'このMacのOS・CPU・Node.jsでは使えない版です') }); return this.status(); }
-        await this.prepare(m);
-        if (this.enabled) await this.install();
+        if (!newer(m.version, this.currentVersion)) this.phase('idle', { eligibility: 'up-to-date', reason: '新しい版のお知らせはありません。' });
+        else {
+          this.data.eligibility = compatible(m, { platform: this.platform, arch: this.arch, macOS: await this.macOS(), node: this.node }) ? eligibility(m, this.license?.status(), this.license?.config?.build) : 'requirements';
+          this.persist();
+          if (this.data.eligibility !== 'install') this.phase('idle', { reason: this.data.eligibility === 'purchase-scope' ? '新しい版があります（購入した版の対象外）' : (this.platform === 'win32' ? 'このWindowsのOS・CPU・Node.jsでは使えない版です' : 'このMacのOS・CPU・Node.jsでは使えない版です') });
+          else {
+            await this.prepare(m);
+            if (this.enabled) await this.install();
+          }
+        }
+        this.data.retryAfterKind = 'interval'; this.persist();
       } catch (e) { this.failed(e, m); }
-      return this.status();
+      return { ...this.status(), ...this.manualCheckStatus(false), checkPerformed: true };
     });
   }
   failed(e, m) {
     this.data.phase = 'failed'; this.data.error = '更新を確認できませんでした。今のアプリを保持しています（' + (e.code || 'inspection') + '）';
-    this.data.retryAfter = this.now() + DAY;
+    this.data.retryAfter = this.now() + DAY; this.data.retryAfterKind = 'failure';
     if (m && !this.data.pendingConfirm) this.data.rejected = { seq: m.seq, sha256: m.asset.sha256, reason: e.code || 'inspection' };
     try { this.persist(); } catch {}
   }

@@ -327,11 +327,8 @@ function settingsLayoutStatus(c) {
   const remote = c.root.querySelector('#remote-on');
   card('connect', UI.text('外から使う（iPhone）'), remote?.checked ? 'hold' : remote ? 'ok' : 'hold', UI.text(remote?.checked ? '外からの接続を許可しています。中継の稼働は未確認です。' : remote ? '外からの接続は停止中です。' : '接続状態は未確認です。'));
   const update = typeof appUpdateData !== 'undefined' ? appUpdateData : null;
-  const busy = update && ['checking', 'downloading', 'confirming', 'preparing', 'translating', 'testing', 'building', 'verifying', 'installing', 'publishing'].includes(update.phase);
-  const updateProblem = Boolean(update?.error || update?.publishError) || ['failed', 'error', 'conflict', 'rolled-back'].includes(update?.phase);
-  const available = Boolean(state.latest && state.version && state.latest !== state.version) || Boolean(update?.latestVersion && update.currentVersion && update.latestVersion !== update.currentVersion);
-  const updateKnown = update?.supported !== false && Boolean(update?.latestVersion);
-  card('manage', UI.text('Project Hub の更新'), updateProblem ? 'bad' : busy ? 'run' : available ? 'hold' : updateKnown ? 'ok' : 'hold', UI.text(updateProblem ? '更新の確認で問題がありました。下の表示を確かめてください。' : busy ? '更新を確認・準備しています。' : available ? '新しい版があります。' : updateKnown ? '新しい版のお知らせはありません。' : '更新状態は未確認です。'));
+  const updateSummary = appUpdateSummary(update || { currentVersion: state.version, latestVersion: state.latest });
+  card('manage', UI.text('Project Hub の更新'), updateSummary.tone, UI.text(updateSummary.text));
   for (const [key, items] of Object.entries(cards)) {
     const target = c.panels[key].querySelector('[data-layout-status]');
     const html = items.map(item => `<div class="settings-layout-card" data-tone="${item.tone}"><strong>${esc(item.label)}</strong><span>${esc(item.text)}</span>${item.action ? `<button class="btn plain sm" type="button" data-layout-account>${esc(item.action)}</button>` : ''}</div>`).join('');

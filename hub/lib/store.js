@@ -232,6 +232,7 @@ class Store {
       ...this.completion.task(`${path.basename(path.dirname(path.dirname(path.dirname(file))))}/${id}`, data.state, text, steps, c),
       ...(data.freetalk === true ? { state: data.state === '返事待ち' ? '返事待ち' : data.state === '未着手' ? '未着手' : '実行中', completionPending: false } : {}),
       ...(data.continuation===true?{continuation:true,completionPending:false,state:data.state==='完了'?'実行中':data.state||'実行中'}:{}),
+      ...(data.state === '実行中' && !data.question && typeof data.waitReason === 'string' && data.waitReason.trim() ? { state: '処理待ち', completionPending: false, waitReason: data.waitReason.slice(0,500) } : {}),
       question: data.question || '',
       workdir: data.workdir || '',
       mergeExcluded: data.mergeExcluded === true,
@@ -395,14 +396,15 @@ class Store {
     return {file,text:appendDocumentSection(setScalar(read(file),'continuation',true),'やったこと',note)};
   }
 
-  updateTask(projectId, taskId, { state, question, memo, owner, role, model, effort, parent, workdir, phase, via, mergeExcluded, kind, derivedFrom, workspaceMode, workspaceStarted, continuation, gptChild, integrateKeep }) {
+  updateTask(projectId, taskId, { state, waitReason, question, memo, owner, role, model, effort, parent, workdir, phase, via, mergeExcluded, kind, derivedFrom, workspaceMode, workspaceStarted, continuation, gptChild, integrateKeep }) {
     const file = this.taskFile(projectId, taskId);
     if (!file) return null;
     let text = read(file);
     const key = `${projectId}/${taskId}`, preserve = this.completion.data.tasks[key]?.hash === hash(text);
     if (typeof integrateKeep==='boolean')text=setScalar(text,'integrateKeep',integrateKeep);
     if (typeof continuation==='boolean')text=setScalar(text,'continuation',continuation);
-    if (state !== undefined) text = setScalar(text, 'state', state);
+    if (state !== undefined) { text = setScalar(text, 'state', state === '処理待ち' ? '実行中' : state); if (parseDoc(text).data.waitReason) text = setScalar(text, 'waitReason', ''); }
+    if (waitReason !== undefined) text = setScalar(text, 'waitReason', String(waitReason).slice(0,500));
     if (question !== undefined) text = setScalar(text, 'question', question);
     if (owner !== undefined) text = setScalar(text, 'owner', owner);
     if (role !== undefined) text = setScalar(text, 'role', role);

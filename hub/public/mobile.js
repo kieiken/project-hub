@@ -22,7 +22,9 @@
     draft();
   }
   function badges() {
-    const name = $('.whead h2')?.textContent || $('.ph h2')?.textContent || '';
+    const title = $('.whead h2')?.textContent || $('.ph h2')?.textContent || '';
+    const waiting = $('[data-work-wait]');
+    const name = title + (waiting && !waiting.hidden ? '・' + UI.text('処理待ち') : '');
     $('#mobile-badges').textContent = name;
     $('#mobile-badges').title = name;
     const unfinished = $('#mobile-unfinished');
@@ -64,10 +66,10 @@
       if (work && chat) {
         const info = document.createElement('div'); info.id = 'mobile-work-info'; info.className = 'mobile-work-info';
         work.insertBefore(info, work.firstChild);
-        // Keep the progress strip outside the optional information fold.
+        // Keep progress and explicit waiting status outside the optional information fold.
         for(let node=info.nextElementSibling;node&&node!==chat;){
           const next=node.nextElementSibling;
-          if(node.dataset.workProgress===undefined)info.appendChild(node);
+          if(node.dataset.workProgress===undefined&&node.dataset.workWait===undefined)info.appendChild(node);
           node=next;
         }
       }

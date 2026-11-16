@@ -27,6 +27,7 @@ function input(turn, ai) {
 function once(text, expected = rule) {
   assert.equal(count(text, expected), 1);
   assert.equal(count(text, instructions.SEND_TEXT_RULE), 1);
+  assert.equal(count(text, instructions.WAIT_RULE), 1);
 }
 const captures = {};
 test.after(async () => {
@@ -39,7 +40,9 @@ test.after(async () => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test('path rule: six requirements, full rules section, and both rule versions change', () => {
+test('path/wait rules: exact original, full rules section, and both rule versions change', () => {
+  const original = '【処理待ちの時は番を終える】\n決まった時刻の自動処理・外部の処理・人の操作など、待つしかない状態になったら、作業中のまま待たない。そこまでの結果を記録して番を終える。同じ番の中で時刻が来るのを待ったり、繰り返し様子を見たりしない。\n番を終える時の報告には、①済んだこと ②何を待っているか（いつ・何が動くか）③待っている間もほかの作業を頼めること ④結果の確かめ方 を書く。作業ファイルの手順は済んだ行だけ[x]にし、待ちの行は未完のまま残す。待ちが終わった後の確認は、人の連絡を受けてから行う。';
+  assert.ok(instructions.WAIT_RULE.startsWith(original + '\n'));
   assert.equal(instructions.PATH_RULE, rule);
   const base = hub.taskPrompt(p, t, file, p.dir);
   const full = fs.readFileSync(path.join(p.dir, '.ai/chat', t.id + '.rules.md'), 'utf8');
@@ -76,9 +79,10 @@ test('path rule: freetalk first and resumed turns receive the rule for every AI'
   const fp = { ...p, id: 'freetalk-fixture', kind: 'freetalk' };
   // Request delivery uses modelPolicy as the resumed freetalk prefix.
   const basePrompt = hub.taskPrompt(fp, t, file, p.dir);
-  const policyEnd = basePrompt.indexOf('\n\n自由対話「');
+  const terminalPrompt = hub.taskPrompt(fp, t, file, p.dir, 'terminal');
+  const policyEnd = terminalPrompt.indexOf('\n\n自由対話「');
   assert.ok(policyEnd > 0);
-  const policy = basePrompt.slice(0, policyEnd); // modelPolicy output before freetalk.prompt
+  const policy = terminalPrompt.slice(0, policyEnd); // modelPolicy output before freetalk.prompt
   for (const [ai, model] of Object.entries(models)) {
     const opts = { ai, model, rows: [], text: 'fixture request', basePrompt, policy, meta: {} };
     const first = chat.buildTurn(opts); once(input(first, ai));
@@ -97,14 +101,17 @@ test('path rule: text-only webchat receives the rule once without claiming file 
 for (const lang of ['en', 'zh-TW']) test('path rule: ' + lang + ' has the same copy contract and matching size baseline', () => {
   const messages = require('../../langpacks/' + lang + '/backend.json').messages;
   const expected = messages[rule]; assert.ok(expected); assert.notEqual(expected, rule);
-  const script = `const i=require('./lib/instructions'),fs=require('node:fs');const prefix=i.packet({pdir:process.env.HUB_ROOT,task:'locale',policy:'policy',issues:'',common:'',port:1});const first=i.select(prefix,{ai:'codex',sid:'s',meta:{},resume:false});const short=i.select(prefix,{ai:'codex',sid:'s',meta:{rulesSent:{codex:first.rules}},resume:true});console.log(JSON.stringify({rule:i.PATH_RULE,send:i.SEND_TEXT_RULE,prefix,short:short.prefix,full:fs.readFileSync(process.env.HUB_ROOT+'/.ai/chat/locale.rules.md','utf8')}));`;
+  const script = `const i=require('./lib/instructions'),fs=require('node:fs');const prefix=i.packet({pdir:process.env.HUB_ROOT,task:'locale',policy:'policy',issues:'',common:'',port:1});const first=i.select(prefix,{ai:'codex',sid:'s',meta:{},resume:false});const short=i.select(prefix,{ai:'codex',sid:'s',meta:{rulesSent:{codex:first.rules}},resume:true});console.log(JSON.stringify({rule:i.PATH_RULE,wait:i.WAIT_RULE,send:i.SEND_TEXT_RULE,prefix,short:short.prefix,full:fs.readFileSync(process.env.HUB_ROOT+'/.ai/chat/locale.rules.md','utf8')}));`;
   const actual = JSON.parse(execFileSync(process.execPath, ['-e', script], {
     cwd: path.join(__dirname, '..'), encoding: 'utf8', env: { ...process.env, HUB_LANG: lang, HUB_ROOT: path.join(tmp, lang) },
   }));
   assert.equal(actual.rule, expected);
+  assert.equal(actual.wait, messages[instructions.WAIT_RULE]);
+  assert.notEqual(actual.wait, instructions.WAIT_RULE);
   assert.equal(require('./fixtures/instruction-baseline.json').pathRuleChars[lang], actual.rule.length);
   for (const text of [actual.prefix, actual.short, actual.full]) {
     assert.equal(count(text, expected), 1); assert.equal(count(text, actual.send), 1);
+    assert.equal(count(text, actual.wait), 1);
     assert.equal(count(text, rule), 0);
   }
   for (const literal of ['/Users/', 'C:\\', '~', '```text', 'file://']) assert.ok(expected.includes(literal));

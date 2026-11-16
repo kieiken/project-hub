@@ -204,7 +204,7 @@ test('前置きは基点1回・既存指示を40%以上削減、新しい必須�
   assert.equal(baseline.pathRuleChars.ja, instructions.PATH_RULE.length);
   assert.equal(text.split(chat.REPORT_RULE).length - 1, 1);
   assert.equal(copyText.split(chat.REPORT_RULE).length - 1, 1);
-  const addedRule = instructions.SEND_TEXT_RULE.length + instructions.PATH_RULE.length + instructions.WORKFLOW_RULE.length + chat.PLAIN_CHOICE_RULE.length + chat.REPORT_RULE.length + ownerRule.length + baseline.delegateGuideExtraChars + baseline.delegateUltraRuleChars.ja.off + 5;
+  const addedRule = instructions.WAIT_RULE.length + 1 + instructions.SEND_TEXT_RULE.length + instructions.PATH_RULE.length + instructions.WORKFLOW_RULE.length + chat.PLAIN_CHOICE_RULE.length + chat.REPORT_RULE.length + ownerRule.length + baseline.delegateGuideExtraChars + baseline.delegateUltraRuleChars.ja.off + 5;
   assert.equal(text.split(chat.PLAIN_CHOICE_RULE).length - 1, 1);
   assert.equal(text.split(instructions.SEND_TEXT_RULE).length - 1, 1);
   assert.equal(copyText.split(instructions.SEND_TEXT_RULE).length - 1, 1);
@@ -240,7 +240,7 @@ test('同じセッションは短文とコピー規則、版・session・5番目
   const first = chat.buildTurn(options);
   const meta = { sessions: { claude: 'sid' }, rulesSent: { claude: { ...first.rules, sid: 'sid' } } };
   let turn = chat.buildTurn({ ...options, meta });
-  assert.ok(turn.shortRules); assert.ok(turn.fixed.length < 200 + instructions.PATH_RULE.length + 1);
+  assert.ok(turn.shortRules); assert.ok(turn.fixed.length < 200 + instructions.PATH_RULE.length + instructions.WAIT_RULE.length + 2);
   assert.equal(turn.fixed.split(instructions.PATH_RULE).length - 1, 1);
   assert.match(turn.stdin, /操作情報/); assert.match(turn.stdin, /この番の起動/); assert.match(turn.stdin, /長い会話/); assert.match(turn.stdin, /\[\[質問\]\]/);
   for (const sent of [{ ...meta.rulesSent.claude, hash: 'changed' }, { ...meta.rulesSent.claude, sid: 'other' }, { ...meta.rulesSent.claude, turns: 4 }, { ...meta.rulesSent.claude, restore: true }]) {

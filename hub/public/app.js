@@ -9,7 +9,7 @@ const safeChatUrl = value => {
   try { const url = new URL(value.trim()); return ['http:', 'https:'].includes(url.protocol) ? url.href : ''; }
   catch { return ''; }
 };
-const STATES = ['未着手', '実行中', '返事待ち', '停止', '上限で停止', '完了'];
+const STATES = ['未着手', '実行中', '返事待ち', '処理待ち', '停止', '上限で停止', '完了'];
 const RESULTS_WAIT = t => t.resultsPending && t.resultsPending.auto !== 'running' && t.resultsPending.code !== 'checking';
 const NEEDS = t => RESULTS_WAIT(t) || t.completionPending || t.state === '返事待ち' || t.state === '上限で停止' || (t.question && t.state !== '完了');
 // 返事が必要（あなたの番の数に入れる）。完了に移すだけのものは入れない
@@ -17,7 +17,8 @@ const NEEDS = t => RESULTS_WAIT(t) || t.completionPending || t.state === '返事
 const REPLY = (p, t) => t.chatQueueBlocked || t.state === '返事待ち' || t.state === '上限で停止' || (t.question && t.state !== '完了');
 const WORKING = (p, t) => Boolean(live(p.id, t.id) || (t.chatQueueCount > 0 && !t.chatQueueBlocked) || t.resultsPending?.auto === 'running' || t.resultsPending?.code === 'checking' || bgOf(p.id, t.id).length || (state.webchat?.jobs || []).some(j => j.project === p.id && j.task === t.id && ['queued', 'checking', 'sending', 'tools', 'reporting'].includes(j.state)));
 // 成果不備だけでは返事を求めない。実質問・停止対応 → 稼働 → 成果確認 → 完了承認の順に一度だけ数える。
-const notificationKind = (p, t) => workAnswerSending(p, t) ? 'work' : REPLY(p, t) ? 'reply' : WORKING(p, t) ? 'work' : RESULTS_WAIT(t) ? 'results' : t.completionPending ? 'done' : '';
+const notificationKind = (p, t) => workAnswerSending(p, t) ? 'work' : REPLY(p, t) ? 'reply' : WORKING(p, t) ? 'work' : t.state === '処理待ち' ? 'wait' : RESULTS_WAIT(t) ? 'results' : t.completionPending ? 'done' : '';
+const waitLabel = t => UI.text('処理待ち') + (t.waitReason ? '：' + UI.message(t.waitReason) : '');
 const CONFIRM = (p, t) => notificationKind(p, t) === 'done';
 const CLI = o => /claude|codex|agy|grok/i.test(o || '') || !o;
 const aiOf = o => (/grok/i.test(o || '') ? 'grok' : /agy/i.test(o || '') ? 'agy' : /codex/i.test(o || '') ? 'codex' : 'claude');
@@ -521,6 +522,8 @@ let sendWorkAnswer = null;
 /* @app-function app-work.js:workQuestionHtml */
 // 会話や入力欄を作り直さず、質問の変更だけを反映する。
 /* @app-function app-work.js:syncWorkQuestion */
+/* @app-function app-work.js:workWaitHtml */
+/* @app-function app-work.js:syncWorkWait */
 /* @app-function app-work.js:updateWorkAnswerControls */
 /* @app-function app-work.js:acceptedWorkAnswer */
 

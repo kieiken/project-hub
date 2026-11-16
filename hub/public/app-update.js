@@ -14,12 +14,27 @@ const APP_UPDATE_PHASES = {
 function appUpdateDate(value) {
   return value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('ja-JP') : UI.text('まだ確認していません');
 }
+function appUpdateSummary(d = {}) {
+  if (d.error || d.publishError || ['failed', 'error', 'conflict', 'rolled-back'].includes(d.phase)) return { tone: 'bad', text: '更新の確認で問題がありました。下の表示を確かめてください。' };
+  if (['checking', 'downloading', 'confirming', 'preparing', 'translating', 'testing', 'building', 'verifying', 'installing', 'publishing'].includes(d.phase)) return { tone: 'run', text: '更新を確認・準備しています。' };
+  const current = d.currentVersion || d.sourceVersion, latest = d.latestVersion;
+  if (d.supported === false || !/^\d+\.\d+\.\d+$/.test(current || '') || !/^\d+\.\d+\.\d+$/.test(latest || '')) return { tone: 'hold', text: '更新状態は未確認です。' };
+  const a = latest.split('.').map(Number), b = current.split('.').map(Number), i = a.findIndex((v, n) => v !== b[n]);
+  return i >= 0 && a[i] > b[i] ? { tone: 'hold', text: '新しい版があります。' } : { tone: 'ok', text: '新しい版のお知らせはありません。' };
+}
+function appUpdateCheckFeedback(d) {
+  if (d.checkPerformed === false) return UI.text(d.checkSkippedReason || '配信元への再確認はしていません。') + (d.manualCheckBlockedReason && d.nextManualCheck ? UI.text(' 次に手動確認できる時刻：') + appUpdateDate(d.nextManualCheck) : '');
+  if (d.checkPerformed === true) return UI.text(d.error ? '更新を確認できませんでした。下の表示を確かめてください。' : '配信元に更新を確認しました。');
+  return UI.text('更新の状態を表示しました');
+}
 function appUpdateHtml(data) {
   const d = data || {}, disabled = appUpdatePending || d.supported === false ? 'disabled' : '';
   const checking = ['checking', 'downloading', 'confirming', 'preparing', 'translating', 'testing', 'building', 'verifying', 'installing', 'publishing'].includes(d.phase);
   return UI.template`<label class="chk"><input id="app-auto-update" type="checkbox" ${d.enabled ? 'checked' : ''} ${disabled}> Project Hub を自動で更新する</label>
     <p class="small">毎日1回確認します。取得元は ${esc(d.channel === 'purchase-test' ? '署名付きの購入試験版専用配信' : d.mode === 'packaged' ? (d.packageOS === 'win32' ? 'GitHub Releases（Windows ZIP）' : 'GitHub Releases（完成アプリ）') : 'kieiken/project-hub')} です。AI の作業・順番待ちが終わるまで適用を待ちます。この画面を勝手に読み直すことはありません。</p>
     <p class="small">稼働版：<b>${esc(d.currentVersion || d.sourceVersion || '—')}</b> ／ 最新版：<b>${esc(d.latestVersion || '—')}</b><br>前回の確認：${esc(appUpdateDate(d.lastCheck))}<br>次回の確認：${esc(d.nextCheck ? appUpdateDate(d.nextCheck) : UI.text('未定'))}</p>
+    <p class="small">${esc(UI.text(appUpdateSummary(d).text))}</p>
+    ${d.manualCheckBlockedReason || d.nextManualCheck ? UI.template`<p class="small">${d.manualCheckBlockedReason ? esc(UI.text(d.manualCheckBlockedReason)) : ''}${d.manualCheckBlockedReason && d.nextManualCheck ? '<br>' : ''}${d.nextManualCheck ? UI.text('次に手動確認できる時刻：') + esc(appUpdateDate(d.nextManualCheck)) : ''}</p>` : ''}
     <p class="note" role="status">${esc(d.supported === false ? UI.text('未対応') : APP_UPDATE_PHASES[d.phase] || UI.text('待機中'))}${d.reason ? '：' + esc(d.reason) : ''}</p>
     ${d.notes ? UI.template`<p class="small">${esc(d.notes)}</p>` : ''}
     ${d.previousVersion ? UI.template`<p class="small">保持している前の版：${esc(d.previousVersion)}</p>` : ''}
@@ -35,6 +50,8 @@ function appUpdateHtml(data) {
 function appUpdateRender(box, data) {
   const draw = () => { box.innerHTML = appUpdateHtml(data); };
   if (typeof preserveSettingsScroll === 'function') preserveSettingsScroll(draw); else draw();
+  const layout = typeof settingsLayoutCurrent === 'function' ? settingsLayoutCurrent() : null;
+  if (layout) settingsLayoutStatus(layout);
 }
 function appUpdateError(box, text) {
   const draw = () => { box.textContent = text; };
@@ -77,7 +94,7 @@ async function checkAppUpdate() {
     appUpdateData = data;
     if ($('#app-update-box') === box && epoch === appUpdateEpoch) {
       appUpdatePending = false; appUpdateRender(box, data);
-      $('#app-update-status').textContent = UI.text('更新の状態を表示しました');
+      $('#app-update-status').textContent = appUpdateCheckFeedback(data);
     }
   } catch (error) {
     if ($('#app-update-box') === box && epoch === appUpdateEpoch) {

@@ -3512,7 +3512,9 @@
     "この操作は設定画面から行ってください": "Perform this action from Settings",
     "停止した振り分けの再開を確認してください": "Confirm resuming the stopped routing",
     "字幕帯画像": "Subtitle band image",
-    "字幕帯 ${0}本目＝[${1}]": "Subtitle band ${0} = [${1}]"
+    "字幕帯 ${0}本目＝[${1}]": "Subtitle band ${0} = [${1}]",
+    "【処理待ちの時は番を終える】\n決まった時刻の自動処理・外部の処理・人の操作など、待つしかない状態になったら、作業中のまま待たない。そこまでの結果を記録して番を終える。同じ番の中で時刻が来るのを待ったり、繰り返し様子を見たりしない。\n番を終える時の報告には、①済んだこと ②何を待っているか（いつ・何が動くか）③待っている間もほかの作業を頼めること ④結果の確かめ方 を書く。作業ファイルの手順は済んだ行だけ[x]にし、待ちの行は未完のまま残す。待ちが終わった後の確認は、人の連絡を受けてから行う。\n待つだけで番を終える時は、返事の最後に、独立した行で [[待ち]]、次の行に待つ内容（いつ・何が動くか）、最後の行に [[/待ち]] を書く（本文は500字以内、コード枠や引用の中に入れない）。この印は自動再開の予約ではなく状態表示だけで、質問や順番待ちがある時はそちらを優先する。": "[End the turn when only waiting remains]\nIf nothing remains except waiting for scheduled automation, an external process, or a person’s action, do not keep the turn running. Record the results so far and end the turn. Do not wait for the scheduled time or repeatedly check progress within the same turn.\nWhen ending the turn, report ① what is done ② what you are waiting for (when and what will run) ③ that other work can still be requested while waiting ④ how to check the result. Mark only completed task steps [x]; leave waiting steps incomplete. Check after the wait only when the person contacts you.\nWhen ending a turn solely to wait, put [[待ち]] on its own line at the end of the reply, the wait description (when and what will run) on the next line, and [[/待ち]] on the final line (body up to 500 characters; outside code fences and quotations). This marker only changes the status display, without scheduling automatic resumption; questions and queued requests take priority.",
+    "待ち状態を解除できませんでした：${0}": "Could not clear the waiting status: ${0}"
   },
   "labels": {
     "未着手": "Not started",

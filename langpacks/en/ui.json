@@ -4430,5 +4430,12 @@
   "固定": "Fixed",
   "停止中": "Stopped",
   "準備中": "Preparing",
-  "未確認：${3}": "Unverified: ${3}"
+  "未確認：${3}": "Unverified: ${3}",
+  "処理待ち": "Waiting for a process",
+  "処理待ち ": "Waiting ",
+  "処理待ち（${0}）": "Waiting (${0})",
+  "待つだけでAIは終了しています。待っている間もほかの作業を頼めます。結果が出たら、この会話で知らせてください。": "The AI has ended this turn because only waiting remains. You can request other work while waiting. Let us know in this conversation when the result is ready.",
+  "待つだけでAIは終了しています。ほかの作業も頼めます": "The AI has ended this turn to wait. You can request other work.",
+  "処理待ちのものはありません。": "Nothing is waiting for a process.",
+  "返事待ち ${0}件、作業中 ${1}件、処理待ち ${2}件、成果確認 ${3}件、完了 ${4}件": "${0} awaiting replies, ${1} working, ${2} waiting, ${3} awaiting results review, ${4} done"
 }

@@ -20,6 +20,7 @@ function workQuestionHtml(p, t) {
 
 function syncWorkQuestion() {
   syncWorkProgress();
+  syncWorkWait();
   const slot = $('#work-question'), p = proj(view.project), t = taskOf(p, view.task);
   if (view.kind !== 'work' || !slot || !t) return;
   const box = $('#msgs'), top = box?.scrollTop;
@@ -34,6 +35,16 @@ function syncWorkQuestion() {
   window.HubMobile?.badges();
   syncWorkAttention();
   updateWorkAnswerControls();
+}
+
+function workWaitHtml(p,t) {
+  return notificationKind(p,t) === 'wait' ? UI.template`<strong>${esc(waitLabel(t))}</strong><span>${UI.text('待つだけでAIは終了しています。待っている間もほかの作業を頼めます。結果が出たら、この会話で知らせてください。')}</span>` : '';
+}
+function syncWorkWait() {
+  const p=proj(view.project), t=taskOf(p,view.task), slot=$('[data-work-wait]');
+  if(view.kind!=='work'||!t||!slot)return;
+  const html=workWaitHtml(p,t); slot.hidden=!html;
+  if(slot.waitHtml!==html){slot.innerHTML=html;slot.waitHtml=html;}
 }
 
 // Use the existing phase assignment rule and compact step summary. No task-list
@@ -235,7 +246,7 @@ function renderWork() {
   const p = proj(view.project), t = taskOf(p, view.task);
   if (!p || !t) { view.kind = 'project'; return render(); }
   if (p.kind === 'freetalk') {
-    $('#main').innerHTML = UI.template`<div class="work freetalk-work" data-p="${esc(p.id)}" data-t="${esc(t.id)}" data-readonly="${t.freetalkHistory?.migrated ? 'true' : 'false'}"><div class="whead"><button class="back" data-go="project" data-p="${esc(p.id)}" type="button">← freetalk</button><h2>${esc(t.title)}</h2><span data-work-unfinished>${unfinishedBadge(p,t)}</span><button class="btn plain sm" type="button" data-act="freetalknew">新しい話題</button></div>${freetalkHistoryHtml(p,t)}<div data-handoff-status data-p="${esc(p.id)}" data-t="${esc(t.id)}">${chatHandoffHtml(p.id,t.id)}</div><div id="work-question" data-question="${esc(t.question || '')}">${workQuestionHtml(p,t)}</div>${chatHtml(p,t)}</div>`;
+    $('#main').innerHTML = UI.template`<div class="work freetalk-work" data-p="${esc(p.id)}" data-t="${esc(t.id)}" data-readonly="${t.freetalkHistory?.migrated ? 'true' : 'false'}"><div class="whead"><button class="back" data-go="project" data-p="${esc(p.id)}" type="button">← freetalk</button><h2>${esc(t.title)}</h2><span data-work-unfinished>${unfinishedBadge(p,t)}</span><button class="btn plain sm" type="button" data-act="freetalknew">新しい話題</button></div>${freetalkHistoryHtml(p,t)}<div data-handoff-status data-p="${esc(p.id)}" data-t="${esc(t.id)}">${chatHandoffHtml(p.id,t.id)}</div><div id="work-question" data-question="${esc(t.question || '')}">${workQuestionHtml(p,t)}</div><div class="work-wait waiting-process" data-work-wait role="status" ${notificationKind(p,t) === 'wait' ? '' : 'hidden'}>${workWaitHtml(p,t)}</div>${chatHtml(p,t)}</div>`;
     closePanes(); window.HubMobile?.mount(scrollKey); openChat(p,t,savedScroll); syncFreetalkMigrationControls(t.freetalkHistory); if(t.freetalkHistory?.migrated){$('#composer').querySelectorAll('button,input,textarea,select').forEach(e=>e.disabled=true);} return;
   }
   const running = AIS.filter(a => live(p.id, t.id, a));
@@ -287,6 +298,7 @@ function renderWork() {
     </div>
     <div id="muse-approvals" aria-live="polite"></div>
     <section class="work-progress" data-work-progress data-p="${esc(p.id)}" data-t="${esc(t.id)}" ${showWorkProgress()?'':'hidden'} aria-label="作業のフェーズと進捗">${workProgressHtml(p,t)}</section>
+      <div class="work-wait waiting-process" data-work-wait role="status" ${notificationKind(p,t) === 'wait' ? '' : 'hidden'}>${workWaitHtml(p,t)}</div>
     ${mode === 'chat' ? chatHtml(p, t) : UI.template`<div class="panes ${shown.length >= 2 ? 'two' : ''}" id="panes">
       ${shown.length ? shown.map(a => UI.template`<section class="pane" data-ai="${a}">
           <div class="phead"><span class="who w-${AI_KEY[a]}">${AI_LABEL[a]}</span><span class="pstat" data-ai="${a}">${statusText(sessOf(p.id, t.id, a))}</span>${specSelect(p, t, a, true)}<span class="sp"></span>
@@ -303,7 +315,7 @@ function renderWork() {
             : UI.html('作業画面の部品が未設定です。［設定］をご覧ください。<br>それまでは、始めると別の窓で開きます。')}</div></div>`}
     </div>`}
     <div class="wfoot"><details class="work-management" data-work-fold="management" ${workFoldAttr(p,t,'management')}><summary>作業の管理（状態：${esc(UI.label(t.state))}・手順 ${progressOf(t).done}/${stepCount(t)}）</summary><div class="work-management-body">
-      <select data-act="state" ${k} aria-label="状態">${!STATES.includes(t.state) ? UI.template`<option selected disabled>${esc(UI.label(t.state))}</option>` : ''}${STATES.map(s => UI.template`<option ${s === t.state ? 'selected' : ''}${UI.valueAttribute(s)}>${UI.label(s)}</option>`).join('')}</select>
+      <select data-act="state" ${k} aria-label="状態">${!STATES.includes(t.state) ? UI.template`<option selected disabled>${esc(UI.label(t.state))}</option>` : ''}${STATES.filter(s=>s!=='処理待ち'||t.state==='処理待ち').map(s => UI.template`<option ${s==='処理待ち'?'disabled':''} ${s === t.state ? 'selected' : ''}${UI.valueAttribute(s)}>${UI.label(s)}</option>`).join('')}</select>
       ${mode === 'term' && CLI(t.owner) && !shown.length ? specSelect(p, t, main) : ''}
       ${p.phases.length ? UI.template`<select data-act="phase" ${k} aria-label="フェーズ" title="この作業のフェーズ"><option value="">フェーズ：今のフェーズ</option>${p.phases.map(ph => UI.template`<option ${t.phase === ph.name ? 'selected' : ''}>${esc(ph.name)}</option>`).join('')}</select>` : ''}
       <details class="more steps" data-work-fold="steps" ${workFoldAttr(p,t,'steps')}><summary>手順 ${stepCount(t) ? `${progressOf(t).done} / ${stepCount(t)}` : UI.text('（なし）')}</summary><div class="step-tools"><button class="btn plain sm" data-steps-close type="button">手順を閉じる</button></div><div class="stepbox"><div data-step-list data-p="${esc(p.id)}" data-t="${esc(t.id)}">${workFoldAttr(p,t,'management')&&workFoldAttr(p,t,'steps')&&fullSteps(p,t) ? stepLabels(p,t,fullSteps(p,t)) : UI.text('開くと手順を読み込みます')}</div>

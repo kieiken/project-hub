@@ -72,6 +72,41 @@ test('A cached daily check displays stored status without claiming a new check s
   assert.equal(f.run('appUpdateData.lastCheck'),snapshot.lastCheck);
 });
 
+test('Manual wait feedback explains no request, gives its deadline and survives in the polling card', async () => {
+  const f = fixture(), d = { ...snapshot, mode: 'packaged', checkPerformed: false, checkSkippedReason: '連続した確認を防ぐため、前回の手動確認から60秒は再確認できません。', manualCheckBlockedReason: '連続した確認を防ぐため、前回の手動確認から60秒は再確認できません。', nextManualCheck: '2026-11-17T11:00:00Z' };
+  f.context.api = async () => d; await f.context.checkAppUpdate();
+  assert.match(f.element('#app-update-status').textContent, /手動確認から60秒/);
+  assert.match(f.element('#app-update-status').textContent, /次に手動確認できる時刻/);
+  assert.doesNotMatch(f.element('#app-update-status').textContent, /配信元に更新を確認しました/);
+  await f.context.loadAppUpdate(); assert.match(f.element('#app-update-box').innerHTML, /60秒.*<br>.*次に手動確認できる時刻/);
+  f.context.api = async () => ({ ...snapshot, checkPerformed: true }); await f.context.checkAppUpdate();
+  assert.equal(f.element('#app-update-status').textContent, '配信元に更新を確認しました。');
+  f.context.api = async () => ({ ...snapshot, checkPerformed: true, error: 'failed' }); await f.context.checkAppUpdate();
+  assert.match(f.element('#app-update-status').textContent, /確認できませんでした/);
+});
+
+test('Shared update summary compares numeric versions and agrees with detailed unconfirmed/current/new states', () => {
+  const f = fixture();
+  for (const [latest, expected] of [['', '更新状態は未確認です。'], ['4.126.98', '新しい版のお知らせはありません。'], ['4.126.9', '新しい版のお知らせはありません。'], ['4.126.99', '新しい版があります。'], ['4.127.0', '新しい版があります。']]) {
+    const d = { ...snapshot, currentVersion: '4.126.98', latestVersion: latest };
+    assert.equal(f.context.appUpdateSummary(d).text, expected); assert.ok(f.context.appUpdateHtml(d).includes(expected));
+  }
+});
+
+test('Processing card shows an in-progress reason without a misleading next-day manual deadline', async () => {
+  const f = fixture(), reason = '更新の処理中です。終わるまで手動確認はできません。';
+  for (const phase of ['checking', 'downloading', 'verifying', 'installing']) {
+    f.context.api = async () => ({ ...snapshot, mode: 'packaged', phase, manualCheckBlockedReason: reason, nextManualCheck: null });
+    await f.context.loadAppUpdate();
+    const html = f.element('#app-update-box').innerHTML;
+    assert.match(html, /更新の処理中です。終わるまで手動確認はできません。/);
+    assert.doesNotMatch(html, /前回の更新を確認できなかった|24時間の再確認待ち|次に手動確認できる時刻/);
+  }
+  const failed = f.context.appUpdateHtml({ ...snapshot, phase: 'failed', error: 'fixture failure', manualCheckBlockedReason: '前回の更新を確認できなかったため、24時間の再確認待ちです。', nextManualCheck: '2026-11-17T11:00:00Z' });
+  assert.match(failed, /確認できなかった.*24時間.*<br>.*次に手動確認できる時刻/);
+  assert.doesNotMatch(failed, /更新の処理中です/);
+});
+
 test('U20 completed App card shows verified release details, disabled reasons and existing gray button style', () => {
   const f = fixture();
   const html = f.context.appUpdateHtml({ ...snapshot, mode: 'packaged', currentVersion: '1.2.3', sourceVersion: '0.0.0', phase: 'ready', pending: true, notes: '<script>notes</script>', previousVersion: '1.2.2' });

@@ -21,6 +21,8 @@ test('正式HTTP：待ち順は件数と停止フラグだけを一覧へ出し�
   const store = new (require('../lib/store').Store)(root);
   const p = store.createProject({name:'Fixture'}).project;
   const waiting = store.createTask(p.id,{title:'順番待ち'}), blocked = store.createTask(p.id,{title:'停止した待ち'}), held = store.createTask(p.id,{title:'停止保留'});
+  const explicitWait=store.createTask(p.id,{title:'External wait'});
+  require('../lib/task-wait').ended(store,{project:p.id,task:explicitWait.id},{waitReason:'External job at 22:00'});
   const chatDir = path.join(p.dir,'.ai/chat');fs.mkdirSync(chatDir,{recursive:true});
   fs.writeFileSync(path.join(chatDir,waiting.id+'.queue.json'),JSON.stringify([{id:'one',text:'private queued instruction'},{id:'two',text:'another private instruction'}]));
   fs.writeFileSync(path.join(chatDir,blocked.id+'.queue.json'),JSON.stringify([{id:'held',error:'fixture error',limitWaiting:true,text:'private held instruction'}]));
@@ -61,6 +63,7 @@ test('正式HTTP：待ち順は件数と停止フラグだけを一覧へ出し�
     };
     assertHeld(state);
     assert.doesNotMatch(raw,/private queued instruction|private held instruction|fixture error|private stopped instruction|private draft|retained-image/);
+    const wt=tasks.find(t=>t.id===explicitWait.id);assert.equal(wt.state,'処理待ち');assert.equal(wt.waitReason,'External job at 22:00');
     assert.deepEqual(state.chatting,[]);
     // Releasing the global barrier does not release or execute a stopped queue.
     hub.stopControl.pause();
