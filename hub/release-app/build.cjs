@@ -35,6 +35,7 @@ function build(source,destination,platform,version='4.125.2'){
   for(const [name,transform] of [['runtime',compile.runtime],['license',compile.license],['workspace',compile.workspace],['update',compile.update],['select',compile.select],['launch',compile.launch]])put(`hub/release-app/${name}.cjs`,transform(blob(`hub/purchase-test-app/${name}.cjs`).toString()));
   put('hub/release-app/core.cjs',compile.core(blob('hub/staging-app/runtime.cjs').toString()));put('hub/release-app/protocol.cjs',compile.protocol(version));put('hub/release-app/update-trust.cjs',compile.trust());
   put('hub/release-app/legacy-license.cjs',blob('hub/release-app/legacy-license.cjs'));
+  put('hub/release-app/registration.cjs',blob('hub/release-app/registration.cjs'));
   put('hub/release-app/license-hold.cjs',blob('hub/release-app/license-hold.cjs'));
   put('hub/release-app/mac-bootstrap.cjs',blob('hub/release-app/mac-bootstrap.cjs'));
   if(platform==='win32') {for(const name of ['windows-window','prepare-windows','finalize-windows','finish-unsigned-windows','verify-windows-return','install-windows'])put('hub/release-app/'+name+'.cjs',blob('hub/release-app/'+name+'.cjs'));manifest.windowsNativePrepared=false;}

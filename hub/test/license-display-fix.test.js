@@ -176,6 +176,11 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal(held.busy(), false); assert.equal(held.client.status().trial.state, 'held');
     assert.equal(held.client.status().activationAvailable, false);
     assert.equal(JSON.stringify(held.client.status()), JSON.stringify(before));
+    const mismatch=generatedLicense(instance.config,true).createHeldLicense(instance.config,platform,'legacy_registration_mismatch');
+    const mismatchStatus=mismatch.client.status();assert.equal(mismatchStatus.trial.state,'held');assert.equal(mismatchStatus.purchased,false);
+    assert.equal(mismatchStatus.diagnostic.code,'LEGACY_REGISTRATION_MISMATCH');assert.match(mismatchStatus.reason,/端末情報を照合できない/);
+    assert.equal(mismatchStatus.features.chat_basic.allowed,true);assert.equal(mismatchStatus.features.delegate.allowed,false);
+    assert.equal((await route()(mismatch.client,fakeCode)).status,409);
   });
 
   nodeTest(platform + ': formal release adapter preserves refusal/transport/JSON classifications and consumed claim', async t => {

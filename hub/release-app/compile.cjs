@@ -28,15 +28,15 @@ function runtime(s){
   s=once(s,"  assert.equal(core.sha(fs.readFileSync(path.join(base, 'issuer-public.json'))), core.profileSha);\n  protocol.profile(JSON.parse(fs.readFileSync(path.join(base, 'issuer-public.json'))));", "  assert.equal(names.has('issuer-public.json'),false);\n  for(const name of names)assert.ok(!/staging-app|purchase-test-app/.test(name),'release_test_component');");
   s=once(s,'profileSha: core.profileSha',"product: 'project-hub'");
   s=once(s,"  const profile = JSON.parse(fs.readFileSync(path.join(configured.base, 'issuer-public.json')));\n  const license = require('./license.cjs').createLicense(configured.root, { profile });",`  const selected=configured.workspace?.data.workspace;
-  let adoptionUnavailable=false;
+  let adoptionUnavailable=false, adoptionCode;
   if(selected && selected!==configured.root) {
     try {require('./legacy-license.cjs').adopt({sourceRoot:selected,targetRoot:configured.root,platform:process.platform,config:protocol.configFor(process.platform)});}
-    catch {adoptionUnavailable=true;}
+    catch (error) {adoptionUnavailable=true;adoptionCode=error.code;}
   }
   // General data remains usable when entitlement adoption is unavailable.
   // Never repair, overwrite, retry registration or start a new trial here.
   const license = adoptionUnavailable
-    ? require('./license-hold.cjs').createHeldLicense(protocol.configFor(process.platform),process.platform)
+    ? require('./license-hold.cjs').createHeldLicense(protocol.configFor(process.platform),process.platform,adoptionCode)
     : require('./license.cjs').createLicense(configured.root);
   if(adoptionUnavailable)configured.workspace.notice=license.client.status().reason;`);
   s=once(s,'  license.client.prepare=()=>configured.workspace?.pending ? Promise.resolve() : prepare();',`  license.client.prepare=()=>!configured.workspace?.external() || configured.workspace.pending ? Promise.resolve() : prepare();
@@ -50,6 +50,26 @@ function runtime(s){
 }
 function license(s){
   s=common(s);
+  s=once(s,"  const claim = path.join(root, 'registration-claimed.json'), receipt = path.join(root, 'registration-result.json');",`  let claim = path.join(root, 'registration-claimed.json'), receipt = path.join(root, 'registration-result.json'), recovery = path.join(root, 'registration-recovery.json');
+  let registrationScopeFailed=false, stagingRegistrationArchived=false;
+  try {
+    const selected=require('./registration.cjs').records(root,config,os,adapter);
+    ({claim,receipt,recovery}=selected);stagingRegistrationArchived=Boolean(selected.archived);
+    // Resolving stale registration evidence must never issue/restart a trial or
+    // opt this device into a returning-user campaign. Existing proofs still use
+    // their original signed rights, trusted time, scope and expiry checks.
+    if(stagingRegistrationArchived){client.config={...config,trialCampaign:null};client.trialUsed=true;}
+  }
+  catch {registrationScopeFailed=true;}`);
+  s=once(s,"  const recovery = path.join(root, 'registration-recovery.json'); noLinks(recovery);",'  noLinks(recovery);');
+  s=once(s,"  if (fs.existsSync(receipt)) {", "  if (registrationScopeFailed) registrationDiagnostic='archive_unavailable';\n  else if (fs.existsSync(receipt)) {");
+  s=once(s,"const unresolved = () => (fs.existsSync(claim) || fs.existsSync(receipt)) && !registered;", "const unresolved = () => registrationScopeFailed || (fs.existsSync(claim) || fs.existsSync(receipt)) && !registered;");
+  s=once(s,"if (registered || fs.existsSync(claim) || fs.existsSync(receipt))", "if (registrationScopeFailed || registered || fs.existsSync(claim) || fs.existsSync(receipt))");
+  s=once(s,"    if (ops.busy()) return;", "    if (ops.busy() || stagingRegistrationArchived && (!client.identity || !client.proofs.length)) return;");
+  s=once(s,"({ identity_mismatch:", "({ archive_unavailable: ' 確認箇所：古い試験版の登録記録の保管状態を確認できません。', identity_mismatch:");
+  s=once(s,"      writeOnce(claim, { version: 2, os, status:", `      noLinks(path.dirname(claim)); fs.mkdirSync(path.dirname(claim),{recursive:true,mode:0o700});
+      writeOnce(claim, { version: 2, os, buildId: config.build.buildId, product: config.build.product, status:`);
+  s=once(s,"buildId: config.build.buildId, fingerprints: fp,", "buildId: config.build.buildId, product: config.build.product, fingerprints: fp,");
   s=once(s,"const config = { ...protocol.configFor(os, options.profile), purchaseUrl: protocol.endpoint + '/buy' };","const config = protocol.configFor(os);");
   // Keep the bounded response reader and request accounting, but let the shared
   // client classify HTTP refusal separately from transport/JSON failures.

@@ -66,6 +66,11 @@ function adopt({sourceRoot,targetRoot,platform=process.platform,config,adapter=r
     const source=snapshot(sourceRoot,platform,adapter);
     if(!source) return {status:'none'};
     validateSnapshot(source);
+    const checkRegistration=()=>{
+      try {require('./registration.cjs').assertSource(targetRoot,config,platform,adapter,source.device);}
+      catch {throw Object.assign(Error('legacy_registration_mismatch'),{code:'legacy_registration_mismatch'});}
+    };
+    checkRegistration();
     const parent=path.dirname(journal); noLinks(parent); fs.mkdirSync(parent,{recursive:true,mode:0o700});
     // Exclusive durable intent precedes every target identity/proof write. A partial
     // adoption is intentionally never retried or repaired by this module.
@@ -73,6 +78,7 @@ function adopt({sourceRoot,targetRoot,platform=process.platform,config,adapter=r
     try { fs.writeFileSync(fd,JSON.stringify({v:1,platform,source:path.resolve(sourceRoot),digest:digest(source),deviceDigest:digest({device:source.device})})+'\n'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
     adapter.persistence.syncDirectory(parent);
     if(snapshot(targetRoot,platform,adapter)) fail();
+    checkRegistration();
     const store=new LicenseStore(targetRoot,adapter);
     store.write('device',source.device); store.write('state',source.state);
     const saved=snapshot(targetRoot,platform,adapter);
@@ -81,6 +87,6 @@ function adopt({sourceRoot,targetRoot,platform=process.platform,config,adapter=r
     const completed=fs.openSync(journal,'a');
     try { fs.writeFileSync(completed,JSON.stringify({complete:true})+'\n'); fs.fsyncSync(completed); } finally { fs.closeSync(completed); }
     return {status:'adopted'};
-  } catch { fail(); }
+  } catch (error) { if(error.code==='legacy_registration_mismatch')throw error; fail(); }
 }
 module.exports={adopt};

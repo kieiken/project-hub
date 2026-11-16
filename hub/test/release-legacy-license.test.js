@@ -17,7 +17,12 @@ function fixture(t,kind='purchase') {
   const secret={get:id=>id===data.device.id?raw:null,put(){assert.fail('secret write');}};
   const args={sourceRoot,targetRoot,platform:'darwin',adapter,config,secret,machineHint:()=>'',elapsed:()=>0,wall:()=>now};
   const save=()=>{const store=new LicenseStore(sourceRoot,adapter);store.write('device',data.device);store.write('state',data.state);};
-  return {args,data,proof,issuer,save,sourceRoot,targetRoot};
+  const receipt=(identity=c.createHash('sha256').update(data.device.dev).digest('hex'))=>{
+    fs.mkdirSync(targetRoot,{recursive:true});
+    const value={version:2,registered:true,os:args.platform,buildId:config.build.buildId,product:config.build.product,fingerprints:{identity}};
+    fs.writeFileSync(path.join(targetRoot,'registration-result.json'),JSON.stringify(value));return value;
+  };
+  return {args,data,proof,issuer,save,sourceRoot,targetRoot,receipt};
 }
 test('absent legacy source returns none without creating directories',t=>{const f=fixture(t);assert.deepEqual(adopt(f.args),{status:'none'});assert.equal(fs.existsSync(f.targetRoot),false);assert.equal(fs.existsSync(f.sourceRoot),false);});
 for(const kind of ['purchase','trial']) test('verified production '+kind+' preserves source and account; repeat is existing',t=>{
@@ -71,4 +76,29 @@ test('expired authentic trial preserves signed expiry and never becomes fresh tr
 test('completed target adoption permits a different selected source workspace',t=>{
  const f=fixture(t);f.save();adopt(f.args);f.args.sourceRoot=path.join(f.sourceRoot,'another-workspace');
  assert.deepEqual(adopt(f.args),{status:'existing'});assert.equal(fs.existsSync(f.args.sourceRoot),false);
+});
+for(const platform of ['darwin','win32'])for(const match of [true,false])test(platform+': formal receipt identity must match before adoption ('+match+')',t=>{
+ const f=fixture(t,'trial');f.args.platform=platform;f.args.adapter.name=platform;
+ if(platform==='win32')f.args.adapter.licenseDirectory=()=> 'synthetic-ntfs-binding';
+ f.save();f.receipt(match?undefined:'0'.repeat(64));
+ const before=fs.readFileSync(path.join(f.targetRoot,'registration-result.json'),'utf8');
+ if(match){assert.deepEqual(adopt(f.args),{status:'adopted'});assert.deepEqual(new LicenseStore(f.targetRoot,f.args.adapter).read('state'),f.data.state);}
+ else {assert.throws(()=>adopt(f.args),{code:'legacy_registration_mismatch'});assert.equal(fs.existsSync(path.join(f.targetRoot,'_hub/license')),false);assert.equal(fs.existsSync(path.join(f.targetRoot,'_hub/license-adoption.json')),false);}
+ assert.equal(fs.readFileSync(path.join(f.targetRoot,'registration-result.json'),'utf8'),before);
+});
+for(const platform of ['darwin','win32'])test(platform+': staging receipt does not block signed release adoption or renew the expired trial',t=>{
+ const f=fixture(t,'trial');f.args.platform=platform;f.args.adapter.name=platform;
+ if(platform==='win32')f.args.adapter.licenseDirectory=()=> 'synthetic-ntfs-binding';
+ f.save();f.args.wall=()=>f.proof.exp+1;
+ const r=f.receipt('0'.repeat(64));r.buildId='project-hub-staging-20261017-01';delete r.product;r.at='2026-10-20T00:00:01Z';
+ fs.writeFileSync(path.join(f.targetRoot,'registration-result.json'),JSON.stringify(r));
+ const claim=JSON.stringify({version:2,os:platform,status:'claimed-do-not-retry',at:'2026-10-20T00:00:00Z'});fs.writeFileSync(path.join(f.targetRoot,'registration-claimed.json'),claim);
+ assert.deepEqual(adopt(f.args),{status:'adopted'});assert.deepEqual(new LicenseStore(f.targetRoot,f.args.adapter).read('state'),f.data.state);
+ assert.equal(fs.readFileSync(path.join(f.targetRoot,'registration-result.json'),'utf8'),JSON.stringify(r));assert.equal(fs.readFileSync(path.join(f.targetRoot,'registration-claimed.json'),'utf8'),claim);
+});
+test('formal orphan claim and malformed receipt block adoption without target writes',t=>{
+ for(const name of ['registration-claimed.json','registration-result.json']){
+  const f=fixture(t);f.save();fs.mkdirSync(f.targetRoot);fs.writeFileSync(path.join(f.targetRoot,name),'{}');
+  assert.throws(()=>adopt(f.args),{code:'legacy_registration_mismatch'});assert.equal(fs.existsSync(path.join(f.targetRoot,'_hub/license')),false);
+ }
 });

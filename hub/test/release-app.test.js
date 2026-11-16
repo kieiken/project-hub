@@ -89,6 +89,18 @@ test('release waits for a confirmed general workspace before preparing or offeri
   pending=true;await l.client.prepare();assert.equal(prepared,1);
 });
 
+test('release adoption mismatch keeps general workspace and passes the fixed hold reason to the client',async t=>{
+  const root=temp(t),control=path.join(root,'control'),data=path.join(root,'data');let held=0;
+  const file=path.join(repo,'hub/release-app/runtime.cjs'),m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));const original=m.require.bind(m);
+  m.require=id=>id==='./core.cjs'?generated('core'):id==='./protocol.cjs'?generated('protocol'):
+    id==='./license.cjs'?{createLicense:()=>assert.fail('must use held client')}:
+    id==='./legacy-license.cjs'?{adopt:()=>{throw Object.assign(Error('synthetic mismatch'),{code:'legacy_registration_mismatch'});}}:
+    id==='./license-hold.cjs'?{createHeldLicense:(config,platform,code)=>{held++;assert.equal(code,'legacy_registration_mismatch');return {client:{prepare:async()=>{},status:()=>({activationAvailable:false})}};}}:original(id);
+  m._compile(compiler.runtime(fs.readFileSync(path.join(repo,'hub/purchase-test-app/runtime.cjs'),'utf8'))+'\nmodule.exports.fixture=x=>configured=x;',file);
+  const runtime=m.exports,workspace={data:{workspace:data},external:()=>true,pending:false};runtime.fixture({root:control,workspace});
+  const l=runtime.createLicense(data);await l.client.prepare();assert.equal(held,1);assert.equal(l.client.status().activationAvailable,false);assert.equal(workspace.data.workspace,data);
+});
+
 // Target OS names exercise the generated updater, not Windows ACLs or a GUI.
 function updateModeFixture(t,platform='win32') {
   const root=temp(t),folder=path.join(root,'runtime');fs.mkdirSync(folder);
