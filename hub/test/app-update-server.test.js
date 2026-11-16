@@ -71,6 +71,7 @@ test('updater routes obey local mutation authentication and expose unsupported s
 });
 
 test('packaged updater receives runtime, license and restored backend proof only after the state response', async () => {
+  await require('../server').restoreReady;
   assert.equal(updateOptions.hubPath, path.resolve(__dirname, '..'));
   assert.equal(updateOptions.version, require('../package.json').version); assert.equal(typeof updateOptions.license.status, 'function');
   const ping = await (await fetch(base + '/api/ping')).json();
