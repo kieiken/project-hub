@@ -156,3 +156,19 @@ test('Windows ZIP card reports the actual update lifecycle and preserves draft-b
   assert.match(f.context.appUpdateHtml({...data,phase:'confirming'}),/新版の起動を確認しています/);
   assert.match(f.context.appUpdateHtml({...data,phase:'rolled-back'}),/前の版へ戻しました/);
 });
+
+test('Mac auto reopen settings show cancellable waiting and manual fallback; Windows stays manual',async()=>{
+ const f=fixture(),active={...snapshot,restartNeeded:true,manualReopen:false,autoReopen:{phase:'waiting',reason:'作業が終わったら自動で開き直します。'}};
+ const waiting=f.context.appUpdateHtml(active);assert.match(waiting,/作業が終わったら自動で開き直します/);assert.match(waiting,/data-app-update="cancel-reopen"/);
+ f.handlers.get('click')({target:{closest:()=>({dataset:{appUpdate:'cancel-reopen'},disabled:false})}});await new Promise(setImmediate);
+ assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0])),{route:'/api/app-update/reopen',body:{action:'reopen-cancel'}});
+ const manual=f.context.appUpdateHtml({...active,manualReopen:true,autoReopen:{phase:'manual',reason:'自動で開き直せませんでした。'}});assert.match(manual,/自動で開き直せません/);assert.doesNotMatch(manual,/cancel-reopen/);
+ const windows=f.context.appUpdateHtml({...snapshot,restartNeeded:true,manualReopen:true});assert.match(windows,/同じアプリを開き直してください/);assert.doesNotMatch(windows,/cancel-reopen/);
+});
+
+test('Mac auto reopen apply waits for drafts without another confirmation; uses only the Mac coordination route',async()=>{
+ const f=fixture();f.context.confirm=()=>{throw Error('Mac draft wait must not ask again');};
+ f.context.chatDraft={fixture:'unsent text'};f.run(`appUpdateData={supported:true,mode:'packaged',phase:'ready',autoReopen:{phase:'idle'}}`);
+ await f.context.applyAppUpdate();assert.equal(f.calls[0].route,'/api/app-update/reopen');assert.equal(f.calls[0].body.action,'apply');
+ assert.equal(f.context.chatDraft.fixture,'unsent text');
+});

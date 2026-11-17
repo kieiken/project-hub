@@ -6,6 +6,10 @@ function once(s,a,b){assert.equal(s.split(a).length,2,'release_source_boundary_c
 function common(s){return s.replaceAll('../staging-app/runtime.cjs','./core.cjs').replaceAll('../staging-app/protocol.cjs','./protocol.cjs').replaceAll('purchase-test-app/','release-app/').replaceAll('purchase-test-manifest.json','release-manifest.json').replaceAll('public-purchase-test','public-release').replaceAll('TrialUpdate','ReleaseUpdate').replaceAll('purchase-runtime-v1','release-runtime-v1').replaceAll('試験登録','利用コードの登録').replaceAll('試験用の発行先','利用権の発行先').replaceAll('購入試験版は作業','Project Hubは作業').replaceAll('購入試験版を起動','Project Hubを起動');}
 function runtime(s){
   s=common(s);
+  s=once(s,"  return new (require('./update.cjs').ReleaseUpdate)({ root: configured.root,", "  const updater = new (require('./update.cjs').ReleaseUpdate)({ root: configured.root,");
+  s=once(s,'    windowLaunch: configured.launch.HUB_WINDOW_LAUNCH, env: process.env, verifyPackage, ...options });', `    windowLaunch: configured.launch.HUB_WINDOW_LAUNCH, env: process.env, verifyPackage, ...options });
+  if(process.platform==='darwin' && !options.dry)require('./auto-reopen.cjs').attach(updater);
+  return updater;`);
   s=once(s,'const workspace=new Workspace({root:configured.root,home:configured.home,app:configured.base});',`const workspace=new Workspace({root:configured.root,home:configured.home,app:configured.base,
     documentsDirectory:()=>require('../lib/platform').documentsDirectory()});`);
   s=once(s,"  Object.assign(process.env, launch);",`  // Keep owner capabilities beneath the already verified management root.

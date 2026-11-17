@@ -4,6 +4,11 @@
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),assert=require('node:assert/strict'),crypto=require('node:crypto');
 const shared=require('../purchase-test-app/build.cjs'),compile=require('./compile.cjs');
 const repo=path.resolve(__dirname,'../..'),sha=b=>crypto.createHash('sha256').update(b).digest('hex');
+function serverSource(source,platform){
+  let s=shared.overlayServer(source).replaceAll('stagingApp','releaseApp').replaceAll('stagingLicense','releaseLicense').replaceAll('./purchase-test-app/','./release-app/');
+  if(platform==='darwin')s=compile.once(s,"&&!aiTools.isOperating()&&!sessions.list().some(x=>x.running)&&chats.running.size===0)","&&!legacyImport.running&&!taskHistory.activeWrites.size&&!freetalkHistory.activeWrites?.size&&!aiTools.isOperating()&&!sessions.list().some(x=>x.running)&&chats.running.size===0)");
+  return s;
+}
 function build(source,destination,platform,version='4.125.2'){
   assert.match(source,/^[a-f0-9]{40}$/);assert.match(version,/^\d+\.\d+\.\d+$/);assert.equal(destination,path.resolve(destination));assert.ok(!fs.existsSync(destination));assert.ok(['darwin','win32'].includes(platform));
   const git=args=>cp.execFileSync('git',args,{cwd:repo,maxBuffer:32*1024*1024}),blob=name=>git(['show',source+':'+name]);
@@ -17,7 +22,7 @@ function build(source,destination,platform,version='4.125.2'){
   const rows=git(['ls-tree','-rz',source]).toString().split('\0').filter(Boolean).map(line=>{const [meta,name]=line.split('\t');return {name,mode:meta.split(' ')[0]};});
   for(const row of rows.filter(r=>shared.include(r.name,platform)&&!/^hub\/(staging-app|purchase-test-app)\//.test(r.name))){
     assert.ok(['100644','100755'].includes(row.mode));let bytes=blob(row.name),s=bytes.toString();
-    if(row.name==='hub/server.js')s=shared.overlayServer(s).replaceAll('stagingApp','releaseApp').replaceAll('stagingLicense','releaseLicense').replaceAll('./purchase-test-app/','./release-app/');
+    if(row.name==='hub/server.js')s=serverSource(s,platform);
     else if(row.name==='hub/package.json')s=JSON.stringify({...JSON.parse(s),version},null,2)+'\n';
     else if(row.name==='hub/lib/license/policy.js')s=s.replaceAll('project-hub-4.125.0-',`project-hub-${version}-`);
     else if(row.name==='hub/lib/routes/state.js')s=compile.once(s,'root: ROOT, hubInstance:',"root: ROOT, dataManagementRoot: require('../../release-app/runtime.cjs').managementRoot(), hubInstance:");
@@ -26,7 +31,7 @@ function build(source,destination,platform,version='4.125.2'){
       s=compile.once(s,'function renderEmpty() {',"function renderEmpty() { if(typeof renderDataLocationEmpty === 'function' && state.root===state.dataManagementRoot) {renderDataLocationEmpty();return;}");
       s=compile.once(s,'ターミナルで <code>bash setup.sh</code> を実行すると、今の作業の台帳が作られます。','左の［＋ 新しいプロジェクト］から最初のプロジェクトを作れます。保存先を変える場合は［設定］→［管理］→［データの保存先］を開いてください。');
     }
-    else if(row.name==='hub/public/index.html')s=compile.once(s,'<script src="app-update.js"></script>','<script src="app-update.js"></script><script src="data-location.js"></script>');
+    else if(row.name==='hub/public/index.html')s=compile.once(s,'<script src="app-update.js"></script>','<script src="app-update.js"></script><script src="data-location.js"></script>'+(platform==='darwin'?'<script src="auto-reopen.js"></script>':''));
     else if(row.name==='hub/public/data-location.js')s=s.replaceAll('試験用の購入情報','購入情報').replaceAll('試験中に別の場所へ保存した内容は残りますが、自動では合流しません。','別の場所にある内容は残りますが、自動では合流しません。');
     else if(row.name==='THIRD_PARTY_NOTICES.md')s=shared.distributionNotices(s).replaceAll('購入試験版','配布アプリ');
     else {put(row.name,bytes,row.mode==='100755'?0o755:0o644);continue;}
@@ -46,6 +51,10 @@ function build(source,destination,platform,version='4.125.2'){
   if(platform==='win32')put('START-WINDOWS.cmd','@echo off\r\nset NODE_OPTIONS=\r\nset NODE_PATH=\r\ncd /d "%~dp0"\r\nnode hub\\release-app\\launch.cjs\r\nif errorlevel 1 pause\r\n');
   if(platform==='win32')put('SETUP-WINDOWS.cmd',blob('hub/app/windows/SETUP-WINDOWS.cmd').toString().replace(/\r?\n/g,'\r\n'));
   if(app){
+    for(const name of ['auto-reopen.cjs','ReopenState.swift','Reopen.swift'])put('hub/release-app/'+name,blob('hub/release-app/'+name));
+    const helper=path.join(base,'hub/release-app/auto-reopen-native');
+    cp.execFileSync('/usr/bin/swiftc',['-O','-target','arm64-apple-macosx13.0',path.join(base,'hub/release-app/ReopenState.swift'),path.join(base,'hub/release-app/Reopen.swift'),'-o',helper,'-framework','Cocoa'],{timeout:120000});fs.chmodSync(helper,0o755);
+    manifest.files.push({path:'hub/release-app/auto-reopen-native',bytes:fs.statSync(helper).size,sha256:sha(fs.readFileSync(helper)),mode:0o755});
     shared.macIcon(app,path.join(base,'hub/public/icon.png'));
     const window=shared.windowSource(blob('hub/staging-app/Window.swift').toString()).replaceAll('4588','4545').replaceAll('購入試験版','Project Hub').replaceAll('purchase-test-app/','release-app/');
     manifest.macShellHash=sha(window);
@@ -63,4 +72,4 @@ function build(source,destination,platform,version='4.125.2'){
   return {source,version,platform,app,base,files:manifest.files.length,manifestSha256:sha(fs.readFileSync(path.join(base,'release-manifest.json')))};
 }
 if(require.main===module)console.log(JSON.stringify(build(process.argv[2],path.resolve(process.argv[3]),process.argv[4],process.argv[5])));
-module.exports={build};
+module.exports={build,serverSource};

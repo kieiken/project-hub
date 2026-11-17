@@ -180,3 +180,44 @@ test('Mac: verified full-shell replacement without a prepared/selected runtime c
  const next=f.make({version:'4.126.102',hubPath:selected.runtime,bootstrap:origin,env:{HUB_UPDATE_CONFIRM:selected.token}});await next.recover();
  assert.equal(await next.healthy({version:'4.126.102',hubPath:selected.runtime,token:selected.token,restored:true,instance:'fixture'}),true);f.preserved();
 });
+
+// The real emitted updater owns installation and confirmation; only the native
+// OS launch is replaced with an event receiver in these offline tests.
+for(const result of ['healthy','two failed launches'])test('Mac auto reopen: signed apply, normal handoff and '+result,async t=>{
+ const f=fixture(t,'darwin',{version:'4.126.103',target:'4.126.104'});await f.ready();
+ let launches=0,approved=0;const reopen=require('../release-app/auto-reopen.cjs');
+ reopen.attach(f.u,{now:()=>f.now,launch:()=>{launches++;return {ready:Promise.resolve(),go(){},stop(){},approve(){approved++;}};}});
+ f.u.reopener.request();await f.u.apply();assert.equal(f.u.data.phase,'installed');
+ const before=structuredClone(f.u.data.pendingConfirm);f.now+=2000;
+ f.u.reopener.pulse({client:'native-window-0001',ticket:f.u.reopener.ticket,ready:true});
+ await f.u.reopener.advance(async()=>!await f.u.strictBusy());assert.equal(launches,1);
+ f.u.reopener.beforeQuit(f.u.reopener.ticket);f.u.reopener.approved();assert.equal(approved,1);
+ assert.deepEqual(f.u.data.pendingConfirm,before);
+ const selected=api.selectLaunch(f.store,f.origin,{...f.options,now:f.now});assert.equal(selected.token,before.token);
+ if(result==='healthy'){
+  const next=f.make({version:f.manifest.version,hubPath:selected.runtime,env:{HUB_UPDATE_CONFIRM:selected.token}});await next.recover();
+  assert.equal(await next.healthy({version:f.manifest.version,hubPath:selected.runtime,token:selected.token,restored:true,instance:'fixture'}),true);
+  assert.equal(next.data.pendingConfirm,undefined);assert.equal(next.restartNeeded,false);assert.equal(next.data.lastInstalled.version,'4.126.104');
+ }else{
+  assert.equal(f.store.read().value.pendingConfirm.attempts,1);
+  assert.equal(api.selectLaunch(f.store,f.origin,{...f.options,now:f.now}).token,before.token);
+  const previous=api.selectLaunch(f.store,f.origin,{...f.options,now:f.now});
+  assert.deepEqual(previous,{runtime:f.origin,token:''});assert.equal(f.store.read().value.phase,'rolled-back');assert.equal(f.store.read().value.pendingConfirm,undefined);
+ }
+ f.preserved();
+});
+
+test('Mac auto reopen: emitted ordinary quit checks real save handoff, import and history writes; Windows admission unchanged',async t=>{
+ const f=fixture(t,'darwin');const source=fs.readFileSync(path.resolve(__dirname,'../server.js'),'utf8');
+ const build=require('../release-app/build.cjs'),mac=build.serverSource(source,'darwin');
+ assert.equal(build.serverSource(source,'win32'),server);
+ const start=mac.indexOf('canQuit:b=>'),end=mac.indexOf(')})) return;',start);assert.ok(start>0&&end>start);
+ const make=new Function('chats','updateBusy','legacyImport','taskHistory','freetalkHistory','aiTools','sessions','process','HUB_INSTANCE','return '+mac.slice(start+8,end+1));
+ const taskHistory={activeWrites:new Set()},freetalkHistory={activeWrites:new Set()},aiTools={isOperating:()=>false},sessions={list:()=>[]};
+ const guard=make(f.chats,()=>f.ai||f.chats.guardErrors().length>0,f.importer,taskHistory,freetalkHistory,aiTools,sessions,process,'fixture');
+ assert.equal(await guard({}),true);
+ for(const block of [()=>{f.importer.running=true;},()=>taskHistory.activeWrites.add('fixture'),()=>freetalkHistory.activeWrites.add('fixture'),()=>{f.ai=true;}]){
+  block();assert.equal(await guard({}),false);f.importer.running=false;f.ai=false;taskHistory.activeWrites.clear();freetalkHistory.activeWrites.clear();
+ }
+ f.chats.adoptErrors=[{stage:'save',error:'synthetic failed save'}];assert.equal(await guard({}),false);f.preserved();
+});

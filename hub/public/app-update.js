@@ -39,6 +39,8 @@ function appUpdateHtml(data) {
     ${d.notes ? UI.template`<p class="small">${esc(d.notes)}</p>` : ''}
     ${d.previousVersion ? UI.template`<p class="small">保持している前の版：${esc(d.previousVersion)}</p>` : ''}
     ${d.restartNeeded ? UI.html(d.manualReopen ? '<p class="small">新しい版を準備しました。入力中の文を保存し、処理が終わったらアプリを閉じて同じアプリを開き直してください。起動を確認できなければ前の版へ戻します。</p>' : '<p class="small">新しい版を準備しました。入力中の文とAIの作業が終わるとアプリを開き直します。</p>') : d.pending ? UI.html('<p class="small">まだ適用していない更新があります。</p>') : ''}
+    ${d.autoReopen?.reason ? UI.template`<p class="small" role="status">${esc(d.autoReopen.reason)}</p>` : ''}
+    ${['waiting','starting'].includes(d.autoReopen?.phase) ? UI.html('<button class="btn plain" data-app-update="cancel-reopen" type="button">自動の開き直しを取り消す</button>') : ''}
     ${d.autoTranslate ? UI.html('<p class="small">新版を繁体字中国語に翻訳し、テストを通してからアプリを更新します。</p>') : ''}
     ${d.publishEnabled ? UI.html('<p class="small">テストを通した翻訳のPRを、元のプロジェクトへ送ります。</p>') : ''}
     ${d.prUrl ? UI.template`<button class="btn plain sm" data-url="${esc(d.prUrl)}" type="button">翻訳のPRを見る</button>` : ''}
@@ -114,11 +116,11 @@ function appUpdateMayRestart() { return !appUpdateHasDrafts(); }
 async function applyAppUpdate() {
   const box = $('#app-update-box');
   if (!box || appUpdatePending || appUpdateData?.supported === false || appUpdateData?.mode !== 'packaged' || !['ready', 'deferred'].includes(appUpdateData?.phase)) return;
-  if (appUpdateHasDrafts() && !confirm('入力中の文があります。送信または削除が終わるまでアプリの開き直しを待ちます。更新の準備を進めますか？')) return;
+  if (!appUpdateData.autoReopen && appUpdateHasDrafts() && !confirm('入力中の文があります。送信または削除が終わるまでアプリの開き直しを待ちます。更新の準備を進めますか？')) return;
   const epoch = ++appUpdateEpoch;
   appUpdatePending = true; appUpdateRender(box, appUpdateData);
   try {
-    appUpdateData = await api('/api/app-update', { action: 'apply' });
+    appUpdateData = await api(appUpdateData.autoReopen ? '/api/app-update/reopen' : '/api/app-update', { action: 'apply' });
     if ($('#app-update-box') === box && epoch === appUpdateEpoch) {
       appUpdatePending = false; appUpdateRender(box, appUpdateData);
     }
@@ -135,7 +137,10 @@ document.addEventListener('change', event => {
 });
 document.addEventListener('click', event => {
   const button = event.target.closest?.('[data-app-update]');
-  if (button && !button.disabled) { if (button.dataset?.appUpdate === 'apply') void applyAppUpdate(); else void checkAppUpdate(); }
+  if (button && !button.disabled) {
+    if (button.dataset?.appUpdate === 'cancel-reopen') void api('/api/app-update/reopen',{action:'reopen-cancel'}).then(()=>loadAppUpdate()).catch(e=>toast(e.message));
+    else if (button.dataset?.appUpdate === 'apply') void applyAppUpdate(); else void checkAppUpdate();
+  }
 });
 // Reading status is not another update check. Only the backend schedules the
 // once-a-day upstream check, preserving the last-check record across restarts.
