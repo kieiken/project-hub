@@ -29,3 +29,5 @@ For 4.126.98, added 94 UI and 90 backend entries for tier routing, Token units/c
 For 4.126.103, added 35 UI and 35 backend translations for changes since 4.126.98, including manual update checks, wait reasons, automatic reopen, registration holds/license import and Windows setup notices. Existing translations, native entries and stored control values are unchanged; verifiedWith is 4.126.103. Published with the 4.126.103 language-pack assets.
 
 Known 4.126.103 product limits: the automatic-reopen overlay, raw update/auto-reopen reasons, registration/import notices and Windows setup messages do not consistently call translation helpers. Their dictionary entries are ready, but these paths can still show Japanese. Pack updates alone cannot connect those paths. Automated marked-string coverage is not full-screen coverage. Wording and real Mac/Windows display still need human review.
+
+For 4.126.104, added 2 UI and 2 backend entries for model-list refresh after CLI update checks and waits for AI work or account operations. Existing translations and product display limits are unchanged; verifiedWith is 4.126.104.

@@ -4472,5 +4472,7 @@
   "完了（${14}）": "Completed (${14})",
   "自動の開き直しを取り消す": "Cancel automatic reopen",
   "作業の管理（状態：${57}・手順 ${58}/${59}）": "Task management (status: ${57} · steps ${58}/${59})",
-  "手順 ${66}": "Steps ${66}"
+  "手順 ${66}": "Steps ${66}",
+  "モデル一覧はAIの作業・順番待ちが終わってから確認します。": "The model list will be checked after AI work and queued requests have finished.",
+  "別のアカウント：": "Another account: "
 }

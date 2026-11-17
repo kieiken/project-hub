@@ -15,13 +15,14 @@ function fixture(){
   }
   return elements.get(key);
  };
- const context=vm.createContext({document:{body:{classList:{contains:()=>false,remove(){}}},hidden:false,activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(name,fn){(listeners[name] ||= []).push(fn);}},window:{},navigator:{userAgent:''},
+ const context=vm.createContext({document:{body:{classList:{contains:()=>false,remove(){}}},hidden:false,activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(name,fn){(listeners[name] ||= []).push(event=>{event.target ||= {};event.target.matches ||= ()=>false;return fn(event);});}},window:{},navigator:{userAgent:''},
   localStorage:{getItem:()=>null,setItem(){}},fetch:()=>new Promise(()=>{}),EventSource:class{close(){}},URLSearchParams,
   setInterval(){},clearInterval(){},setTimeout(){},clearTimeout(){},requestAnimationFrame:fn=>fn(),console,
   ModelOrder:require('../public/model-order'),ProjectOrder:require('../public/project-order')});
  context.window.HubChatHistory = require('../public/chat-history');
  require('./fixtures/app-source.cjs').loadApp(context);
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/role-settings.js'),'utf8'),context);
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/role-tiers.js'),'utf8'),context);
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/app-update.js'),'utf8'),context);
  const snapshot={projects:[{id:'p',name:'Project',status:'進行中',parent:'',description:'',phases:[],tasks:[],folders:[],related:[],issues:[],chats:[]}],root:'/fixture',
   roles:{models:{'claude-code':['Opus 5.5'],codex:['GPT-6.1-Sol','GPT-6-Astra'],agy:[]},roles:[],permissions:{}},sessions:[],chatting:[],unread:[],terminal:true,efforts:['中','高'],hiddenModels:{},modelOrder:[],cliFlags:{},version:'1',latest:'1'};
@@ -189,4 +190,17 @@ test('delegated request shows its applied effort and distinguishes role, one-off
  f.context.row.effort='MAX';f.context.row.delegationEffort.source='fallback';html=f.run('baseMsgHtml(row)');assert.match(html,/MAX（Ultraを保存値へ戻しました）/);
  f.context.row.delegationEffort.source='role';html=f.run('baseMsgHtml(row)');assert.match(html,/MAX（役割の思考）/);
  f.context.row.to='claude';f.context.row.effort='極高';f.context.row.delegationEffort.workflow=true;html=f.run('baseMsgHtml(row)');assert.match(html,/補助AIの分担あり/);
+});
+
+test('更新確認の新候補と延期理由を表示し、候補再読込でも役割の下書きを変えない', async()=>{
+ const f=fixture(),normal=f.context.api;
+ f.run('rolesDraft=[{name:"draft",main:{ai:"codex",model:"GPT-6.1-Sol",effort:"高"},backup:{ai:"人"}}]');
+ const before=f.run('JSON.stringify(rolesDraft)'); f.scroll().scrollTop=1234;
+ f.context.api=async(route,body)=>route==='/api/ai-tools/check'?{ok:true,available:false,models:{ok:true,added:2}}:normal(route,body);
+ await f.context.runAiTool('codex','check');
+ assert.match(f.run('aiToolMessage.codex'),/追加 2 件/); assert.equal(f.run('JSON.stringify(rolesDraft)'),before);
+ assert.equal(f.scroll().scrollTop,1234);
+ f.context.api=async(route,body)=>route==='/api/ai-tools/check'?{ok:true,models:{ok:false,deferred:true,warning:'ログイン操作が終わってから確認します。'}}:normal(route,body);
+ await f.context.runAiTool('codex','check'); assert.match(f.run('aiToolMessage.codex'),/ログイン操作/);
+ assert.equal(f.run('JSON.stringify(rolesDraft)'),before);
 });

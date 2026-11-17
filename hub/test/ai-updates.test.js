@@ -293,3 +293,85 @@ test('延期した日次モデル確認は対象CLIが終了すれば別CLI稼�
   codexActive=false;await f.updates.tick();assert.equal(f.calls.filter(c=>c[1]==='debug').length,1);
   await f.updates.tick();assert.equal(f.calls.filter(c=>c[1]==='debug').length,1);
 });
+
+test('更新確認は一覧も取得し新候補数を返すが、変化のない一覧は再保存しない', async t => {
+  const f = fixture(t); await f.updates.tick();
+  f.state.models.push({ slug: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', visibility: 'list' });
+  const result = await f.updates.single('codex', 'check');
+  assert.equal(result.models.ok, true); assert.equal(result.models.added, 1);
+  const before = fs.readFileSync(f.tools.file, 'utf8'), stamp = fs.statSync(f.tools.file).mtimeMs;
+  const persist = f.tools.persist; f.tools.persist = () => { throw Error('unchanged catalog must not be saved'); };
+  const same = await f.updates.single('codex', 'check'); f.tools.persist = persist;
+  assert.equal(same.models.ok, true); assert.equal(same.models.added, 0);
+  assert.equal(fs.readFileSync(f.tools.file, 'utf8'), before); assert.equal(fs.statSync(f.tools.file).mtimeMs, stamp);
+  assert.equal(f.calls.filter(c => c[1] === 'debug').length, 3);
+});
+test('外部CLI更新は同日でも実体と版で検知し、再起動と次の巡回では取得を増やさない', async t => {
+  const f = fixture(t), file = path.join(f.root, 'codex'); fs.writeFileSync(file, 'old');
+  f.tools.find = ai => ai === 'codex' ? file : '';
+  await f.updates.tick(); const n = f.calls.filter(c => c[1] === 'debug').length;
+  fs.writeFileSync(file, 'new CLI contents'); f.state.versions.codex = '0.3.0';
+  f.state.models.push({ slug: 'gpt-6.2-astra', display_name: 'GPT-6.2-Astra', visibility: 'list' });
+  await f.updates.tick(); assert.equal(f.calls.filter(c => c[1] === 'debug').length, n + 1);
+  assert.equal(f.updates.data.modelClients['codex:default'].version, '0.3.0');
+  const count = f.calls.length; await f.updates.tick(); await f.make().tick(); assert.equal(f.calls.length, count);
+  // 同じwrapperでも別の正規版確認が版変更を観測した場合。
+  f.state.versions.codex = '0.4.0'; await f.tools.version('codex', file);
+  await f.updates.tick(); assert.equal(f.calls.filter(c => c[1] === 'debug').length, n + 2);
+});
+test('CLIのリンク先だけの入替えも同日検知する', async t => {
+  const f = fixture(t), a = path.join(f.root, 'a'), b = path.join(f.root, 'b'), link = path.join(f.root, 'codex');
+  fs.mkdirSync(a); fs.mkdirSync(b); fs.writeFileSync(path.join(a, 'codex'), 'same'); fs.writeFileSync(path.join(b, 'codex'), 'same');
+  fs.symlinkSync(path.join(a, 'codex'), link); f.tools.find = ai => ai === 'codex' ? link : '';
+  await f.updates.tick(); fs.unlinkSync(link); fs.symlinkSync(path.join(b, 'codex'), link);
+  await f.updates.tick(); assert.equal(f.calls.filter(c => c[1] === 'debug').length, 2);
+});
+test('更新確認中の作業・順番待ちは理由付き延期、一覧取得失敗は旧一覧保持で自動再試行しない', async t => {
+  const f = fixture(t); await f.updates.tick(); const old = fs.readFileSync(f.tools.file, 'utf8');
+  f.state.busy = 1; const busy = await f.updates.single('codex', 'check');
+  assert.equal(busy.models.deferred, true); assert.match(busy.models.warning, /作業・順番待ち/);
+  assert.equal(f.calls.filter(c => c[1] === 'debug').length, 1);
+  f.state.busy = 0; f.state.fail = 'models'; await f.updates.tick();
+  assert.equal(f.updates.status().tools.codex.modelsStatus, 'unknown'); assert.equal(fs.readFileSync(f.tools.file, 'utf8'), old);
+  const n = f.calls.length; await f.updates.tick(); await f.make().tick(); assert.equal(f.calls.length, n);
+  const failed = await f.updates.single('codex', 'check'); assert.equal(failed.models.ok, false); assert.doesNotMatch(JSON.stringify(failed), /SECRET/);
+});
+test('ログイン操作中はコマンドを起動せず延期し、解除後は指定アカウントだけ補完する', async t => {
+  const f = fixture(t); f.state.rows.push({ ai: 'codex', id: 'other' }); f.state.auth['codex:other'] = 'logged-in';
+  f.accounts.get = (ai, id) => assert.ok(f.state.rows.some(r => r.ai === ai && r.id === id));
+  await f.updates.tick(); f.accounts.locks = new Set(['codex:other']);
+  const n = f.calls.length, result = await f.updates.single('codex', 'check', 'other');
+  assert.equal(result.models.deferred, true); assert.match(result.models.warning, /アカウント操作/); assert.equal(f.calls.length, n);
+  f.accounts.locks.clear(); await f.updates.tick();
+  assert.equal(f.updates.status().tools.codex.account, 'other');
+  assert.equal(f.calls.filter(c => c[1] === 'debug').at(-1).at(-1), 'codex:other');
+  const count = f.calls.length; await f.updates.tick(); assert.equal(f.calls.length, count);
+});
+test('既知のCodex各アカウントを更新確認で取り直し、明示指定は他アカウントを呼ばない', async t => {
+  const f = fixture(t); f.state.rows.push({ ai: 'codex', id: 'other' }); f.state.auth['codex:other'] = 'logged-in';
+  f.accounts.get = (ai, id) => assert.ok(f.state.rows.some(r => r.ai === ai && r.id === id));
+  await f.updates.tick(); await f.updates.single('codex', 'models', 'other');
+  let n = f.calls.filter(c => c[1] === 'debug').length;
+  await f.updates.single('codex', 'check');
+  assert.equal(f.calls.filter(c => c[1] === 'debug').length, n + 2);
+  assert.equal(f.updates.status().tools.codex.account, 'default'); assert.equal(f.updates.status().tools.codex.updateCheck.ok, true);
+  n = f.calls.filter(c => c[1] === 'debug').length; f.reads.length = 0;
+  await f.updates.single('codex', 'check', 'other');
+  assert.equal(f.calls.filter(c => c[1] === 'debug').length, n + 1); assert.deepEqual(f.reads, [['codex', 'other']]);
+  // CLIの外部入替え時には既に一覧を持つ両方を更新し、役割の保存先には触れない。
+  const rolesFile = path.join(f.root, '_hub', 'roles.json'); fs.writeFileSync(rolesFile, '{"main":"gpt-6.1-sol"}');
+  f.tools.clientIdentity = () => 'changed-cli'; n = f.calls.filter(c => c[1] === 'debug').length;
+  await f.updates.tick(); assert.equal(f.calls.filter(c => c[1] === 'debug').length, n + 2);
+  assert.equal(fs.readFileSync(rolesFile, 'utf8'), '{"main":"gpt-6.1-sol"}');
+  f.state.versions.codex = '0.5.0'; await f.tools.version('codex', f.tools.find('codex'));
+  n = f.calls.filter(c => c[1] === 'debug').length; await f.updates.tick();
+  assert.equal(f.calls.filter(c => c[1] === 'debug').length, n + 2);
+  const count = f.calls.length; await f.make().tick(); assert.equal(f.calls.length, count);
+});
+test('モデル取得を含む更新確認は全体を排他し、そのAIの開始も許さない', async t => {
+  const f = fixture(t); let release; f.state.gate = new Promise(r => { release = r; });
+  const pending = f.updates.single('codex', 'check'); await new Promise(r => setImmediate(r));
+  assert.equal(f.tools.isOperating('codex'), true);
+  await assert.rejects(f.updates.single('codex', 'models'), e => e.status === 409);
+  release(); await pending; assert.equal(f.tools.isOperating('codex'), false);
+});

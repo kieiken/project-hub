@@ -12,7 +12,7 @@ module.exports = function ai_updateRoutes(ctx) {
           catch (e) { return send(res, e.status || 502, { error: e.reason || lt('CLI の操作に失敗しました。状態を確認してください。'), stage: e.stage }); }
         }
         if (url.pathname === '/api/ai-tools/check') {
-          try { return send(res, 200, await aiUpdates.single(b.ai, 'check')); }
+          try { return send(res, 200, await aiUpdates.single(b.ai, 'check', b.account)); }
           catch (e) { return send(res, e.status || 502, { error: e.reason || lt('更新情報の確認に失敗しました'), stage: e.stage }); }
         }
         if (url.pathname === '/api/ai-tools/update' || url.pathname === '/api/ai-tools/models/refresh') {

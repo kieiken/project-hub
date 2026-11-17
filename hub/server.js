@@ -143,7 +143,9 @@ const removalReview=new (require('./lib/removal-review').RemovalReview)({store,r
   try{const r=await chats.sendQueued(turn);chats.unqueue(p.id,t.id,o.request);return r;}
   catch(e){chats.unqueue(p.id,t.id,o.request);throw e;}
  }});
-const aiTools = new AiTools({ root: ROOT, dry: DRY, accounts, busy: ai => sessions.list().filter(x => x.running && (!ai || x.ai === ai)).length + [...chats.running.values()].filter(x => !ai || x.ai === ai).length + procwatch.list().filter(x => x.project && (!ai || !x.ai || x.ai === ai)).length + Number(accounts.terminalBusy(ai)) });
+const aiTools = new AiTools({ root: ROOT, dry: DRY, accounts, busy: ai => sessions.list().filter(x => x.running && (!ai || x.ai === ai)).length + [...chats.running.values()].filter(x => !ai || x.ai === ai).length + procwatch.list().filter(x => x.project && (!ai || !x.ai || x.ai === ai)).length + Number(accounts.terminalBusy(ai)) + Number(
+  store.listProjects().some(p => p.tasks.some(t => chats.queue(p.id, t.id).some(q => !ai || !q.ai || q.ai === ai))) ||
+  [...chats.queues.values()].some(q => q.some(x => !ai || !x.ai || x.ai === ai))) });
 const roleTiers = new (require('./lib/role-tiers').RoleTiers)({file:path.join(ROOT,'_hub','role-tiers.json'),roles:rolesData,tools:aiTools,accountFor,modelError,notice:o=>{record('role-tiers-stop',{},o);const p=store.readProject(o.project);if(p&&p.tasks.some(t=>t.id===o.task)){const row=chat.append(p.dir,o.task,{role:'event',text:`${o.role}の振り分けを停止しました：${o.reason}。再開は設定画面で人が決めてください。`});chats.emit(p.id,o.task,{type:'row',row});}}});
 aiTools.canOperate = () => restartControl?.committed ? lt('再起動を開始しています') : taskIntegrate.active || integrateAuto.active ? lt('統合の処理が進行中です') : appUpdate.applying() || appShell.rebuilding ? lt('Hubの更新が進行中です') : '';
 parallelEngine.installTerminal();

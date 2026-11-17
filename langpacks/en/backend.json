@@ -3549,7 +3549,9 @@
     "自動で開き直すのを取り消す": "Cancel automatic reopen",
     "終了を始めたため、取り消せません。開き直しを待っています。": "The app has started closing and can no longer be cancelled. Waiting for it to reopen.",
     "取り消しの結果を確認できません。画面の接続が戻るまで待っています。": "Could not confirm cancellation. Waiting for the page connection to recover.",
-    " 確認箇所：古い試験版の登録記録の保管状態を確認できません。": " Check: Could not verify the archived registration records from the old test version."
+    " 確認箇所：古い試験版の登録記録の保管状態を確認できません。": " Check: Could not verify the archived registration records from the old test version.",
+    "モデル一覧はAIの作業・順番待ちが終わってから確認します。": "The model list will be checked after AI work and queued requests have finished.",
+    "モデル一覧はログインなどのアカウント操作が終わってから確認します。": "The model list will be checked after sign-in and other account operations have finished."
   },
   "labels": {
     "未着手": "Not started",

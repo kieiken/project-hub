@@ -188,6 +188,7 @@ class AiTools {
     this.updateChecks = {};
     this.checking = new Map();
     this.updateEpoch = {};
+    this.clientVersions = {};
     this.catalogs = Object.fromEntries(AIS.map(ai => [ai, { models: [], known: [], refreshedAt: '', source: '' }]));
     try {
       const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
@@ -273,13 +274,32 @@ class AiTools {
     return Boolean(old && !c.models.some(row => row.id === old.id));
   }
 
+  // 一分ごとの確認ではCLIを起動しない。リンク先・実体の変更だけを読む。
+  clientIdentity(ai) {
+    const file = this.find(ai);
+    if (!file) return '';
+    try {
+      const real = fs.realpathSync(file), s = fs.statSync(real);
+      return JSON.stringify([file, real, s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs]);
+    } catch { return JSON.stringify([file]); }
+  }
+
+  async modelClient(ai, opts) {
+    const identity = this.clientIdentity(ai), cached = this.clientVersions[ai];
+    const version = cached?.identity === identity ? cached.version : await this.version(ai, this.find(ai), false, opts);
+    return { identity, version };
+  }
+
   async version(ai, file, strict = false, opts = {}) {
     if (!file || this.dry) return '';
     try {
       file = this.ready(ai, file);
       const value = (await this.run(file, ['--version'], { timeout: 10000, env: opts.env })).trim().split('\n')[0];
       const number = value.match(/\b\d+\.\d+\.\d+(?:[-+][\w.]+)?\b/);
-      if (number) return number[0];
+      if (number) {
+        this.clientVersions[ai] = { identity: this.clientIdentity(ai), version: number[0] };
+        return number[0];
+      }
     } catch (e) { if (e.stage === 'mac-confirmation') throw e; /* status は不明、更新後は検証失敗として返す */ }
     if (strict) throw toolError(502, 'verify', lt('更新は実行されましたが、CLI の版を確認できませんでした'));
     return '';
@@ -357,6 +377,12 @@ class AiTools {
     const refreshedAt = new Date().toISOString();
     const next = { ...this.catalogs, [ai]: { models: clean, known, refreshedAt, source: found.source,
       ...(ai === 'agy' ? { state: found.authRequired ? 'auth-required' : clean.length ? 'ready' : 'empty', error: '' } : {}) } };
+    const { refreshedAt: _previousTime, ...previousContent } = current;
+    const { refreshedAt: _nextTime, ...nextContent } = next[ai];
+    if (JSON.stringify(previousContent) === JSON.stringify(nextContent)) {
+      return { ok: true, models: clean, added: 0, refreshedAt: current.refreshedAt, source: found.source, saved: false,
+        ...(ai === 'agy' && !clean.length ? { empty: true, warning: lt('利用可能なモデルがありません。モデル一覧を再取得してください') } : {}) };
+    }
     const profiles = ai === 'codex' ? { ...this.codexAccounts, [account]: next.codex } : this.codexAccounts;
     if (ai === 'codex' && account !== 'default') next.codex = this.catalogs.codex;
     this.persist(next, profiles);

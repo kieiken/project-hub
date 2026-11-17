@@ -136,7 +136,8 @@ async function refreshAiToolCatalog() {
 function aiToolResultText(action, r) {
   const modelReport = result => {
     if (!result) return UI.text('モデル一覧の状態を確認できませんでした。');
-    if (result.ok === false) return UI.template`モデル一覧の再取得に失敗しました：${result.error || UI.text('理由を確認できません')}。`;
+    if (result.deferred) return result.warning || UI.text('モデル一覧はAIの作業・順番待ちが終わってから確認します。');
+    if (result.ok === false) return UI.template`モデル一覧の再取得に失敗しました：${result.error || result.warning || UI.text('理由を確認できません')}。`;
     const unchanged = Boolean(result.unchanged);
     const added = !unchanged && typeof result.added === 'number' ? UI.template`（追加 ${result.added} 件）` : '';
     return `${unchanged ? UI.text('モデル一覧は前回の内容を使用しています') : UI.template`モデル一覧を再取得しました${added}`}。`
@@ -144,6 +145,8 @@ function aiToolResultText(action, r) {
       + (result.warning ? UI.template`注意：${result.warning}。` : '');
   };
   if (action === 'models') return modelReport(r);
+  if (action === 'check') return (r.available ? UI.text('更新があります。適用する時は別のボタンを押してください。') : UI.text('更新の確認が終わりました。')) + modelReport(r.models)
+    + (r.models?.accounts || []).map(result => UI.text('別のアカウント：') + modelReport(result)).join('');
   if (r.state) return UI.template`更新結果：${({updated:UI.text('更新済み'),checked:UI.text('確認済み'),failed:UI.text('失敗'),unsupported:UI.text('未対応'),unverified:UI.text('版未確認'),busy:UI.text('稼働中'),'mac-confirmation':UI.text('Mac の確認が必要')})[r.state] || r.state}。` + (r.notice || '');
   const before = r.beforeVersion || '', after = r.afterVersion || '';
   const base = r.verified === false ? UI.template`更新操作は終わりましたが、版を確認できませんでした${r.verifyError ? `：${r.verifyError}` : ''}。` : r.changed
@@ -157,7 +160,12 @@ async function runAiTool(ai, action) {
   if (action === 'check') {
     if (!AIS.includes(ai) || aiCheckPending[ai] || aiTools?.[ai]?.checking || aiTools?.[ai]?.installed === false) return;
     aiCheckPending[ai] = true; aiToolMessage[ai] = UI.text('更新情報を確認しています…'); drawAiTools();
-    try { const r = await api('/api/ai-tools/check', { ai }); if (aiTools) aiTools[ai].updateCheck = r; aiToolMessage[ai] = r.available ? UI.text('更新があります。適用する時は別のボタンを押してください。') : UI.text('更新の確認が終わりました。'); }
+    try {
+      const r = await api('/api/ai-tools/check', { ai });
+      if (aiTools) aiTools[ai].updateCheck = r;
+      aiToolMessage[ai] = aiToolResultText('check', r);
+      await refreshAiToolCatalog();
+    }
     catch (e) { aiToolMessage[ai] = aiToolErrorText(e); }
     finally { aiCheckPending[ai] = false; await loadAiTools(); drawAiTools(); }
     return;
