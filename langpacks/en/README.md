@@ -1,4 +1,4 @@
-# English language pack (draft)
+# English language pack
 
 Project Hub runs in Japanese. This optional pack shows the app in English. Texts without a translation stay in Japanese.
 
@@ -6,7 +6,7 @@ Install: unzip the pack, then in the app open [Settings] → "Language pack" →
 
 Files: `ui.json` (screens), `backend.json` (messages from the app and to the AIs), `native.json` (Mac app window). Keys are the Japanese source text; values are the English text. Keep `${0}` placeholders, HTML tags, line breaks and Markdown marks as they are.
 
-This is an AI-assisted draft for Project Hub source version 4.126.41. `verifiedWith` records the source version used for automated compatibility checks; it does not mean every screen has been reviewed. Corrections are welcome as Pull Requests — see CONTRIBUTING.md, section "言語パック". The glossary is in `docs/GLOSSARY.md`.
+This is an AI-assisted language pack, originally prepared for Project Hub source version 4.126.41. `verifiedWith` records the source version used for automated compatibility checks; it does not mean every screen has been reviewed. Corrections are welcome as Pull Requests — see CONTRIBUTING.md, section "言語パック". The glossary is in `docs/GLOSSARY.md`.
 
 Check before sending: `HUB_I18N_STRICT=1 node hub/test/run.cjs ../langpacks/en/test/en-pack.test.js`
 
@@ -25,3 +25,7 @@ For 4.126.44, six sidebar search entries were added and the compact search form 
 For 4.126.96, 42 UI entries and 39 backend entries were added for screens and messages added or reworded since 4.126.44, including the new settings layout, video attachments and the data location picker. The strict UI scan and backend tests pass; verifiedWith is 4.126.96.
 
 For 4.126.98, added 94 UI and 90 backend entries for tier routing, Token units/cache hit rate/tool calls, bulk review, settings and current instructions. Tier screens and review prompts now use translation helpers. Existing translations and native entries are preserved. Automated checks do not certify every screen or packaged Mac/Windows display.
+
+For 4.126.103, added 35 UI and 35 backend translations for changes since 4.126.98, including manual update checks, wait reasons, automatic reopen, registration holds/license import and Windows setup notices. Existing translations, native entries and stored control values are unchanged; verifiedWith is 4.126.103. Published with the 4.126.103 language-pack assets.
+
+Known 4.126.103 product limits: the automatic-reopen overlay, raw update/auto-reopen reasons, registration/import notices and Windows setup messages do not consistently call translation helpers. Their dictionary entries are ready, but these paths can still show Japanese. Pack updates alone cannot connect those paths. Automated marked-string coverage is not full-screen coverage. Wording and real Mac/Windows display still need human review.

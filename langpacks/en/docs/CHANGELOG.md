@@ -1,5 +1,9 @@
 # English pack changelog
 
+## Language pack 4.126.103
+- Added 35 UI and 35 backend translations for changes since 4.126.98. Preserved every existing translation, native entry and stored control value. verifiedWith: 4.126.103.
+- Published with the 4.126.103 language-pack assets. Dictionary loading and marked-source coverage do not certify unmarked product paths. Automatic-reopen overlay and raw update/registration/import/setup notices can still show Japanese; see README. Human wording and packaged-app display remain unverified.
+
 ## Language pack 4.126.98 (draft)
 - Added 94 UI and 90 backend entries, including tiers, Token display and bulk alert review. Preserved existing translations and native entries. verifiedWith: 4.126.98.
 - Includes current 4.126.97–4.126.98 changes: isolated web-only tier reviews; saved holds visible in usage; Token panel scroll preservation; header alert button removed; snapshot-scoped bulk review. Not published; packaged Mac/Windows display remains unverified.

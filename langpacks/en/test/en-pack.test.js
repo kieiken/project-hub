@@ -12,6 +12,7 @@ const kana = /[\u3041-\u3096\u30a1-\u30fa]/u;
 // Task-file section names and stored states stay Japanese because the program reads them.
 // The delegation API role value コーディング and tier value 軽い also stays exact (all tier values stay exact).
 // Also the stored values the app parses from AI output (results lines, issue states, sharing checks).
+// The wait-state delimiters are also parsed control tokens; never translate them.
 const kept = /コーディング|軽い|難しい|成果|確認結果|残件申告|最新の再開要約|手順|やったこと|次にやること|注意|メモ|本文保管|未着手|実行中|返事待ち|停止|完了確認待ち|完了|未解決|確認待ち|判断待ち|解決済み|履歴|ファイル移行|ファイル|本体保存済み|なし|あり|不明|おすすめ|複数可|\[\[\/?質問\]\]/g;
 const read = name => JSON.parse(fs.readFileSync(path.join(pack, name), 'utf8'));
 
@@ -35,7 +36,7 @@ test('translations keep placeholders and contain no Japanese kana outside kept t
     for (const [source, value] of Object.entries(dict)) {
       const ph = s => (s.match(/\$\{\d+\}/g) || []).sort().join();
       assert.equal(ph(value), ph(source), name + ': placeholders differ: ' + source.slice(0, 60));
-      assert.ok(!kana.test(value.replace(kept, '')), name + ': untranslated: ' + source.slice(0, 60));
+      assert.ok(!kana.test(value.replace(/\[\[\/?待ち\]\]/g, '').replace(kept, '')), name + ': untranslated: ' + source.slice(0, 60));
     }
   }
 });
