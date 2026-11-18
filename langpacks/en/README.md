@@ -33,3 +33,5 @@ Known 4.126.103 product limits: the automatic-reopen overlay, raw update/auto-re
 For 4.126.104, added 2 UI and 2 backend entries for model-list refresh after CLI update checks and waits for AI work or account operations.
 
 For 4.126.105, the same translations cover the existing interface messages. The pack was verified for import and language selection with 4.126.105.
+
+For 4.126.106, the existing translations cover the free-talk queue editing fix.

@@ -25,9 +25,9 @@ test('常設IDの別表記は親・派生元・ネストした統合対象でも
   assert.equal(guard('/api/chat/send',{project:'freetalk',text:'FreeTalk'}),'');
   assert.match(guard('/api/chat/send',{project:'FreeTalk',text:'相談'}), /freetalk/);
 });
-test('未完のdismiss/resolveは正規の話題だけ許可し、常設枠・別表記・他の保護経路は維持', () => {
+test('待ち指示の編集と未完の操作は正規の話題だけ許可し、常設枠・別表記・他の保護経路は維持', () => {
   const topic='20261114-01';
-  for(const route of ['/api/chat/unfinished/dismiss','/api/chat/unfinished/resolve']) {
+  for(const route of ['/api/chat/queue/edit','/api/chat/unfinished/dismiss','/api/chat/unfinished/resolve']) {
     assert.equal(guard(route,{project:'freetalk',task:topic,id:'receipt'}),'');
     assert.equal(guard(route,{project:'normal',task:topic,id:'receipt'}),'');
     for(const body of [
@@ -40,7 +40,7 @@ test('未完のdismiss/resolveは正規の話題だけ許可し、常設枠・�
   }
   for(const route of ['/api/task/completion','/api/task','/api/task/merge','/api/task/copyclear',
     '/api/task/integrate','/api/hierarchy/remove/apply','/api/hierarchy/pin','/api/hierarchy/order',
-    '/api/project/status','/api/chat/unfinished/other'])
+    '/api/project/status','/api/chat/unfinished/other','/api/chat/queue/retreat'])
     assert.match(guard(route,{project:'freetalk',task:topic,state:'完了'}),/常設/,route);
 });
 test('Storeは非正規の常設IDを解決せず、予約名を新規作成しない', t => {

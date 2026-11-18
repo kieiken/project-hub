@@ -30,8 +30,8 @@ function guard(route, body) {
   if (route === '/api/project/new' && typeof body.name === 'string' && isTarget(body.name.trim())) return PROTECTED;
   if (hasTarget(body, true)) return lt('freetalk は正規の名前「freetalk」で指定してください。') + PROTECTED;
   if (!hasTarget(body)) return '';
-  // 未完の記録だけを閉じる操作。話題の実在と記録の版は共通の経路で確認する。
-  if (['/api/chat/unfinished/dismiss','/api/chat/unfinished/resolve'].includes(route))
+  // 話題内の待ち指示や未完の記録だけを扱う。実在と競合は各経路で確認する。
+  if (['/api/chat/queue/edit','/api/chat/unfinished/dismiss','/api/chat/unfinished/resolve'].includes(route))
     return body.project === ID && typeof body.task === 'string' && body.task.trim() && !isTarget(body.task) ? '' : PROTECTED;
   if (['/api/freetalk/project-start','/api/freetalk/project-preview','/api/freetalk/promotion-intent','/api/freetalk/promote','/api/freetalk/clean','/api/freetalk/delete','/api/freetalk/summary','/api/freetalk/rotate','/api/chat/send','/api/chat/note','/api/chat/stop','/api/chat/unqueue','/api/webchat/retry','/api/webchat/stop','/api/delegate','/api/task/read',
     '/api/task/attach','/api/reveal','/api/acceleration/task','/api/accounts/select','/api/chatgpt/prompt','/api/chatgpt/result','/api/roles/review','/api/discussion/start','/api/discussion/summary',

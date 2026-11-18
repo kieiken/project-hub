@@ -1,7 +1,7 @@
 'use strict';
 
 module.exports = function queuecontrolRoutes(ctx) {
-  const { ROLES_FILE, chats, freetalkAttachments, projectAttachments, fromRemote, fs, launch, limitIdentity, lt, modelError, permCmd, pickSpec, queueActions, queueEdit, queueEditable, getQueueRetreat, record, requestAccount, roleHistory, getRoleReview, roles, rolesData, send, store } = ctx;
+  const { ROLES_FILE, chats, freetalkAttachments, freetalkHistory, projectAttachments, fromRemote, fs, launch, limitIdentity, lt, modelError, permCmd, pickSpec, queueActions, queueEdit, queueEditable, getQueueRetreat, record, requestAccount, roleHistory, getRoleReview, roles, rolesData, send, store } = ctx;
 
   function handleDraft(req, res, url) {
       const p = store.readProject(url.searchParams.get('project')), task = url.searchParams.get('task');
@@ -26,6 +26,10 @@ module.exports = function queuecontrolRoutes(ctx) {
   function handleEdit(req, res, url, b) {
       const p = store.readProject(b.project), file = store.taskFile(b.project, b.task);
       if (!p || !file) return send(res, 400, { error: lt('作業が見つかりません') });
+      if (p.id === 'freetalk') {
+        try { freetalkHistory.topic(b.task); }
+        catch (e) { return send(res, 409, { error: e.message }); }
+      }
       const q = chats.queue(p.id, b.task), item = q.find(x => x.id === String(b.id || ''));
       if (!item) return send(res, 404, { error: lt('その指示はもう待っていません') });
       if (!queueEditable(item)) return send(res, 409, { error: lt('この待ち指示は編集できません') });

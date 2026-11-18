@@ -224,6 +224,69 @@ test('正規HTTP：A実行中にBも開始し、二重開始・掃除・移行�
  assert.notEqual(chat.readMeta(pdir,topics[0].id).sessions.codex,chat.readMeta(pdir,topics[1].id).sessions.codex);
 });
 
+test('待ち指示HTTP：添付付きの編集でモデルと本文だけを更新し、既存のすぐ追加で一度だけ送る',async()=>{
+ const {chats}=require('../server'),qe=require('../lib/queue-edit');
+ const topic=await(await post('/api/freetalk/topic')).json(),other=await(await post('/api/freetalk/topic')).json();
+ const key={project:'freetalk',task:topic.id},marker='image-queue-gate-edit-save';
+ const send=body=>post('/api/chat/send',{...key,generation:1,ai:'codex',model:'GPT-6.1-Sol',...body});
+ const queue=()=>chats.queue(key.project,key.task),busy=()=>chats.busy(key.project,key.task);
+ const upload=async task=>{
+  const r=await fetch(base+'/api/task/upload?'+new URLSearchParams({...key,task,name:'image.png',generation:1}),
+   {method:'POST',headers:{'X-Hub':'1'},body:fs.readFileSync(path.join(__dirname,'../public/icon.png'))});
+  assert.equal(r.status,200,await r.clone().text());return r.json();
+ };
+ const image=await upload(topic.id),otherImage=await upload(other.id);
+ const add=async body=>{const r=await send({mode:'queue',...body});assert.equal(r.status,200,await r.clone().text());return (await r.json()).id;};
+ const edit=(body)=>post('/api/chat/queue/edit',{...key,...body});
+ const draft=id=>fetch(base+'/api/chat/queue/draft?'+new URLSearchParams({...key,id}));
+ const original='確認してほしい画像',edited='画像の説明を追加\n確認してください';
+ let following;
+ try {
+  assert.equal((await send({text:marker})).status,200);
+  await wait(()=>fs.existsSync(path.join(bin,marker+'.started')));
+  const current=busy(),taskBefore=fs.readFileSync(store.taskFile(key.project,key.task));
+  const text=qe.format(original,[image]);
+  // Older queued images open the editor through the draft route.
+  const id=await add({text,images:[image.id]});
+  await add({text:'その次の指示'});following=queue()[1];
+  const opened=await draft(id);assert.equal(opened.status,200);
+  const {draft:source,expectedItem}=await opened.json();
+  assert.equal(source.text,original);assert.deepEqual(source.attachments.map(x=>x.id),[image.id]);
+  const change={id,text:edited,expectedText:text,expectedItem,ai:'codex',model:'gpt-6-astra',attachmentIds:[image.id]};
+  const before=queue();
+  assert.equal((await edit({...change,project:'FreeTalk'})).status,409);
+  assert.equal((await edit({...change,task:other.id})).status,404);
+  const foreign=await edit({...change,attachmentIds:[otherImage.id]});
+  assert.equal(foreign.status,409);assert.match(await foreign.text(),/添付情報/);
+  assert.deepEqual(queue(),before);assert.deepEqual(chats.queue(key.project,other.id),[]);
+  const saved=await edit(change);assert.equal(saved.status,200,await saved.clone().text());
+  const [item,next]=(await saved.json()).queue;
+  assert.equal(item.id,id);assert.equal(item.model,'Astra');assert.equal(item.text,qe.format(edited,[image]));
+  assert.deepEqual(item.attachmentDraft,{text:edited,attachments:source.attachments});
+  assert.deepEqual(item.images,[image.path]);assert.deepEqual(next,following);
+  const queueFile=chat.files(pdir,key.task).queue;
+  assert.deepEqual(JSON.parse(fs.readFileSync(queueFile,'utf8')),[item,following]);
+  assert.equal(busy(),current);assert.deepEqual(fs.readFileSync(store.taskFile(key.project,key.task)),taskBefore);
+  assert.equal((await edit(change)).status,409);
+  assert.equal((await send({fromQueue:id,mode:'amend',expectedText:text,expectedItem})).status,409);
+  const amend={fromQueue:id,mode:'amend',expectedText:item.text,expectedItem:JSON.stringify(item)};
+  const sent=await send(amend);assert.equal(sent.status,200,await sent.clone().text());
+  assert.deepEqual(queue(),[following]);assert.equal((await send(amend)).status,404);
+  fs.writeFileSync(path.join(bin,marker+'.release'),'yes');
+  await wait(()=>chat.read(pdir,key.task).some(x=>x.role==='assistant'&&x.request===id));
+  const rows=chat.read(pdir,key.task),user=rows.filter(x=>x.role==='user'&&x.request===id);
+  assert.equal(user.length,1);assert.equal(user[0].mode,'amend');assert.equal(user[0].model,'Astra');
+  const response=JSON.parse(rows.find(x=>x.role==='assistant'&&x.request===id).text);
+  assert.ok(response.input.includes(marker));assert.ok(response.input.includes(edited));
+  assert.equal(response.args[response.args.indexOf('-i')+1],image.path);
+  assert.ok(fs.existsSync(image.path));assert.ok(fs.existsSync(otherImage.path));
+ } finally {
+  if(following&&queue().some(x=>x.id===following.id))await post('/api/chat/unqueue',{...key,id:following.id});
+  fs.writeFileSync(path.join(bin,marker+'.release'),'yes');
+  await wait(()=>!busy());
+ }
+});
+
 for (const scenario of ['redo-image', 'redo-empty', 'amend', 'automatic', 'manual']) {
  test(`添付キューHTTP：${scenario}の保存画像と偽Codex実argvが一致し、旧確認は復活しない`,async()=>{
   const topic=await(await post('/api/freetalk/topic')).json(),task=topic.id;
