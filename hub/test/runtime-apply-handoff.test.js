@@ -8,7 +8,7 @@ const {ChatRunner}=require('../lib/chat'),zip=require('../lib/update-zip'),boots
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
 const put=(file,bytes)=>{fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,bytes);};
 const source=fs.readFileSync(path.resolve(__dirname,'../purchase-test-app/update.cjs'),'utf8');
-function compiled(text,file){const m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));m._compile(text,file);return m.exports;}
+function compiled(text,file,stubs={}){const m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(path.dirname(file));const load=m.require.bind(m);m.require=name=>Object.hasOwn(stubs,name)?stubs[name]:load(name);m._compile(text,file);return m.exports;}
 const api=compiled(compiler.update(source),path.resolve(__dirname,'../release-app/update.cjs'));
 const server=builder.overlayServer(fs.readFileSync(path.resolve(__dirname,'../server.js'),'utf8'))
  .replaceAll('stagingApp','releaseApp').replaceAll('stagingLicense','releaseLicense').replaceAll('./purchase-test-app/','./release-app/');
@@ -220,4 +220,108 @@ test('Mac auto reopen: emitted ordinary quit checks real save handoff, import an
   block();assert.equal(await guard({}),false);f.importer.running=false;f.ai=false;taskHistory.activeWrites.clear();freetalkHistory.activeWrites.clear();
  }
  f.chats.adoptErrors=[{stage:'save',error:'synthetic failed save'}];assert.equal(await guard({}),false);f.preserved();
+});
+
+// Run the actual emitted HTTP gate with the signed updater. Only the request
+// transport and native launching are replaced, not check/install/reopen logic.
+const runtimeApi=compiled(compiler.runtime(fs.readFileSync(path.resolve(__dirname,'../purchase-test-app/runtime.cjs'),'utf8')),
+ path.resolve(__dirname,'../release-app/runtime.cjs'),{'./core.cjs':{},'./protocol.cjs':{}});
+async function updateRequest(f,route='/api/app-update/check',body={}){
+ const {Readable}=require('node:stream'),req=Readable.from([JSON.stringify(body)]),res={destroyed:false};let reply;
+ req.method='POST';req.headers={};req.complete=true;
+ const lifecycle={state:()=>f.lifecycle,begin:()=>{assert.equal(f.lifecycle,'idle');f.lifecycle='updating';return ()=>{f.lifecycle='idle';};}};
+ await runtimeApi.gate(req,res,new URL(route,'http://127.0.0.1'),{
+  allowed:()=>true,send:(_res,status,data)=>{reply={status,data};},readBody:runtimeApi.readBody,lifecycle,updater:f.u,importer:f.importer,canQuit:async()=>!await f.u.strictBusy(),
+ });
+ assert.equal(reply.status,200);return reply.data;
+}
+function reopenFixture(f){
+ let launches=0;require('../release-app/auto-reopen.cjs').attach(f.u,{now:()=>f.now,launch:()=>{launches++;return {ready:Promise.resolve(),go(){},stop(){},approve(){}};}});
+ return {get launches(){return launches;},async advance(ready=true){f.u.reopener.pulse({client:'manual-check-window',ready,ticket:f.u.reopener.ticket});await f.u.reopener.advance(async()=>!await f.u.strictBusy());}};
+}
+for(const prepared of [false,true])test('Mac: explicit check auto-applies '+(prepared?'prepared':'new')+' update and requests one guarded reopen',async t=>{
+ const f=fixture(t,'darwin');if(prepared){await f.ready();f.now+=60000;}const r=reopenFixture(f);f.u.enabled=true;
+ const result=await updateRequest(f);assert.equal(f.u.data.phase,'installed');assert.equal(result.autoReopen.phase,'waiting');assert.equal(result.manualReopen,false);
+ const ticket=f.u.reopener.ticket,confirmation=structuredClone(f.u.data.pendingConfirm);f.now+=2000;
+ await r.advance(false);assert.equal(r.launches,0);await r.advance();await r.advance();assert.equal(r.launches,1);
+ assert.equal(f.u.reopener.ticket,ticket);assert.deepEqual(f.u.data.pendingConfirm,confirmation);f.preserved();
+});
+for(const blocker of ['AI','queue','import','save'])test('Mac: explicit check waits for '+blocker+' then installs/reopens without another check',async t=>{
+ const f=fixture(t,'darwin'),r=reopenFixture(f);f.u.enabled=true;
+ if(blocker==='AI')f.ai=true;
+ if(blocker==='queue')f.chats.queues.set('P/t',[{request:'fixture'}]);
+ if(blocker==='import')f.importer.running=true;
+ if(blocker==='save')f.chats.adoptErrors=[{stage:'save',error:'fixture'}];
+ const result=await updateRequest(f);assert.equal(result.autoReopen.phase,'waiting');assert.ok(f.u.data.prepared);assert.equal(f.u.restartNeeded,false);
+ f.now+=2000;await r.advance();assert.equal(r.launches,0);assert.equal(f.u.restartNeeded,false);
+ f.ai=false;f.chats.queues.clear();f.importer.running=false;f.chats.adoptErrors=[];
+ await r.advance();assert.equal(f.u.restartNeeded,true);assert.equal(r.launches,0);await r.advance();assert.equal(r.launches,1);f.preserved();
+});
+test('Mac: cancellation and native refusal wait for a new explicit request before retry',async t=>{
+ const f=fixture(t,'darwin'),r=reopenFixture(f);f.u.enabled=true;await updateRequest(f);
+ const before=structuredClone(f.u.data);f.u.reopener.cancel();f.now+=2000;await r.advance();assert.equal(r.launches,0);
+ assert.equal(f.u.status().manualReopen,true);await r.advance();assert.equal(f.u.reopener.phase,'cancelled');
+ await updateRequest(f);assert.equal(f.u.reopener.phase,'waiting');assert.deepEqual(f.u.data,before);assert.equal(r.launches,0);
+ const g=fixture(t,'darwin');g.u.enabled=true;
+ require('../release-app/auto-reopen.cjs').attach(g.u,{now:()=>g.now,launch:()=>{throw Error('synthetic refusal');}});
+ await updateRequest(g);g.now+=2000;g.u.reopener.pulse({client:'manual-check-window',ready:true,ticket:g.u.reopener.ticket});
+ await g.u.reopener.advance(async()=>true);assert.equal(g.u.reopener.phase,'manual');assert.equal(g.u.status().manualReopen,true);assert.equal(g.u.data.phase,'installed');
+ await g.u.reopener.advance(async()=>true);assert.equal(g.u.reopener.phase,'manual');
+ await updateRequest(g);assert.equal(g.u.reopener.phase,'waiting');f.preserved();g.preserved();
+});
+for(const entry of ['scheduled-check','scheduled-tick','disabled','failed-check','no-update'])test('Mac: '+entry+' never requests automatic reopen',async t=>{
+ const f=fixture(t,'darwin'),r=reopenFixture(f);f.u.enabled=entry!=='disabled';
+ if(entry==='failed-check')f.envelope={...f.envelope,sig:Buffer.alloc(64).toString('base64url')};
+ if(entry==='no-update')f.u.currentVersion=f.manifest.version;
+ if(entry==='scheduled-check')await f.u.check(false);
+ else if(entry==='scheduled-tick'){f.u.tick();await f.u.running;}
+ else await updateRequest(f);
+ assert.equal(f.u.reopener.phase,'idle');assert.equal(r.launches,0);
+ if(entry.startsWith('scheduled'))assert.equal(f.u.restartNeeded,true);
+ if(entry==='disabled')assert.ok(f.u.data.prepared);
+ if(entry==='failed-check')assert.equal(f.u.data.phase,'failed');f.preserved();
+});
+test('Windows: explicit check with automatic updates still uses manual reopen',async t=>{
+ const f=fixture(t,'win32');f.u.enabled=true;const result=await updateRequest(f);
+ assert.equal(f.u.data.phase,'installed');assert.equal(result.manualReopen,true);assert.equal(result.autoReopen,undefined);assert.equal(f.u.reopener,undefined);f.preserved();
+});
+
+test('Mac: a skipped cooldown check does not opt a prepared update into reopening',async t=>{
+ const f=fixture(t,'darwin');await f.ready();const r=reopenFixture(f);f.u.enabled=true;
+ const result=await updateRequest(f);assert.equal(result.checkPerformed,false);assert.match(result.checkSkippedReason,/60秒/);
+ assert.equal(f.u.reopener.phase,'idle');assert.equal(f.u.data.phase,'ready');assert.equal(f.u.restartNeeded,false);assert.equal(r.launches,0);f.preserved();
+});
+
+for(const route of ['/api/app-update','/api/app-update/reopen'])test('Mac: explicit apply via '+route+' still requests one guarded reopen',async t=>{
+ const f=fixture(t,'darwin');await f.ready();const r=reopenFixture(f);
+ const result=await updateRequest(f,route,{action:'apply'});assert.equal(result.autoReopen.phase,'waiting');assert.equal(f.u.data.phase,'installed');
+ const ticket=f.u.reopener.ticket;await updateRequest(f,route,{action:'apply'});assert.equal(f.u.reopener.ticket,ticket);
+ f.now+=2000;await r.advance(false);assert.equal(r.launches,0);await r.advance();await r.advance();assert.equal(r.launches,1);f.preserved();
+});
+
+
+for(const blocker of ['none','AI','queue','import','save'])test('Mac: explicit check while already installed requests one protected reopen; blocker '+blocker,async t=>{
+ const f=fixture(t,'darwin');await f.ready();await f.u.apply();const r=reopenFixture(f);f.u.enabled=true;
+ assert.equal(f.u.data.phase,'installed');assert.equal(f.u.restartNeeded,true);
+ const before=structuredClone(f.u.data),calls=f.calls.length;
+ if(blocker==='AI')f.ai=true;
+ if(blocker==='queue')f.chats.queues.set('P/t',[{request:'fixture'}]);
+ if(blocker==='import')f.importer.running=true;
+ if(blocker==='save')f.chats.adoptErrors=[{stage:'save',error:'fixture'}];
+ const result=await updateRequest(f);assert.equal(result.checkPerformed,false);assert.equal(result.autoReopen.phase,'waiting');
+ const ticket=f.u.reopener.ticket;await updateRequest(f);assert.equal(f.u.reopener.ticket,ticket);
+ assert.deepEqual(f.u.data,before);assert.equal(f.calls.length,calls); // No download or apply replay.
+ f.now+=2000;await r.advance(false);assert.equal(r.launches,0); // Input acknowledgement still required.
+ if(blocker!=='none'){await r.advance();assert.equal(r.launches,0);}
+ f.ai=false;f.chats.queues.clear();f.importer.running=false;f.chats.adoptErrors=[];
+ await r.advance();await r.advance();assert.equal(r.launches,1);assert.deepEqual(f.u.data,before);f.preserved();
+});
+for(const entry of ['scheduled','disabled','windows'])test('already installed: '+entry+' does not request automatic reopen',async t=>{
+ const f=fixture(t,entry==='windows'?'win32':'darwin');await f.ready();await f.u.apply();
+ const r=entry==='windows'?null:reopenFixture(f);f.u.enabled=entry!=='disabled';
+ const before=structuredClone(f.u.data),calls=f.calls.length;
+ if(entry==='scheduled'){await f.u.check(false);f.u.tick();await f.u.running;}
+ else await updateRequest(f);
+ assert.equal(f.u.reopener?.phase,entry==='windows'?undefined:'idle');assert.equal(r?.launches||0,0);
+ assert.deepEqual(f.u.data,before);assert.equal(f.calls.length,calls);f.preserved();
 });

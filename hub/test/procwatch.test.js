@@ -143,3 +143,78 @@ test('supported platform adapters continue to scan when background watcher start
   try {w.start();w.start();await Promise.resolve();assert.equal(calls,1);} finally {w.stop();}
  }
 });
+
+test('shared Codex watcher/server have no cwd task ownership; real workers remain visible',async()=>{
+ const executable='/Users/me/.codex/packages/app-server-daemon/releases/0.169.0/bin/codex';
+ const watcher=executable+' app-server daemon pid-update-loop';
+ const server=executable+' app-server --listen unix:// --analytics-default-enabled --managed-daemon';
+ const rows=[{pid:1,ppid:0,command:'/sbin/launchd'},
+  {pid:20,ppid:1,command:watcher},{pid:21,ppid:20,command:server},
+  {pid:22,ppid:21,command:executable+' exec actual-work'},
+  {pid:23,ppid:22,command:executable+' worker'},
+  {pid:24,ppid:21,command:'node tool-wrapper'},
+  {pid:25,ppid:24,command:executable+' exec tool-work'}].map(r=>({...r,since:'fixture'}));
+ const projects=()=>[{id:'P',dir:'/work',tasks:[{id:'task',workdir:'/work/task'}]}];
+ const w=pw.create({selfPid:900,projects,platformApi:{name:'darwin',listProcesses:async()=>rows,processCwd:async pids=>new Map(pids.map(p=>[p,'/work/task']))}});
+ const list=await w.scan();
+ assert.deepEqual(list.filter(r=>r.sharedService).map(r=>[r.pid,r.project,r.task]),[[20,null,null],[21,null,null]]);
+ assert.deepEqual(list.filter(r=>r.project).map(r=>[r.pid,r.task]),[[22,'task'],[25,'task']]);
+ assert.equal(w.hasAncestor(25,pid=>pid===21),true);
+ assert.equal(list.filter(r=>r.project==='P'&&r.task==='task').length,2); // Actual merge/background predicate.
+ rows.splice(3,4); // Workers finish; only the shared watcher and server remain.
+ const idle=await w.scan();assert.equal(idle.length,2);assert.equal(idle.some(r=>r.project),false);
+});
+
+test('Codex daemon exclusion requires a detached watcher parent and the same executable',()=>{
+ const commands=[
+  'codex app-server daemon pid-update-loop',
+  'codex app-server --listen unix:///tmp/codex-daemon-501/socket --managed-daemon',
+  'codex app-server',
+  'codex app-server --listen unix:///tmp/ordinary-server',
+  'codex app-server --listen http://localhost:1234 --managed-daemon',
+  'codex app-server --listen unix:///tmp/socket --managed-daemon extra',
+  'codex exec app-server daemon pid-update-loop',
+  'codex exec --message "app-server --listen unix:///tmp/socket --managed-daemon"',
+  'claude app-server daemon pid-update-loop',
+ ];
+ const rows=[{pid:1,ppid:0,command:'init'},{pid:50,ppid:1,command:'zsh'}];
+ for(const [i,command] of commands.entries())rows.push({pid:100+i,ppid:50,command});
+ for(const [i,command] of commands.entries())rows.push({pid:200+i,ppid:1,command});
+ rows.push({pid:300,ppid:100,command:commands[1]}); // Non-detached watcher.
+ rows.push({pid:301,ppid:200,command:'/different/codex app-server --managed-daemon --listen unix:///tmp/socket'});
+ rows.push({pid:900,ppid:1,command:'node hub/server.js'},{pid:901,ppid:900,command:commands[0]},
+  {pid:902,ppid:901,command:commands[1]},{pid:903,ppid:902,command:'codex exec supervised-work'});
+ const kept=pw.pickAi(rows,900);
+ assert.deepEqual(kept.filter(r=>r.sharedService).map(r=>r.pid),[200]);
+ assert.ok(kept.filter(r=>r.pid>=201&&r.pid<=208).every(r=>!r.sharedService));
+ assert.ok(kept.filter(r=>r.pid>=100&&r.pid<=108).every(r=>!r.sharedService));
+ assert.ok(!kept.some(r=>r.pid>=900)); // Existing Hub descendant ownership remains unchanged.
+ assert.ok(!kept.find(r=>r.pid===301)?.sharedService);
+});
+
+
+test('managed app-server flag order varies, but unrelated parents, executables and subcommands stay watched',()=>{
+ const binary='/Users/me/.codex/packages/app-server-daemon/releases/0.169.0/bin/codex';
+ const watcher=binary+' app-server daemon pid-update-loop';
+ const forms=[
+  'app-server --listen unix:// --analytics-default-enabled --managed-daemon',
+  'app-server --managed-daemon --analytics-default-enabled --listen unix://',
+  'app-server --analytics-default-enabled --listen unix:// --managed-daemon',
+ ];
+ const rows=[{pid:1,ppid:0,command:'init'},{pid:20,ppid:1,command:watcher},
+  {pid:21,ppid:20,command:binary+' '+forms[0]},
+  {pid:22,ppid:21,command:binary+' exec actual-work'},
+  {pid:30,ppid:1,command:'zsh'},
+  ...forms.map((args,i)=>({pid:100+i,ppid:20,command:binary+' '+args})),
+  ...forms.map((args,i)=>({pid:200+i,ppid:1,command:binary+' '+args})),
+  ...forms.map((args,i)=>({pid:300+i,ppid:30,command:binary+' '+args})),
+  {pid:400,ppid:20,command:'/different/codex '+forms[0]},
+  {pid:401,ppid:20,command:binary+' app-server --listen unix://'},
+  {pid:402,ppid:20,command:binary+' exec --managed-daemon'},
+  {pid:403,ppid:20,command:binary+' app-server --managed-daemon-extra'},
+ ];
+ const kept=pw.pickAi(rows,900);
+ assert.deepEqual(kept.filter(r=>r.sharedService).map(r=>r.pid),[20,21,100,101,102]);
+ assert.ok(kept.some(r=>r.pid===22&&!r.sharedService));
+ for(const pid of [200,201,202,300,301,302,400,401,402,403])assert.ok(kept.some(r=>r.pid===pid&&!r.sharedService),String(pid));
+});

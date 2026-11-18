@@ -24,6 +24,21 @@ function aiOf(command) {
   return k ? (k[1] ? 'codex' : 'claude') : '';
 }
 
+// A managed daemon inherits its launch cwd; that is not ownership of a task.
+// Match the watcher exactly; its managed app-server must be a direct child
+// using the same executable. Ordinary servers and real workers stay watched.
+function codexService(command) {
+  const c = String(command || '');
+  const executable = c.match(RE_FIRST) || c.match(RE_APP) || c.match(RE_INTERP) || c.match(RE_PKG);
+  if (aiOf(c) !== 'codex' || !executable) return null;
+  const args = c.slice(executable[0].length).trim();
+  if (args === 'app-server daemon pid-update-loop') return { kind: 'watcher', executable: executable[0] };
+  const words = args.split(/\s+/);
+  if (words[0] === 'app-server' && words.includes('--managed-daemon'))
+    return { kind: 'server', executable: executable[0] };
+  return null;
+}
+
 // 見せる時に、鍵らしい物を伏せる
 function cleanCmd(command) {
   return String(command || '')
@@ -40,7 +55,16 @@ function pickAi(rows, selfPid) {
   const underSelf = r => { const seen = new Set(); for (let p = r.ppid; p > 1 && !seen.has(p); p = byPid.get(p)?.ppid) { if (p === selfPid) return true; seen.add(p); if (!byPid.has(p)) break; } return false; };
   const kept = rows.filter(r => r.pid !== selfPid && aiOf(r.command) && !underSelf(r));
   const keptAi = new Map(kept.map(r => [r.pid, aiOf(r.command)]));
-  return kept.filter(r => keptAi.get(r.ppid) !== keptAi.get(r.pid)).map(r => ({ ...r, ai: keptAi.get(r.pid) }));
+  const services = new Map(kept.map(r => [r.pid, codexService(r.command)]));
+  const shared = new Set(kept.filter(r => {
+    const service = services.get(r.pid), parent = services.get(r.ppid);
+    return service && (service.kind === 'watcher' && r.ppid === 1 ||
+      service.kind === 'server' && parent?.kind === 'watcher' &&
+      byPid.get(r.ppid)?.ppid === 1 && parent.executable === service.executable);
+  }).map(r => r.pid));
+  // Do not collapse real work into its shared service parent.
+  return kept.filter(r => shared.has(r.pid) || shared.has(r.ppid) || keptAi.get(r.ppid) !== keptAi.get(r.pid))
+    .map(r => ({ ...r, ai: keptAi.get(r.pid), ...(shared.has(r.pid) ? { sharedService: true } : {}) }));
 }
 
 // Only process ancestry from the last successful scan, never shared cwd/task guesses.
@@ -113,7 +137,7 @@ function create(opts = {}) {
       const dirs = kept.length ? await cwds(kept) : [];
       let all = [];
       if (kept.length) { try { all = projects() || []; } catch (e) { all = []; } }
-      const next = kept.map((r, i) => ({ pid: r.pid, ai: r.ai, cmd: cleanCmd(r.command), since: r.since, cwd: dirs[i], ...mapCwd(dirs[i], all, baseOf, real) }));
+      const next = kept.map((r, i) => ({ pid: r.pid, ai: r.ai, cmd: cleanCmd(r.command), since: r.since, cwd: dirs[i], ...(r.sharedService ? { sharedService: true, project: null, task: null } : mapCwd(dirs[i], all, baseOf, real)) }));
       const before = new Set(current.map(x => x.pid)), after = new Set(next.map(x => x.pid));
       const removed = current.filter(x => !after.has(x.pid)), added = next.filter(x => !before.has(x.pid));
       current = next;
