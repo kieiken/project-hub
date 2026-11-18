@@ -4,7 +4,7 @@
 
 Introduction page: <https://k-onedot.com/ai/project-hub/en/>
 
-**Project Hub has official releases for both Mac and Windows.** This release provides [Mac 4.126.106 / Windows 4.126.98](https://github.com/kieiken/project-hub/releases/latest). Feedback, bug reports, and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) (Japanese) for how to send them.
+**Project Hub has official releases for both Mac and Windows.** This release provides [Mac 4.126.107 / Windows 4.126.98](https://github.com/kieiken/project-hub/releases/latest). Feedback, bug reports, and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) (Japanese) for how to send them.
 
 Project Hub lists your projects and tasks and runs Claude Code / Codex inside its own screen. It is for one person on a Mac or on Windows 11 x64. It listens only on `127.0.0.1` and has no user authentication, so it cannot be used as a web service or a shared server.
 
@@ -12,7 +12,7 @@ Before you use it, read "使う前に知っておくこと" (what to know before
 
 The app's display is in Japanese. English and Traditional Chinese language packs are available from the release page, and some screens stay in Japanese. Most detailed documents in this repository are in Japanese.
 
-Source version in this repository: 4.126.106 (released versions are listed above).
+Source version in this repository: 4.126.107 (released versions are listed above).
 
 ## How it works
 

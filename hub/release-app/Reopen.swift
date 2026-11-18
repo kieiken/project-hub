@@ -33,9 +33,11 @@ import Darwin
                 guard app.terminate() else { print("failed"); fflush(stdout); exit(1) }
             }
             state.approved = permission
-            let serverStopped = kill(serverPID, 0) == -1 && errno == ESRCH
-            let action = state.observe(appStopped: app.isTerminated, serverStopped: serverStopped, cancelled: cancel, expired: ProcessInfo.processInfo.systemUptime >= deadline)
-            if action == .fail { print("failed"); fflush(stdout); if permission && app.isTerminated { manual() }; exit(1) }
+            // AppKit can keep reporting the old state after the window process exits.
+            let appStopped = processExited(appPID)
+            let serverStopped = processExited(serverPID)
+            let action = state.observe(appStopped: appStopped, serverStopped: serverStopped, cancelled: cancel, expired: ProcessInfo.processInfo.systemUptime >= deadline)
+            if action == .fail { print("failed"); fflush(stdout); if permission && appStopped { manual() }; exit(1) }
             if action == .open {
                 // A person may already have reopened the same app. Never start
                 // a second instance and never open a different bundle by ID.
@@ -51,6 +53,9 @@ import Darwin
             }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
+    }
+    static func processExited(_ pid: pid_t) -> Bool {
+        kill(pid, 0) == -1 && errno == ESRCH
     }
     static func manual() {
         NSApplication.shared.setActivationPolicy(.accessory)
