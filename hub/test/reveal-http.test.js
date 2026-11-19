@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const http = require('node:http');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reveal-http-'));
 const home = path.join(root, 'home');
@@ -17,6 +18,7 @@ process.env.HUB_AI_HOME = home;
 const project = '子育て支援センター探しプロジェクト', task = '20261008-01';
 const product = path.join(root, 'Product'), ledger = path.join(product, project);
 const body = path.join(root, 'System', project), work = path.join(root, 'Work', project, task);
+const proxyHost = 'fixture.tailnet.ts.net';
 function write(file, text = 'fixture') {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
@@ -25,14 +27,15 @@ function write(file, text = 'fixture') {
 for (const dir of [home, body, work]) fs.mkdirSync(dir, { recursive: true });
 write(path.join(ledger, 'PROJECT.md'), `---\nname: ${project}\nfolders:\n  本体: ${body}\n---\n`);
 write(path.join(ledger, '.ai/tasks', task + '.md'), `---\nid: ${task}\nworkdir: ${work}\n---\n`);
-let server, base;
+write(path.join(root, '_hub/remote.json'), JSON.stringify({ host: proxyHost }));
+let server, base, localAuth;
 test.before(async () => {
   const probe = require('node:net').createServer();
   await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const port = probe.address().port;
   await new Promise(resolve => probe.close(resolve));
   process.env.HUB_PORT = String(port);
-  ({ server } = require('../server'));
+  ({ server, localAuth } = require('../server'));
   await new Promise(resolve => server.listen(port, '127.0.0.1', resolve));
   base = 'http://127.0.0.1:' + port;
 });
@@ -151,7 +154,7 @@ test('画像を同じ候補順で配信し、種類・内容・キャッシュ�
 });
 
 test('画像以外・フォルダ・不存在・home/ROOT外・外を指すリンクは配信しない', async () => {
-  for (const ext of ['html', 'svg', 'heic', 'xlsx', 'pptx', 'key', 'pages', 'numbers', 'zip']) {
+  for (const ext of ['svg', 'heic', 'xlsx', 'pptx', 'key', 'pages', 'numbers', 'zip']) {
     const file = write(path.join(work, '対象外.' + ext));
     assert.equal((await resolves(file, file)).view, false);
     assert.equal((await viewImage(file)).status, 415);
@@ -291,28 +294,121 @@ test('PDF・テキスト・文書も外を指すリンクとopen直前の交換�
   } finally { fs.rmSync(outside, { recursive: true, force: true }); }
 });
 
-test('外からは従来のログインが必要で、画像閲覧を遠隔操作として記録する', async () => {
-  const headers = { 'X-Forwarded-Host': 'fixture.tailnet.ts.net', 'X-Forwarded-For': '100.64.0.7' };
+const mockupAssetUrl = (mockup, asset) => base + '/api/file/view?' + new URLSearchParams({ mockup, asset });
+test('HTMLの原文はJSONで返し、素材は同じフォルダのCSSと画像に限定する', async () => {
+  const dir = path.join(work, '見本');
+  const html = '<h1>試験用の見本</h1>';
+  const file = write(path.join(dir, '見本.htm'), html);
+  const outside = write(path.join(work, '別の画像.png'), pixels);
+  write(path.join(dir, '見た目.css'), 'h1{color:navy}');
+  write(path.join(dir, '写真.png'), pixels);
+  write(path.join(dir, 'sub', '写真.png'), pixels);
+  write(path.join(dir, '.隠し.png'), pixels);
+  write(path.join(dir, 'unused.js'), '/* fixture */');
+  fs.symlinkSync(outside, path.join(dir, 'リンク.png'));
+  fs.linkSync(outside, path.join(dir, 'ハードリンク.png'));
+  assert.equal((await resolves(file, file)).viewKind, 'mockup');
+  const response = await viewImage(file);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const original = await response.json();
+  assert.equal(original.html, html);
+  const session = localAuth.browserSession();
+  const resource = '&hubResource=' + session.resources['/api/file/view'];
+  assert.equal((await fetch(viewUrl(file) + resource, { headers: { 'X-Hub-Token': 'invalid' } })).status, 403);
+  const browserHeaders = { 'X-Hub-Token': session.token };
+  const browserResponse = await viewImage(file, browserHeaders);
+  assert.equal(browserResponse.status, 200);
+  assert.notEqual((await browserResponse.json()).mockup, original.mockup);
+  assert.equal((await fetch(mockupAssetUrl(original.mockup, '写真.png'), { headers: browserHeaders })).status, 404);
+  const get = (name, headers) => fetch(mockupAssetUrl(original.mockup, name), { headers });
+  assert.deepEqual(await (await get('見た目.css')).json(), { css: 'h1{color:navy}' });
+  assert.deepEqual(await (await get('写真.png')).json(), { type: 'image/png', base64: pixels.toString('base64') });
+  for (const name of ['../別の画像.png', outside, 'sub/写真.png', '.隠し.png', 'リンク.png', 'ハードリンク.png', 'unused.js', '見本.htm']) {
+    assert.equal((await get(name)).status, 404, name);
+  }
+  assert.equal((await get('写真.png', { 'X-Hub-Token': 'invalid' })).status, 401);
+  const linked = path.join(dir, '見本リンク.html');
+  fs.symlinkSync(file, linked);
+  assert.equal((await viewImage(linked)).status, 415);
+  fs.truncateSync(file, 2 * 1024 * 1024 + 1);
+  assert.equal((await viewImage(file)).status, 415);
+});
+
+test('HTMLの素材許可は発行時のフォルダとログインに限り、1分で失効する', () => {
+  const { createMockupAssets } = require('../lib/mockup-assets');
+  const dir = path.join(work, '期限付き見本');
+  const file = write(path.join(dir, 'mockup.html'), '<h1>Snapshot</h1>');
+  const protectedAsset = write(path.join(dir, 'protected.css'), 'h1{color:black}');
+  write(path.join(dir, 'allowed.css'), 'h1{color:blue}');
+  let time = 100;
+  const store = createMockupAssets({ protect: candidate => candidate === protectedAsset, now: () => time });
+  const id = store.issue(file, 'fixture owner', fs.statSync(file));
+  assert.equal(store.read(id, 'allowed.css', 'another session'), null);
+  assert.equal(store.read(id, 'protected.css', 'fixture owner'), null);
+  assert.deepEqual(store.read(id, 'allowed.css', 'fixture owner'), { css: 'h1{color:blue}' });
+  time += 60_000;
+  assert.equal(store.read(id, 'allowed.css', 'fixture owner'), null);
+  const replacement = store.issue(file, 'fixture owner', fs.statSync(file));
+  fs.renameSync(dir, dir + '-old');
+  write(path.join(dir, 'allowed.css'), 'h1{color:red}');
+  assert.equal(store.read(replacement, 'allowed.css', 'fixture owner'), null);
+});
+
+test('外からは従来のログインが必要で、画像とHTMLの閲覧を遠隔操作として記録する', async () => {
+  const headers = { Host: proxyHost, 'X-Forwarded-Host': proxyHost, 'X-Forwarded-Proto': 'https', 'Tailscale-User-Login': ['viewer', 'example.com'].join('@'), 'X-Forwarded-For': '100.64.0.7' };
+  // Preserve the synthetic proxy Host header, which fetch can discard.
+  const proxy = (url, options = {}) => new Promise((resolve, reject) => {
+    const request = http.request(url, { method: options.method, headers: { ...headers, ...options.headers } }, res => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers: res.headers })));
+    });
+    request.on('error', reject);
+    request.end(options.body);
+  });
   const file = write(path.join(work, '遠隔.png'), pixels);
-  assert.equal((await viewImage(file, headers)).status, 403);
-  const post = (route, body, extra = {}) => fetch(base + route, { method: 'POST', headers: { 'X-Hub': '1', 'Content-Type': 'application/json', ...extra }, body: JSON.stringify(body) });
+  assert.equal((await proxy(viewUrl(file))).status, 403);
+  const post = (route, body) => fetch(base + route, { method: 'POST', headers: { 'X-Hub': '1', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   assert.equal((await post('/api/remote', { enabled: true, passcode: 'fixture-image-pass' })).status, 200);
-  assert.equal((await viewImage(file, headers)).status, 401);
-  assert.equal((await viewImage(file, { ...headers, Cookie: 'hub_session=forged' })).status, 401);
-  const login = await post('/api/login', { passcode: 'fixture-image-pass' }, headers);
+  assert.equal((await proxy(viewUrl(file))).status, 401);
+  assert.equal((await proxy(viewUrl(file), { headers: { Cookie: 'hub_session=forged' } })).status, 401);
+  const postRemote = (route, body, auth = {}) => proxy(base + route, {
+    method: 'POST',
+    headers: { 'X-Hub': '1', Origin: 'https://' + proxyHost, 'Content-Type': 'application/json', ...auth },
+    body: JSON.stringify(body)
+  });
+  const login = await postRemote('/api/login', { passcode: 'fixture-image-pass' });
   assert.equal(login.status, 200);
-  const authenticated = { ...headers, Cookie: login.headers.get('set-cookie').split(';')[0] };
-  const info = await reveal(file, {}, authenticated);
-  assert.equal(info.status, 200); assert.equal(info.body.view, true); assert.equal(info.body.remote, true);
-  const response = await viewImage(file, authenticated);
+  const authenticated = { Cookie: login.headers.get('set-cookie').split(';')[0] };
+  const remoteReveal = async file => {
+    const response = await postRemote('/api/reveal', { project, task, path: file, how: 'info' }, authenticated);
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const info = await remoteReveal(file);
+  assert.equal(info.view, true); assert.equal(info.remote, true);
+  const response = await proxy(viewUrl(file), { headers: authenticated });
   assert.equal(response.status, 200); assert.deepEqual(Buffer.from(await response.arrayBuffer()), pixels);
   for (const [ext, kind, contents] of [['pdf', 'pdf', '%PDF-fixture'], ['md', 'text', '本文'], ['rtf', 'doc', '{\\rtf1 fixture}']]) {
     const document = write(path.join(work, '遠隔文書.' + ext), contents);
-    assert.equal((await viewImage(document, headers)).status, 401);
-    const info = await reveal(document, {}, authenticated); assert.equal(info.body.viewKind, kind); assert.equal(info.body.remote, true);
-    const response = await viewImage(document, authenticated); assert.equal(response.status, 200); await response.text();
+    assert.equal((await proxy(viewUrl(document))).status, 401);
+    const info = await remoteReveal(document); assert.equal(info.viewKind, kind); assert.equal(info.remote, true);
+    const response = await proxy(viewUrl(document), { headers: authenticated }); assert.equal(response.status, 200); await response.text();
   }
+  const mockupFile = write(path.join(work, '遠隔見本.html'), '<h1>Remote fixture</h1>');
+  assert.equal((await proxy(viewUrl(mockupFile))).status, 401);
+  assert.equal((await remoteReveal(mockupFile)).viewKind, 'mockup');
+  const mockup = await (await proxy(viewUrl(mockupFile), { headers: authenticated })).json();
+  assert.equal(mockup.html, '<h1>Remote fixture</h1>');
+  const css = mockupAssetUrl(mockup.mockup, 'remote.css');
+  write(path.join(work, 'remote.css'), 'h1{color:green}');
+  assert.equal((await proxy(css)).status, 401);
+  assert.equal((await fetch(css)).status, 404);
+  assert.deepEqual(await (await proxy(css, { headers: authenticated })).json(), { css: 'h1{color:green}' });
   const log = fs.readFileSync(path.join(root, '_hub/log.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.ok(log.some(row => row.action === 'fileview' && row.remote && row.project === project && row.task === task && row.path === file && row.kind === 'image'));
-  assert.deepEqual(log.filter(row => row.action === 'fileview').map(row => row.kind), ['image', 'pdf', 'text', 'doc']);
+  assert.deepEqual(log.filter(row => row.action === 'fileview').map(row => row.kind), ['image', 'pdf', 'text', 'doc', 'mockup']);
 });

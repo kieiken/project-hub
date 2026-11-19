@@ -92,7 +92,23 @@ async function showFileViewer(p, kind, trigger, attachment) {
   const body = el.querySelector('.fv-body'), url = globalThis.HubLocalAuth?.url(attachment?.url || fileViewUrl(p)) || attachment?.url || fileViewUrl(p);
   const fail = () => { if (fileViewer === current) { body.innerHTML = UI.template`<p class="note fv-error" role="alert">このファイルを表示できません。Macで開いてください。</p>`; body.setAttribute('aria-busy', 'false'); } };
   try {
-    if (kind === 'text' || kind === 'doc') {
+    if (kind === 'mockup') {
+      const markup = await loadMockupPreview(url, current.abort.signal);
+      if (fileViewer !== current) return;
+      const frame = document.createElement('iframe');
+      frame.className = 'fv-frame';
+      frame.title = name;
+      frame.setAttribute('sandbox', '');
+      frame.referrerPolicy = 'no-referrer';
+      frame.srcdoc = markup;
+      body.classList.add('fv-body--mockup');
+      body.innerHTML = UI.template`<div class="fv-preview-controls"><p class="note">このプレビューでは、見本独自のボタンやプログラムは動きません。本体のMacで元のファイルを開くと試せます。</p><label>拡大率 <select><option>100%</option><option>125%</option><option>150%</option><option>200%</option></select></label></div><div class="fv-preview-viewport"></div>`;
+      body.querySelector('.fv-preview-viewport').append(frame);
+      body.querySelector('select').addEventListener('change', event => {
+        const scale = parseInt(event.target.value, 10) / 100;
+        Object.assign(frame.style, { width: 100 / scale + '%', height: 100 / scale + '%', transform: 'scale(' + scale + ')' });
+      });
+    } else if (kind === 'text' || kind === 'doc') {
       const response = await fetch(url + (kind === 'doc' ? '&as=html' : ''), { signal: current.abort.signal });
       if (!response.ok) throw Error('view failed');
       const text = await response.text();
@@ -145,7 +161,7 @@ async function showPath(p, how = 'info') {
     const note = r.remote ? !r.view && !r.dir ? UI.text('この形式はスマホでは開けません。Macで開いてください。') : UI.text('Macの画面で開く操作は、このMacの前でだけ使えます。') : r.view ? UI.text('Macで開く時は［元のファイルを開く］。') : r.dir ? UI.text('フォルダの開き方を選んでください。') : UI.text('コピーを作らず、元のファイルを既定のアプリで開けます。');
     const mac = r.remote ? '' : r.dir ? UI.template`<button type="button" class="btn" data-fs-finder="${esc(r.path)}">Finderで開く</button>` : UI.template`<button type="button" class="btn${r.view ? ' plain' : ''}" data-fs-open="${esc(r.path)}">元のファイルを開く</button><button type="button" class="btn plain" data-fs-finder="${esc(r.path)}">Finderで表示</button>`;
     el.innerHTML = UI.template`<div class="fs-box">${head}<div class="fs-list">${kind === 'image' ? `<img class="fs-img" src="${esc(imageUrl)}" alt="${esc(r.path.split('/').pop())}" loading="lazy">` : ''}<p class="note">${r.view ? viewNote + ' ' : ''}${note}</p>${kind === 'doc' ? UI.html('<p class="note">文書の画像や複雑な表は表示が崩れる場合があります。</p>') : ''}</div>
-      <div class="acts fs-acts">${r.view ? `<button type="button" class="btn" data-fs-view="${esc(r.path)}" data-view-kind="${esc(kind)}">${kind === 'image' ? UI.text('画像を見る') : UI.text('開く')}</button>` : ''}${mac}${r.dir ? UI.template`<button type="button" class="btn plain" data-fs-list="${esc(r.path)}">中身を見る</button>` : ''}
+      <div class="acts fs-acts">${r.view ? `<button type="button" class="btn" data-fs-view="${esc(r.path)}" data-view-kind="${esc(kind)}">${kind === 'image' ? UI.text('画像を見る') : kind === 'mockup' ? UI.text('見本をプレビュー') : UI.text('開く')}</button>` : ''}${mac}${r.dir ? UI.template`<button type="button" class="btn plain" data-fs-list="${esc(r.path)}">中身を見る</button>` : ''}
       <button type="button" class="btn plain" data-fs-copy="${esc(r.path)}">場所をコピー</button><span class="sp"></span><button type="button" class="btn plain" data-fs-close>閉じる</button></div></div>`;
     return;
   }

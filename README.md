@@ -4,13 +4,13 @@
 
 紹介ページ：<https://k-onedot.com/ai/project-hub/>
 
-**Project Hub は Mac・Windows とも正式版です。** 今回の配布版は [Mac 4.126.107 / Windows 4.126.98](https://github.com/kieiken/project-hub/releases/latest) です。使ってみた感想、不具合の報告、Pull Request を歓迎します。送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
+**Project Hub は Mac・Windows とも正式版です。** 今回の配布版は [Mac 4.126.108 / Windows 4.126.98](https://github.com/kieiken/project-hub/releases/latest) です。使ってみた感想、不具合の報告、Pull Request を歓迎します。送り方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
 
 プロジェクトと作業を一覧にして、画面の中で Claude Code / Codex を動かす管理ソフトです。1人で使う Mac、または Windows 11 x64 で使います。待ち受けるのは `127.0.0.1` だけで、利用者の認証はありません。Web サービスや共有サーバーとしては使えません。
 
 使う前に、[hub/README.md](hub/README.md) の「使う前に知っておくこと」を読んでください。
 
-ソース版：4.126.107（公開済みの配布版は上記のとおりです）。
+ソース版：4.126.108（公開済みの配布版は上記のとおりです）。
 
 ## しくみ
 

@@ -1,15 +1,35 @@
 'use strict';
 
+const { createMockupAssets, readMockupFile } = require('../mockup-assets');
+
 module.exports = function localfilesRoutes(ctx) {
-  const { send, lt, resolvePlace, viewInfo, fs, documentHtml, fromRemote, record, store, expandHome, denied, launch, DRY, path, platform } = ctx;
+  const { send, lt, resolvePlace, viewInfo, fs, documentHtml, fromRemote, record, store, expandHome, denied, launch, DRY, path, platform, protect, mockupAudience } = ctx;
+  const mockupAssets = createMockupAssets({ protect });
   return {
     view: {
       matches: (req, url) => req.method === 'GET' && url.pathname === '/api/file/view',
       async handle(req, res, url) {
         const b = Object.fromEntries(url.searchParams);
-        const { target } = resolvePlace(b), info = viewInfo(target);
         const unavailable = { error: lt('このファイルを表示できません。Macで開いてください。') };
+        if (b.mockup !== undefined) {
+          const asset = mockupAssets.read(b.mockup, b.asset, mockupAudience(req));
+          return asset ? send(res, 200, asset) : send(res, 404, unavailable);
+        }
+        const { target } = resolvePlace(b), info = viewInfo(target);
         if (info.status !== 200) return send(res, info.status, unavailable);
+        if (info.kind === 'mockup') {
+          const audience = mockupAudience(req);
+          if (!audience) return send(res, 403, unavailable);
+          let fd, html, mockup;
+          try {
+            fd = fs.openSync(info.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            html = readMockupFile(fd, info.stat, info.limit).toString('utf8');
+            mockup = mockupAssets.issue(info.path, audience, info.stat);
+          } catch { return send(res, 415, unavailable); }
+          finally { if (fd !== undefined) fs.closeSync(fd); }
+          if (fromRemote()) record('fileview', b, { path: target, kind: info.kind });
+          return send(res, 200, { html, mockup });
+        }
         // 実体確認後は同じファイルを配信する。最終要素のリンクへの置換も断る。
         let fd, stat;
         try {

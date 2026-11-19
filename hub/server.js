@@ -1213,10 +1213,11 @@ function viewInfo(target) {
     const roots = placeRoots().map(d => { try { return fs.realpathSync(d); } catch { return d; } });
     if (!insidePlaceRoots(real, roots)) return { status: 404 };
     const ext = path.extname(target).toLowerCase(), stat = fs.statSync(real);
-    const kind = IMAGE_TYPES[ext] ? 'image' : ext === '.pdf' ? 'pdf' : TEXT_EXTENSIONS.has(ext) ? 'text' : DOC_EXTENSIONS.has(ext) ? 'doc' : '';
-    const limit = ({ image: 30, pdf: 50, text: 2, doc: 20 })[kind] * 1024 * 1024;
+    const kind = IMAGE_TYPES[ext] ? 'image' : ext === '.pdf' ? 'pdf' : TEXT_EXTENSIONS.has(ext) ? 'text' : DOC_EXTENSIONS.has(ext) ? 'doc' : ['.html', '.htm'].includes(ext) ? 'mockup' : '';
+    const limit = ({ image: 30, pdf: 50, text: 2, doc: 20, mockup: 2 })[kind] * 1024 * 1024;
     const type = IMAGE_TYPES[ext] || ({ pdf: 'application/pdf', text: 'text/plain; charset=utf-8', doc: 'text/html; charset=utf-8' })[kind];
     if (!kind || !stat.isFile() || stat.size > limit) return { status: 415 };
+    if (kind === 'mockup' && (real !== target || stat.nlink !== 1)) return { status: 415 };
     return { status: 200, path: real, kind, type, limit, ext, stat };
   } catch { return { status: 404 }; }
 }
@@ -1274,7 +1275,15 @@ const routes = require('./lib/routes').createRoutes([
   { name: 'ideaimage', create: require('./lib/routes/idea-image-upload'), ctx: { send, ideas } },
   { name: 'chatrecovery', create: require('./lib/routes/chat-recovery'), ctx: { send, chats, store } },
   { name: 'terminalio', create: require('./lib/routes/terminal-io'), ctx: { send, lt, sessions, setUnread, launch, modelError, store, pickSpec, limitIdentity, rolesData, record, accountFor } },
-  { name: 'localfiles', create: require('./lib/routes/local-files'), ctx: { send, lt, resolvePlace, viewInfo, fs, documentHtml, fromRemote, record, store, expandHome, denied, launch, DRY, path, platform } },
+  { name: 'localfiles', create: require('./lib/routes/local-files'), ctx: { send, lt, resolvePlace, viewInfo, fs, documentHtml, fromRemote, record, store, expandHome, denied, launch, DRY, path, platform,
+    protect: file => localAuth.protect(file),
+    mockupAudience: req => {
+      if (!fromRemote() && !localAuth.authenticated(req)) return '';
+      // The local resource URL has already been stripped. Only an authenticated
+      // browser or owner header, or the existing remote login, can get a grant.
+      const credential = fromRemote() ? remoteLib.cookieOf(req) : req.headers['x-hub-token'];
+      return credential ? crypto.createHash('sha256').update(fromRemote() ? 'remote:' : 'local:').update(credential).digest('hex') : '';
+    } } },
   { name: 'mcpsettings', create: require('./lib/routes/mcp-settings'), ctx: { send, lt, gpt, readBody, freetalkHistory, codexMcpStatus, codexMcpRegister, record } },
   { name: 'rolesettings', create: require('./lib/routes/role-settings'), ctx: { send, lt, roleHistory, ROLES_FILE, roles, tiers:roleTiers, getReview:()=>tierReview, extensions, license } },
   { name: 'taskmanagement', create: require('./lib/routes/task-management'), ctx: { send, lt, store, fs, acceleration, chat, record, webchatActive, sessions, chats, emptyLib, removal } },
