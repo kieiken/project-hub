@@ -48,13 +48,21 @@ test('admission reservation rejects duplicates and a stop cancels a waiting send
 test('queue replacement, recovery and generation churn cannot authorize an old operation',async t=>{
  const f=fixture(t);let scans=0,executions=0;
  f.chat.handoffAdmission={async scan(){scans++;f.chat.stops.set('P\0t',scans);return {errors:[],dirs:[]};},close(){}};
- await assert.rejects(f.chat.withStrictHandoff(()=>executions++),/実行状態が変わりました/);assert.equal(scans,2);assert.equal(executions,0);
+ await assert.rejects(f.chat.withStrictHandoff(()=>executions++),{code:'HANDOFF_STATE_CHANGED',message:/実行状態が変わりました/});assert.equal(scans,2);assert.equal(executions,0);
  let release;f.chat.handoffAdmission={scan:()=>new Promise(r=>release=r),close(){}};
  f.chat.queue('P','t');f.chat.queues.set('P\0t',[{id:'one',text:'original'}]);
  f.chat.sendNow=()=>executions++;
  const work=f.chat.send({project:'P',task:'t',request:'one'});
  f.chat.queues.set('P\0t',[{id:'one',text:'changed'}]);release({errors:[],dirs:[]});await pause(5);release({errors:[],dirs:[]});
  await assert.rejects(work,/指示が変更/);assert.equal(executions,0);
+});
+test('immediate restart still reports activity changes as an error without a reservation',async t=>{
+ const f=fixture(t,0),{RestartControl}=require('../lib/restart-control');
+ let changes=0;
+ f.chat.handoffAdmission={async scan(){f.chat.stops.set('P\0t',++changes);return {errors:[],dirs:[]};},close(){}};
+ const restart=new RestartControl({blockers:()=>[],admit:action=>f.chat.withStrictHandoff(action),verify:()=>assert.fail(),execute:()=>assert.fail()});
+ await assert.rejects(restart.request(),{code:'HANDOFF_STATE_CHANGED',message:'確認中に実行状態が変わりました。少し待ってから操作し直してください'});
+ assert.equal(restart.status().reserved,null);assert.deepEqual(restart.status().waiting,[]);assert.equal(restart.status().executions,0);
 });
 test('a scoped verdict expires on await and a subsequent disk failure blocks the next action',async t=>{
  const f=fixture(t);

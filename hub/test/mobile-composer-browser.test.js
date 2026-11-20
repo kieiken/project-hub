@@ -68,6 +68,61 @@ test('mobile composer: attachments and reduced visual viewport keep input and se
   const shot = async name => {
     if (process.env.HUB_MOBILE_COMPOSER_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.HUB_MOBILE_COMPOSER_SCREENSHOTS, 'mobile-composer-' + name + '.png') });
   };
+  await t.test('chat history buttons share draft, edits and bounds with keyboard navigation', async () => {
+    await page.setViewportSize({ width: 320, height: 844 });
+    await seed('freetalk', 0);
+    const input = page.locator('#chat-in');
+    const previous = page.getByRole('button', { name: '前の入力', exact: true });
+    const next = page.getByRole('button', { name: '次の入力', exact: true });
+    const touch = await page.context().newCDPSession(page);
+    const tap = async button => {
+      const { x, y, width, height } = await button.boundingBox();
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x + width / 2, y: y + height / 2 }] });
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    };
+    assert.equal(await previous.innerText(), '前');
+    assert.equal(await next.innerText(), '次');
+    assert.equal(await previous.isDisabled(), true);
+    assert.equal(await next.isDisabled(), true);
+    await page.evaluate(() => {
+      const key = chatAttachmentKey('freetalk', 't');
+      instructionHistory.record(key, '古い指示');
+      instructionHistory.record(key, '新しい指示');
+      updateWorkAnswerControls();
+    });
+    await input.focus();
+    const draft = await input.inputValue();
+    await input.evaluate(el => { el.setSelectionRange(2, 5); resizeVisible(300); });
+    await settle();
+    for (const selector of ['#chat-history-prev', '#chat-history-next', '#chat-send']) await reachable(selector);
+    for (const button of [previous, next]) {
+      const box = await button.boundingBox();
+      assert.ok(box.width >= 44 && box.height >= 44);
+    }
+    await tap(previous);
+    assert.equal(await input.inputValue(), '新しい指示');
+    assert.equal(await input.evaluate(el => document.activeElement === el), true);
+    await input.fill('新しい指示を編集中');
+    await input.press('ArrowUp');
+    assert.equal(await input.inputValue(), '古い指示');
+    assert.equal(await previous.isDisabled(), true);
+    await tap(next);
+    assert.equal(await input.inputValue(), '新しい指示を編集中');
+    await tap(next);
+    assert.equal(await input.inputValue(), draft);
+    assert.equal(await next.isDisabled(), true);
+    assert.deepEqual(await input.evaluate(el => [el.selectionStart, el.selectionEnd]), [2, 5]);
+    await page.evaluate(() => resizeVisible(844));
+    await page.setViewportSize({ width: 1280, height: 844 });
+    assert.equal(await page.locator('.chat-history-buttons').isHidden(), true);
+    await input.evaluate(el => el.setSelectionRange(0, 0));
+    await input.press('ArrowUp');
+    assert.equal(await input.inputValue(), '新しい指示');
+    await input.press('ArrowDown');
+    assert.equal(await input.inputValue(), draft);
+    await touch.detach();
+    await page.setViewportSize({ width: 390, height: 844 });
+  });
   await t.test('スマホの添付選択は写真と動画に対応し、動画の説明は常時表示しない', async () => {
     for(const id of ['freetalk','p']) {
     await seed(id,0);
@@ -91,6 +146,7 @@ test('mobile composer: attachments and reduced visual viewport keep input and se
       assert.equal(await page.locator('#chat-images .quick-image').count(),1);
       await page.locator('#chat-in').fill('この動画を確認');await page.locator('#chat-send').click();
       await page.waitForFunction(()=>!chatImages('p','t').length);
+      await page.waitForFunction(() => !document.querySelector('#chat-history-prev').disabled && document.querySelector('#chat-history-next').disabled);
       assert.deepEqual(sends.at(-1).attachmentDraft.attachments[0].imagePaths,video.imagePaths);
       assert.match(sends.at(-1).text,/frame-7.jpg/);assert.match(sends.at(-1).text,/音声/);assert.deepEqual(sends.at(-1).projectImages,[]);
     }

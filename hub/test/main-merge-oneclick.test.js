@@ -233,16 +233,57 @@ test('R67 admitted AI wait stays reserved instead of becoming blocked and cancel
  assert.equal(control.status().error,'');assert.ok(control.status().reserved);assert.equal(x.ledger.read(x.id).flow.stage,'waiting');assert.equal(executions,0);
  busy=false;await control.tick();await x.flow.tick();assert.equal(executions,1);assert.equal(control.status().committed,true);
 });
-test('R67 blocked AI wait reconciles the exact already running commit without sending',async()=>{
- const x=flowFixture();await x.flow.tick();x.ledger.finish(x.id,{flow:{...x.ledger.read(x.id).flow,stage:'blocked',error:'AIの作業が終わるまで更新できません。'}});x.restart.reserved=null;
+const aiWait='AIの作業が終わるまで更新できません。';
+const activityChanged='確認中に実行状態が変わりました。少し待ってから操作し直してください';
+test('merge restart keeps the reservation across AI activity changes and executes once when idle',async()=>{
+ const x=flowFixture(),{RestartControl}=require('../lib/restart-control'),{ChatRunner}=require('../lib/chat');
+ const chat=new ChatRunner({spoolRoot:x.f.body});
+ let scans=0,executions=0;
+ chat.handoffAdmission={async scan(){
+  if(++scans<=2){chat.running.clear();chat.running.set(chat.key('P','task-'+scans),{options:{request:'run-'+scans}});}
+  return {errors:[],dirs:[]};
+ }};
+ const control=new RestartControl({
+  blockers:()=>chat.running.size?[{kind:'chat',message:'AIが作業中です'}]:[],
+  admit:action=>chat.withStrictHandoff(action),verify:()=>x.flow.verifyRestart(),execute:()=>executions++,
+ });
+ x.flow.restart=()=>control;
+ await x.flow.tick();
+ const reservation=control.status().reserved;
+ assert.ok(reservation);await control.tick();await x.flow.tick();
+ assert.equal(scans,2);assert.equal(control.status().reserved,reservation);assert.equal(control.status().error,'');assert.equal(executions,0);
+ const waiting=x.flow.status(x.s,x.id);
+ assert.equal(waiting.stage,'waiting');assert.match(waiting.waiting[0].message,/再起動できるか確認し直します/);
+ assert.equal(control.status([]).waiting[0].kind,'handoff-state-changed');
+ await control.tick();await x.flow.tick();assert.equal(control.status().reserved,reservation);assert.equal(control.status().waiting[0].kind,'chat');assert.equal(executions,0);
+ chat.running.clear();
+ await Promise.all([control.tick(),control.tick()]);await x.flow.tick();
+ assert.equal(control.status().reserved,null);assert.equal(control.status().committed,true);assert.equal(executions,1);
+ Object.assign(x.rt,{instance:'new',bootHead:x.commit,version:'9.0.0'});await x.flow.tick();
+ assert.equal(x.flow.status(x.s,x.id).stage,'complete');assert.equal(executions,1);
+});
+for(const [kind,error] of [
+ ['unrelated 409',Object.assign(Error(activityChanged),{status:409})],
+ ['unavailable scan',Object.assign(Error('scan unavailable'),{code:'HANDOFF_CHECK_UNAVAILABLE',status:409})],
+])test(`merge restart stops for ${kind} without executing`,async()=>{
+ const x=flowFixture(),{RestartControl}=require('../lib/restart-control');
+ const control=new RestartControl({blockers:()=>[],admit:async()=>{throw error;},verify:()=>assert.fail(),execute:()=>assert.fail()});
+ x.flow.restart=()=>control;await x.flow.tick();await control.tick();
+ assert.equal(control.status().error,error.message);
+ await x.flow.tick();
+ assert.equal(control.status().reserved,null);assert.equal(x.flow.status(x.s,x.id).stage,'blocked');
+ assert.equal(x.ledger.read(x.id).flow.error,error.message);assert.equal(control.status().executions,0);
+});
+for(const [reason,error] of [['AI wait',aiWait],['AI activity changed',activityChanged]])test(`blocked ${reason} reconciles the exact already running commit without sending`,async()=>{
+ const x=flowFixture();await x.flow.tick();x.ledger.finish(x.id,{flow:{...x.ledger.read(x.id).flow,stage:'blocked',error}});x.restart.reserved=null;
  Object.assign(x.rt,{instance:'new',bootHead:x.commit,version:'9.0.0',updatePending:false});
  const before=x.ledger.read(x.id),keeps=x.keeps();await x.flow.tick();
  const after=x.ledger.read(x.id);assert.equal(after.flow.stage,'complete');assert.equal(after.flow.error,'');assert.deepEqual(after.flow.recovery.previousFlow,before.flow);assert.equal(after.flow.recovery.previousFinished,before.finished);assert.equal(x.keeps(),keeps);assert.equal(x.restart.calls,1);assert.equal(x.flow.blockers(x.f.body).length,0);assert.equal(x.flow.status(x.s,x.id).stage,'complete');
 });
 function blocked67(){
- const x=flowFixture();x.ledger.finish(x.id,{state:'applied',commit:x.commit,flow:{...x.ledger.read(x.id).flow,stage:'blocked',sentInstance:'old',error:'AIの作業が終わるまで更新できません。'}});Object.assign(x.rt,{instance:'new',bootHead:x.commit,version:'9.0.0',updatePending:false});return x;
+ const x=flowFixture();x.ledger.finish(x.id,{state:'applied',commit:x.commit,flow:{...x.ledger.read(x.id).flow,stage:'blocked',sentInstance:'old',error:activityChanged}});Object.assign(x.rt,{instance:'new',bootHead:x.commit,version:'9.0.0',updatePending:false});return x;
 }
-for(const kind of ['dirty','later-head','reset','wrong-boot','wrong-version','wrong-target','same-instance','unknown-update','update','reserved','committed','restart-error','real-verification-error','unknown-state','unsent','wrong-record-version','non-exact-merge'])test('R67 blocked recovery preserves original bytes on '+kind,async()=>{
+for(const kind of ['dirty','later-head','reset','wrong-boot','wrong-version','wrong-target','same-instance','unknown-update','update','reserved','committed','restart-error','real-verification-error','unrelated-admission-error','unknown-state','unsent','wrong-record-version','non-exact-merge'])test('R67 blocked recovery preserves original bytes on '+kind,async()=>{
  const x=blocked67();
  if(kind==='dirty')fs.writeFileSync(path.join(x.f.body,'dirty'),'keep');
  if(kind==='later-head')g(x.f.body,'commit','--allow-empty','-qm','later');
@@ -258,6 +299,7 @@ for(const kind of ['dirty','later-head','reset','wrong-boot','wrong-version','wr
  if(kind==='restart-error')x.restart.error='handoff failed';
  const r=x.ledger.read(x.id);
  if(kind==='real-verification-error')x.ledger.finish(x.id,{flow:{...r.flow,error:'queue invalid'}});
+ if(kind==='unrelated-admission-error')x.ledger.finish(x.id,{flow:{...r.flow,error:'確認中に実行状態が変わりました。AIは開始していません'}});
  if(kind==='unknown-state')x.ledger.finish(x.id,{state:'unknown'});
  if(kind==='unsent')x.ledger.finish(x.id,{flow:{...r.flow,sentInstance:undefined}});
  if(kind==='wrong-record-version'){x.rt.version='7.0.0';x.ledger.finish(x.id,{flow:{...r.flow,version:'7.0.0'}});}
@@ -271,6 +313,7 @@ for(const change of ['receipt','runtime','restart','target-head','target-dirty']
 test('R67 recovered formal flow releases next displayed range in existing UI without sending',async()=>{
  const x=blocked67(),request=(r,b)=>r==='/api/task/merge/status'&&b.flow?Promise.resolve(x.flow.status(x.s,b.requestId)):api(r,b),a=browser(x.f.b,request);
  await a.prepare();assert.equal(a.button.disabled,true);assert.equal(a.button.textContent,'取り込み要確認');const sends=calls.filter(x=>x.route==='/api/task/merge').length;
- await x.flow.tick();assert.equal(x.ledger.read(x.id).flow.stage,'complete');fs.writeFileSync(path.join(x.f.w.dir,'next'),'new');git.save(x.f.w.dir,'next saved range');
+ await x.flow.tick();assert.equal(x.ledger.read(x.id).flow.stage,'complete');await a.prepare();assert.equal(a.button.textContent,'本体へ反映済み');
+ fs.writeFileSync(path.join(x.f.w.dir,'next'),'new');git.save(x.f.w.dir,'next saved range');
  await a.prepare();assert.equal(a.button.disabled,false);assert.equal(a.button.textContent,'本体に取り込む');assert.match(a.region.html,/対象：/);assert.equal(calls.filter(x=>x.route==='/api/task/merge').length,sends);assert.equal(x.restart.calls,0);
 });

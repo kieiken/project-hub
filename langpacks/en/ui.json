@@ -462,6 +462,8 @@
   "使ったスキル（": "Skills used (",
   "画像を追加できませんでした": "Couldn't add the image",
   "↑ 前の指示（3件まで）・↓ 入力中の文章へ戻る": "↑ previous instructions (up to 3) · ↓ back to what you're typing",
+  "前の入力": "Previous input",
+  "次の入力": "Next input",
   "添付ファイル・画像": "Attachments and images",
   "添付ファイルを確認してください。": "Check the attached files.",
   "参照ファイル・画像（絶対パス）：": "Referenced files/images (absolute paths):",

@@ -453,6 +453,12 @@ td.job{color:var(--muted);font-size:12px}
 .composer-entry .voice-tools{grid-column:1/-1}
 .composer-entry #chat-send{white-space:nowrap}
 .composer-entry #chat-send.muse-send{max-width:8em;white-space:normal}
+.chat-history-buttons{display:none}
+@media (max-width:720px), (any-pointer:coarse){
+  .chat-history-buttons{display:flex;justify-content:flex-end;gap:4px}
+  .chat-history-buttons .btn{width:44px;height:44px;padding:0;touch-action:manipulation}
+  .chat-history-buttons .btn:disabled{opacity:.45;cursor:default}
+}
 .crow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .crow select{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:4px 6px}
 .composer-controls #chat-ai{flex:0 0 220px;width:220px;max-width:100%}

@@ -235,7 +235,13 @@ function chatHtml(p, t) {
       <p class="small muse-send-scope" id="muse-send-scope" role="status" ${pick.ai === 'muse' ? '' : 'hidden'}>送信先：Muse（外部）。今回の質問と選択した文字資料だけを送ります。追問は同じMuse相談の続きです。他AIとの会話は送りません。</p>
       <div class="composer-entry">
       <textarea id="chat-in" rows="3" maxlength="100000" placeholder="依頼を書く（例：このスクショの崩れを直して）" aria-label="依頼" aria-describedby="chat-history-help" title="↑ 前の指示（3件まで）・↓ 入力中の文章へ戻る">${esc(chatDraft[chatAttachmentKey(p.id, t.id)] || '')}</textarea>
-      <span class="voice-actions" id="chat-send-actions"><button id="chat-send" type="submit" class="btn ${pick.ai === 'muse' ? 'muse-send' : ''}">${esc(UI.text(pick.ai === 'muse' ? 'Museへ送る（外部）' : '送る'))}</button></span>
+      <span class="voice-actions" id="chat-send-actions">
+        <span class="chat-history-buttons">
+          <button id="chat-history-prev" type="button" class="btn plain" aria-label="前の入力" disabled>${esc([...UI.text('前の入力')][0])}</button>
+          <button id="chat-history-next" type="button" class="btn plain" aria-label="次の入力" disabled>${esc([...UI.text('次の入力')][0])}</button>
+        </span>
+        <button id="chat-send" type="submit" class="btn ${pick.ai === 'muse' ? 'muse-send' : ''}">${esc(UI.text(pick.ai === 'muse' ? 'Museへ送る（外部）' : '送る'))}</button>
+      </span>
       </div>
       <span class="sr-only" id="chat-history-help">↑ 前の指示（3件まで）・↓ 入力中の文章へ戻る</span>
       <span class="small" id="chat-send-status" role="status" hidden></span>

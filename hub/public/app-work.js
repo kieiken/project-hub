@@ -76,6 +76,7 @@ function syncWorkProgress() {
 
 function updateWorkAnswerControls() {
   if (view.kind !== 'work') return;
+  updateChatHistoryButtons();
   const pending = chatSending.has(chatAttachmentKey(view.project, view.task));
   const status = $('#chat-send-status');
   if (status) {

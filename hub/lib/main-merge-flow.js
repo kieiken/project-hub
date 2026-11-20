@@ -2,6 +2,10 @@
 // Continue the approved delivery; polling never sends another Git merge.
 const fs=require('node:fs'),path=require('node:path'),{execFileSync}=require('node:child_process');
 const check=require('./main-merge-check');
+const RECONCILABLE_RESTART_ERRORS=new Set([
+ 'AIの作業が終わるまで更新できません。',
+ '確認中に実行状態が変わりました。少し待ってから操作し直してください',
+]);
 class MainMergeFlow {
  constructor({ledger,git,runtime,restart,keep}){Object.assign(this,{ledger,git,runtime,restart,keep});this.sent=new Set();}
  approval({sourceDir,targetDir,source,target}){
@@ -60,10 +64,10 @@ class MainMergeFlow {
  }
  versionAt(r){return JSON.parse(execFileSync('git',['-C',r.targetDir,'show',r.commit+':hub/package.json'],{encoding:'utf8',stdio:'pipe'})).version;}
  blockedCandidate(r){
-  // Recover only the old ordinary-AI-wait failure, never a verification failure
-  // or an uncertain merge. This path records an existing success; it cannot send.
+  // Recover only recognized restart interruptions from AI activity. This path
+  // records an existing success; it cannot send a merge or restart.
   const rt=this.runtime(),restart=this.restart().status();
-  return r.state==='applied'&&r.flow.stage==='blocked'&&r.flow.restart&&Boolean(r.commit)&&r.flow.error==='AIの作業が終わるまで更新できません。'&&r.flow.sentInstance===r.flow.instance&&
+  return r.state==='applied'&&r.flow.stage==='blocked'&&r.flow.restart&&Boolean(r.commit)&&RECONCILABLE_RESTART_ERRORS.has(r.flow.error)&&r.flow.sentInstance===r.flow.instance&&
    Boolean(rt.instance)&&rt.instance!==r.flow.instance&&rt.targetDir===r.targetDir&&rt.updatePending===false&&rt.bootHead===r.commit&&rt.version===r.flow.version&&
    restart.reserved===null&&restart.committed===false&&restart.error==='';
  }

@@ -56,6 +56,43 @@ function writeMeta(pdir, task, meta) {
   require('./integration-writes').write(f,()=>fs.writeFileSync(f, JSON.stringify(meta, null, 2)));
 }
 
+const UUID_PATTERN = '[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}';
+const CLAUDE_MISSING_SESSION = new RegExp(`^No conversation found with session ID: (${UUID_PATTERN})$`, 'i');
+const FINAL_SPOOL_ID = new RegExp(`^(${UUID_PATTERN}):final$`, 'i');
+
+function missingClaudeSession(result) {
+  if (result?.type !== 'result' || result.subtype !== 'error_during_execution' || result.is_error !== true ||
+      result.num_turns !== 0 || result.result || !Array.isArray(result.errors) || result.errors.length !== 1 ||
+      typeof result.errors[0] !== 'string') return;
+  const sid = CLAUDE_MISSING_SESSION.exec(result.errors[0])?.[1];
+  if (sid && sid === result.session_id) return sid;
+}
+
+function forgetClaudeSession(meta, account, sid) {
+  if (!sid || meta.sessions?.claude !== sid || (meta.sessionAccounts?.claude || 'default') !== account) return false;
+  delete meta.sessions.claude;
+  if (meta.rulesSent) delete meta.rulesSent.claude;
+  return true;
+}
+
+function previouslyMissingClaudeSession(spoolRoot, rows, account, sid) {
+  if (!spoolRoot) return false;
+  const last = rows.findLast(r => r.role === 'assistant' && r.ai === 'claude' && !r.discussion && !r.roleTierFresh && (r.account || 'default') === account);
+  if (!last?.error || last.text) return false;
+  const runId = FINAL_SPOOL_ID.exec(last.spoolId)?.[1];
+  if (!runId) return false;
+  const dir = path.join(spoolRoot, runId);
+  const output = path.join(dir, 'out.jsonl');
+  try {
+    const exit = require('./cli-spool').read(dir, 'exit.json');
+    if (!Number.isInteger(exit?.code) || exit.code === 0 || exit.signal || exit.error || fs.statSync(output).size > 16 * 1024) return false;
+    // Old versions recorded this startup refusal as a generic error. A single
+    // matching CLI packet proves the attempt ended before running the request.
+    const packet = JSON.parse(fs.readFileSync(output, 'utf8'));
+    return packet.n === 1 && missingClaudeSession(JSON.parse(packet.line)) === sid;
+  } catch { return false; }
+}
+
 const who = r => (r.role === 'user' ? '人' : `${LABEL[r.ai] || r.ai}${r.model ? `（${r.model}）` : ''}`);
 
 // Keep the same evidence boundary as public/app-messages.js (4.126.68).
@@ -281,7 +318,8 @@ function parse(ai, o, expectedModel, { workflow = false } = {}) {
       ((o.type === 'result' && o.is_error === true) || (o.type === 'assistant' &&
         (o.error === 'rate_limit' || (o.isApiErrorMessage === true && o.message?.model === '<synthetic>'))))) ev.push({ kind: 'limit', error: limitText });
     if (o.type === 'system' && o.subtype === 'compact_boundary') ev.push({ kind: 'compact' });
-    if (o.session_id && (o.type === 'system' || o.type === 'result')) ev.push({ kind: 'session', id: o.session_id });
+    const missingSession = missingClaudeSession(o);
+    if (o.session_id && (o.type === 'system' || o.type === 'result' && !missingSession)) ev.push({ kind: 'session', id: o.session_id });
     if (o.type === 'assistant' && o.message && Array.isArray(o.message.content)) {
       for (const c of o.message.content) {
         if (c.type === 'text' && c.text) ev.push({ kind: 'text', text: c.text });
@@ -290,7 +328,9 @@ function parse(ai, o, expectedModel, { workflow = false } = {}) {
         else if (c.type === 'tool_use') ev.push({ kind: 'tool', text: toolLine(c.name, c.input) });
       }
     }
-    if (o.type === 'result') ev.push({ kind: 'done', error: o.is_error ? String(o.result || lt('エラー')) : '', result: typeof o.result === 'string' ? o.result : '', usage: workflow ? require('./claude-workflow').modelUsage(o.modelUsage) : inputUsage('claude', o.usage) });
+    if (o.type === 'result') {
+      ev.push({ kind: 'done', error: o.is_error ? String(o.result || lt('エラー')) : '', result: typeof o.result === 'string' ? o.result : '', usage: workflow ? require('./claude-workflow').modelUsage(o.modelUsage) : inputUsage('claude', o.usage), ...(missingSession ? { missingSession } : {}) });
+    }
     return ev;
   }
   // A quote, stderr, tool result or generic network error is not capacity evidence.
@@ -540,15 +580,22 @@ class ChatRunner {
     ({ ai, model } = o);
     const { effort, text } = o;
     const rows = read(pdir, task);
-    const meta = readMeta(pdir, task);
+    let meta = readMeta(pdir, task);
     o = { ...o, fast: !o.discussionTurn && o.ai === 'codex' && this.fastFor?.(project, task) === true };
     o=this.prepareContext?.(o)||o;
-    const turn = buildTurn({ ...o, meta, rows });
+    let turn = buildTurn({ ...o, meta, rows });
+    const oldSession = ai === 'claude' && turn.resume && meta.sessions.claude;
+    const oldFailure = oldSession && previouslyMissingClaudeSession(this.spoolRoot, rows, o.account, oldSession);
     const beforeSend = o.beforeSend; delete o.beforeSend;
     this.licenseGuard?.(o, 'start');
     this.assertQueueStart(o);
     this.beforeSend?.(o); // Rehydrate durable guards after queue/limit preflight, before saving or spawning.
     beforeSend?.(); // All start guards passed; the next operation can save a request.
+    if (oldFailure) {
+      meta = readMeta(pdir, task);
+      if (forgetClaudeSession(meta, o.account, oldSession)) writeMeta(pdir, task, meta);
+      turn = buildTurn({ ...o, meta, rows });
+    }
     this.base.set(this.key(project, task), o); // 追加の指示を送る時に使う
     const existing = repeated || o.request && rows.findLast(r => r.role === 'user' && r.request === o.request && r.text === (o.shown || text));
     const userRow = existing || append(pdir, task, { role: 'user', ...(o.roleTier?{roleTier:o.roleTier,roleTierFresh:o.freshContext===true}:{}), ...(typeof o.readIndex==='boolean'?{readIndex:o.readIndex}:{}), ...(o.automation ? { automation:o.automation,contextMode:o.contextMode,freshContext:o.freshContext,preserveTaskState:o.preserveTaskState,readOnly:o.readOnly,reviewKind:o.reviewKind } : {}), ...(o.discussion ? { discussion: o.discussion } : {}), ...(o.origin ? { origin: o.origin } : {}), ...(o.delegationEffort ? { delegationEffort: o.delegationEffort } : {}), ...(ai === 'codex' ? { fast: o.fast } : {}), account: o.account, text: o.shown || text, to: ai, model, effort, turn: randomUUID(), startedAt: new Date().toISOString(), ...snapshot(o.dir), ...(o.limitSwitch ? { limitSwitch: o.limitSwitch, handoff: o.text } : {}), ...(o.request ? { request: o.request } : {}), ...(o.mode ? { mode: o.mode } : {}) });
@@ -589,7 +636,10 @@ class ChatRunner {
     for(let attempt=0;attempt<2;attempt++){
       const before=this.admissionState(target),result=await this.handoffAdmission.scan({background});
       if(result===null&&background)return;
-      if(before!==this.admissionState(target)){if(attempt===0&&retryStateChange)continue;throw Error('確認中に実行状態が変わりました。少し待ってから操作し直してください');}
+      if(before!==this.admissionState(target)){
+        if(attempt===0&&retryStateChange)continue;
+        throw Object.assign(Error('確認中に実行状態が変わりました。少し待ってから操作し直してください'),{code:'HANDOFF_STATE_CHANGED'});
+      }
       const errors=new Map(this.adoptErrors.map(e=>[e.run,e]));for(const e of result.errors)errors.set(e.run,e);
       for(const c of this.spoolRuns)if(c.failure&&!errors.has(path.basename(c.dir)))errors.set(path.basename(c.dir),{run:path.basename(c.dir),project:c.run?.options?.project,task:c.run?.options?.task,error:c.failure,stage:c.stage||'spool'});
       const scope={owner:this,state:this.admissionState(),errors:[...errors.values()],dirs:result.dirs,live:true};
@@ -764,11 +814,16 @@ class ChatRunner {
       else if (code !== 0 && code !== null) error = (run.err.trim().split('\n').slice(-3).join(' ') || lt`終了コード ${code}`);
       else if (code === null && !text) error = run.err.trim() || lt('途中で終わりました');
       if (!run.stopped && run.limit) error = run.limit;
+      const rejectedSession = run.done?.missingSession;
+      const missingSession = rejectedSession && ai === 'claude' && turn.resume && closed && Number.isInteger(code) && code !== 0 &&
+        !run.stopped && !run.blocked && !run.limit && !text && !run.last && !run.asks?.length &&
+        run.resultCount === 1 && rejectedSession === meta.sessions?.claude;
+      if (missingSession) error = lt('Claude Code が以前の会話を見つけられませんでした。次の送信では、Hub に残った会話を引き継いで新しく始めます。');
       if (ai === 'grok' && error) error = require('./grok').loginError(error);
-      const modelRejected = error && !text && turn.modelFlag && !run.stopped && MODEL_REJECTED.test(error + ' ' + run.err);
+      const modelRejected = !missingSession && error && !text && turn.modelFlag && !run.stopped && MODEL_REJECTED.test(error + ' ' + run.err);
       if (modelRejected) error = lt`指定したモデル「${turn.modelFlag}」を ${LABEL[ai]} が受け付けませんでした。設定画面の「AI の更新」と「CLI に渡すモデル名」を確認してください。${error}`;
       // 思考の指定を断られた：指定なしで1回だけやり直す
-      if (!o.automation && !o.discussionTurn && !modelRejected && error && !text && turn.effortFlag && !run.stopped && EFFORT_REJECTED.test(error + ' ' + run.err)) {
+      if (!o.automation && !o.discussionTurn && !missingSession && !modelRejected && error && !text && turn.effortFlag && !run.stopped && EFFORT_REJECTED.test(error + ' ' + run.err)) {
         this.emit(project, task, { type: 'row', row: append(pdir, task, { role: 'event', ai, text: lt`思考「${effort}」の指定は使えなかったため、指定なしでやり直します` }) });
         const next = { ...o, noEffort: true, fast: ai === 'codex' && this.fastFor?.(project, task) === true };
         phase('effort-retry');
@@ -785,10 +840,14 @@ class ChatRunner {
       }
       const currentMeta = readMeta(pdir, task);
       meta.accounts = currentMeta.accounts; meta.codexFast = currentMeta.codexFast;
-      if (!turn.freshContext && !turn.discussionTurn && !turn.isolatedReview && !turn.selectionOnly && run.sid && !modelRejected && !run.blocked) { const current = readMeta(pdir, task); meta.accounts = current.accounts; meta.sessionAccounts = { ...(meta.sessionAccounts || {}), [ai]: account }; meta.sessions = { ...(meta.sessions || {}), [ai]: run.sid }; meta.models = { ...(meta.models || {}), [ai]: model }; writeMeta(pdir, task, meta); }
-      if (!turn.freshContext && !turn.discussionTurn && !turn.isolatedReview && !turn.selectionOnly && turn.rules) { meta.rulesSent = { ...(meta.rulesSent || {}), [ai]: { ...turn.rules, sid: run.sid || meta.sessions?.[ai], restore: Boolean(error || run.compact) } }; writeMeta(pdir, task, meta); }
-      // CLI内部の圧縮が起きた会話は、画面で［要約して新しい会話へ］を案内する（自動では切り替えない）。
-      if (!turn.freshContext && !turn.discussionTurn && !turn.isolatedReview && !turn.selectionOnly && run.compact) { meta.compacted = new Date().toISOString(); writeMeta(pdir, task, meta); }
+      if (missingSession) {
+        if (forgetClaudeSession(currentMeta, account, rejectedSession)) writeMeta(pdir, task, currentMeta);
+      } else if (!turn.freshContext && !turn.discussionTurn && !turn.isolatedReview && !turn.selectionOnly) {
+        if (run.sid && !modelRejected && !run.blocked) { const current = readMeta(pdir, task); meta.accounts = current.accounts; meta.sessionAccounts = { ...(meta.sessionAccounts || {}), [ai]: account }; meta.sessions = { ...(meta.sessions || {}), [ai]: run.sid }; meta.models = { ...(meta.models || {}), [ai]: model }; writeMeta(pdir, task, meta); }
+        if (turn.rules) { meta.rulesSent = { ...(meta.rulesSent || {}), [ai]: { ...turn.rules, sid: run.sid || meta.sessions?.[ai], restore: Boolean(error || run.compact) } }; writeMeta(pdir, task, meta); }
+        // CLI内部の圧縮が起きた会話は、画面で［要約して新しい会話へ］を案内する（自動では切り替えない）。
+        if (run.compact) { meta.compacted = new Date().toISOString(); writeMeta(pdir, task, meta); }
+      }
       const waiting = !error && closed && !run.stopped && !run.limit && require('./task-wait').eligible(o) ? require('./task-wait').parse(text) : {text};
       text = waiting.text;
       const pa = parseAsk(text);

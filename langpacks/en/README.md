@@ -36,4 +36,4 @@ For 4.126.105, the same translations cover the existing interface messages. The 
 
 For 4.126.106, the existing translations cover the free-talk queue editing fix.
 
-For 4.126.107, the Mac relaunch fix uses the existing interface text. This pack continues to use the existing translations.
+4.126.109 adds translations for the chat input history buttons, Claude Code conversation recovery, and the restart status.

@@ -14,6 +14,14 @@ function chatHistoryPending() {
   return view.kind === 'work' && workMode() === 'chat' && $('#msgs')?.dataset.chatLoading === '1';
 }
 
+function updateChatHistoryButtons() {
+  const previous = $('#chat-history-prev'), next = $('#chat-history-next');
+  if (!previous || !next) return;
+  const key = chatAttachmentKey(view.project, view.task), locked = $('#chat-in').disabled;
+  previous.disabled = locked || !instructionHistory.canMove(key, -1);
+  next.disabled = locked || !instructionHistory.canMove(key, 1);
+}
+
 function openChat(p, t, savedScroll) {
   const box = $('#msgs');
   box.dataset.askHistoryPending = '1';
@@ -55,16 +63,26 @@ function openChat(p, t, savedScroll) {
   let composing = false;
   ta.addEventListener('compositionstart', () => { composing = true; });
   ta.addEventListener('compositionend', () => { composing = false; });
+  const recall = direction => {
+    const value = instructionHistory.move(draftKey, direction, ta.value, ta.selectionStart, ta.selectionEnd);
+    if (!value) return false;
+    ta.value = value.text;
+    setChatDraft(draftKey, value.text);
+    ta.setSelectionRange?.(value.start, value.end);
+    window.HubMobile?.draft();
+    updateChatHistoryButtons();
+    return true;
+  };
+  for (const [selector, direction] of [['#chat-history-prev', -1], ['#chat-history-next', 1]]) {
+    const button = $(selector);
+    button.addEventListener('pointerdown', e => { if (document.activeElement === ta) e.preventDefault(); });
+    button.addEventListener('click', () => { if (!composing && !button.disabled) recall(direction); });
+  }
   ta.addEventListener('keydown', e => {
     if (composing || e.isComposing || e.keyCode === 229) return;
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) {
       const direction = e.key === 'ArrowUp' ? -1 : 1;
-      if (!window.HubChatHistory.atBoundary(ta, direction)) return;
-      const value = instructionHistory.move(draftKey, direction, ta.value, ta.selectionStart, ta.selectionEnd);
-      if (value) {
-        e.preventDefault(); ta.value = value.text; setChatDraft(draftKey, value.text);
-        ta.setSelectionRange?.(value.start, value.end); window.HubMobile?.draft();
-      }
+      if (window.HubChatHistory.atBoundary(ta, direction) && recall(direction)) e.preventDefault();
     } else if (isSendKey(e)) { e.preventDefault(); $('#composer').requestSubmit(); }
   });
   let museStatusRequest=0,museReadBusy=false;

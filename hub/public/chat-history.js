@@ -44,6 +44,12 @@
       return entries.get(key);
     };
     return {
+      canMove(key, direction) {
+        const session = sessions.get(key);
+        if (!session) return direction === -1 && read(key).length > 0;
+        const next = session.index - direction;
+        return next >= 0 && next < session.values.length;
+      },
       record(key, text) {
         if (typeof text !== 'string' || !text.trim() || text.length > 100000) return;
         const history = [text, ...read(key)].slice(0, 3);
