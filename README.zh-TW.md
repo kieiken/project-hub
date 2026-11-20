@@ -4,13 +4,15 @@
 
 介紹頁：<https://k-onedot.com/ai/project-hub/tw/>
 
-**Project Hub 的 Mac 與 Windows 版皆為正式版。** 目前 Mac 與 Windows 的公開版皆為[最新版 4.126.95](https://github.com/kieiken/project-hub/releases/latest)。歡迎分享使用心得、回報問題或提交 Pull Request；參與方式見 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
+**Project Hub 的 Mac 與 Windows 版皆為正式版。** 目前的發行版本為 [Mac 4.126.110 / Windows 4.126.98](https://github.com/kieiken/project-hub/releases/latest)。歡迎分享使用心得、回報問題或提交 Pull Request；參與方式見 [CONTRIBUTING.zh-TW.md](CONTRIBUTING.zh-TW.md)。
 
 Project Hub 將專案與任務集中管理，並在同一個畫面中執行 Claude Code / Codex。主要供單一使用者在自己的 Mac 或 Windows 11 x64 上使用。服務只監聽 `127.0.0.1`；本機操作沒有使用者登入驗證。可自行啟用 Tailscale 與通關密語，從自己的 iPhone 遠端操作，但不適合作為公開網站或多人共用伺服器。
 
 使用前請閱讀 [hub/README.zh-TW.md](hub/README.zh-TW.md) 的「使用前須知」。
 
-原始碼版本：4.126.99（公開發行版如上所列）。
+Mac 4.126.110 可在［設定］→［語言］新增英文或繁體中文語言包。
+
+原始碼版本：4.126.110（公開發行版如上所列）。
 
 ## 運作方式
 

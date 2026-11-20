@@ -35,6 +35,92 @@ test('import copies only approved data, normalizes modes, and accepts the existi
     assert.deepEqual(fs.readFileSync(path.join(f.installed, file)), fs.readFileSync(path.join(existing, file)));
   }
 });
+
+function officialFixture(t, { manifestVersion = '4.126.109', sibling = false } = {}) {
+  const { sha, pack: makeArchive } = require('../lib/update-zip');
+  const { assetPrefix, feedUrl } = require('../lib/update-trust');
+  const version = '4.126.109', id = 'en', f = fixture(t);
+  const source = path.join(f.temp, 'archive');
+  pack(path.join(source, id), 'Official pack', id);
+  write(path.join(source, id, 'pack.json'), { id, name: 'English', verifiedWith: manifestVersion });
+  if (sibling) write(path.join(source, 'other', 'README.md'), 'Not part of the requested pack');
+  const bytes = makeArchive(source);
+  const filename = `Project-Hub-${version}-Language-Pack-${id}.zip`;
+  const base = assetPrefix + 'v' + version + '/';
+  const latest = new URL('./', feedUrl).href;
+  const checksum = `${sha(bytes)}  ${filename}\n`;
+  const store = {
+    ...packs,
+    packSettings(root, version) {
+      const settings = packs.packSettings(root, version);
+      // Standalone installs start without the packs bundled in this source checkout.
+      const installed = settings.packs.filter(pack => pack.source === 'installed');
+      return { ...settings, packs: installed, available: installed.filter(pack => pack.usable).map(pack => pack.id) };
+    },
+  };
+  function route(fetcher) {
+    const { packs: handlers } = require('../lib/routes/language')({
+      ROOT: f.root, VERSION: version, langpacks: store, fetcher, fromRemote: () => false, allowed: () => true,
+      readBody: async req => req.body, send: (_, status, body) => ({ status, body }),
+    });
+    return (body = { id }) => handlers.handle({ method: 'POST', body }, {}, new URL('http://localhost/api/langpacks/download'));
+  }
+  return { ...f, bytes, filename, base, latest, checksum, route };
+}
+
+test('official language download uses a retained release asset, retries after a fetch error and coalesces concurrent requests', async t => {
+  const f = officialFixture(t), calls = [];
+  const combined = f.base.replace('4.126.109', '4.126.110');
+  const fromCdn = 'https://release-assets.githubusercontent.com/pack';
+  let offline = true;
+  const download = f.route(async (url, options) => {
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.redirect, 'manual');
+    assert.ok(!options.body && !options.headers.Authorization && !options.headers.Cookie);
+    calls.push(url);
+    if (offline) throw Error('offline');
+    if (url === f.base + 'SHA256SUMS.txt') return new Response(null, { status: 404 });
+    if (url === f.latest + 'SHA256SUMS.txt') return Response.redirect(combined + 'SHA256SUMS.txt');
+    if (url === combined + 'SHA256SUMS.txt') return new Response(f.checksum);
+    if (url === combined + f.filename) return Response.redirect(fromCdn);
+    assert.equal(url, fromCdn);
+    return new Response(f.bytes);
+  });
+  assert.equal((await download({ id: 'fr-FR' })).status, 400);
+  assert.deepEqual(calls, []);
+  const failure = await download();
+  assert.equal(failure.status, 502);
+  assert.match(failure.body.error, /通信を確認/);
+  assert.equal(fs.existsSync(path.join(f.root, '_hub')), false);
+
+  offline = false;
+  calls.length = 0;
+  const [first, second] = await Promise.all([download(), download()]);
+  assert.deepEqual(first, second);
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body.officialPacks.map(pack => pack.id), ['en', 'zh-TW']);
+  assert.deepEqual(first.body.available, ['en']);
+  assert.equal(first.body.saved, 'ja');
+  assert.deepEqual(calls, [f.base + 'SHA256SUMS.txt', f.latest + 'SHA256SUMS.txt', combined + 'SHA256SUMS.txt', combined + f.filename, fromCdn]);
+  assert.equal(fs.existsSync(path.join(f.root, '_hub/language.json')), false);
+  assert.equal((await download()).status, 200);
+  assert.equal(calls.length, 5);
+});
+
+test('official language download rejects mismatched checksums, pack versions and entries outside the requested folder', async t => {
+  for (const [options, corrupt, message] of [
+    [{}, true, /照合に失敗/],
+    [{ manifestVersion: '4.126.108' }, false, /対応する版/],
+    [{ sibling: true }, false, /ファイル形式/],
+  ]) {
+    const f = officialFixture(t, options);
+    const download = f.route(async url => new Response(url.endsWith('/SHA256SUMS.txt') ? f.checksum : corrupt ? Buffer.from('changed') : f.bytes));
+    const response = await download();
+    assert.equal(response.status, 422);
+    assert.match(response.body.error, message);
+    assert.equal(fs.existsSync(path.join(f.root, '_hub')), false);
+  }
+});
 test('invalid data, IDs, assets, links and names preserve the previous installed pack', async t => {
   const invalid = {
     missing: dir => fs.unlinkSync(path.join(dir, 'ui.json')),

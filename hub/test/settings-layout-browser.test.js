@@ -80,6 +80,56 @@ async function fixture(t, saved = null, locale = 'ja', blocked = false) {
   return { page, errors, requests };
 }
 const options = { skip: !chromium || !chrome };
+test('a narrow settings screen offers official language packs and lets users retry then choose the added language', options, async t => {
+  const { page, errors } = await fixture(t);
+  await page.setViewportSize({ width: 390, height: 850 });
+  await page.evaluate(officialPacks => {
+    languageSettings = { active: 'ja', saved: 'ja', packs: [], version: '4.126.109', officialPacks };
+    drawLanguageSettings();
+    selectSettingsTab('basic', true);
+    api = (route, body) => {
+      window.layoutCalls.push({ route, body });
+      return new Promise((resolve, reject) => {
+        window.finishLanguageDownload = ok => {
+          if (!ok) return reject(Error('公式配布先から取得できませんでした。通信を確認してもう一度お試しください。'));
+          const { id, name } = officialPacks.find(pack => pack.id === body.id);
+          resolve({ ...languageSettings, packs: [{ id, name, source: 'installed', usable: true }] });
+        };
+      });
+    };
+  }, require('../lib/langpack-download').OFFICIAL_PACKS);
+  const list = page.getByRole('list', { name: '公式言語パック' });
+  const english = list.locator('[data-pack-id="en"]');
+  const chinese = list.locator('[data-pack-id="zh-TW"]');
+  const choice = page.getByRole('combobox', { name: '表示言語' });
+  assert.ok(await english.isVisible());
+  assert.ok(await chinese.isVisible());
+  assert.deepEqual(await choice.locator('option').evaluateAll(nodes => nodes.map(node => node.value)), ['ja']);
+  await english.click();
+  assert.equal(await english.isDisabled(), true);
+  assert.equal(await chinese.isDisabled(), true);
+  assert.equal(await english.textContent(), 'ダウンロード中…');
+  await page.evaluate(() => finishLanguageDownload(false));
+  await page.waitForFunction(() => document.querySelector('#language-notice').textContent.includes('もう一度'));
+  assert.equal(await english.isEnabled(), true);
+  assert.equal(await choice.locator('option[value="en"]').count(), 0);
+
+  await english.click();
+  await page.evaluate(() => finishLanguageDownload(true));
+  await choice.locator('option[value="en"]').waitFor({ state: 'attached' });
+  assert.equal(await choice.inputValue(), 'ja');
+  assert.equal(await english.count(), 0);
+  assert.match(await list.textContent(), /English\s*追加済み/);
+  assert.match(await page.locator('#language-notice').textContent(), /表示言語を選んで保存/);
+  await choice.selectOption('en');
+  assert.equal(await choice.inputValue(), 'en');
+  assert.deepEqual(await page.evaluate(() => layoutCalls), [
+    { route: '/api/langpacks/download', body: { id: 'en' } },
+    { route: '/api/langpacks/download', body: { id: 'en' } },
+  ]);
+  assert.deepEqual(errors, []);
+});
+
 test('update polling keeps the overview and details aligned with verified packaged versions', options, async t => {
   const { page, errors } = await fixture(t);
   for (const [latest, expected] of [['', '更新状態は未確認です。'], ['4.126.98', '新しい版のお知らせはありません。'], ['4.126.97', '新しい版のお知らせはありません。'], ['4.126.99', '新しい版があります。']]) {

@@ -458,6 +458,14 @@ function languageSettingsHtml(settings) {
     ${choices.map(pack => `<option value="${esc(pack.id)}" ${selected === pack.id ? 'selected' : ''}>${esc(pack.name)}</option>`).join('')}</select>
     <button type="button" class="btn plain" data-language="save" ${languageBusy ? 'disabled' : ''}>保存する</button></div>
     ${settings.fallback ? UI.html('<p class="note">選んだ言語パックが読めないため、日本語で表示しています。</p>') : ''}
+    ${settings.officialPacks?.length ? UI.template`<ul class="pref-packs" aria-label="公式言語パック">${settings.officialPacks.map(pack => {
+      const available = choices.find(choice => choice.id === pack.id);
+      const action = esc(UI.text(languageDownloadId === pack.id ? 'ダウンロード中…' : 'ダウンロードして追加'));
+      return UI.template`<li><b class="pref-pack-name">${esc(pack.name)}</b>
+        ${available ? UI.template`<span class="small">${esc(UI.text(available.source === 'installed' ? '追加済み' : '利用可能'))}</span>`
+          : UI.template`<button class="btn plain" type="button" data-language="download" data-pack-id="${esc(pack.id)}" aria-label="${action} · ${esc(pack.name)}" ${languageBusy ? 'disabled' : ''}>${action}</button>`}</li>`;
+    }).join('')}</ul>` : ''}
+    <p id="language-notice" role="status" class="small">${esc(languageNotice)}</p>
     <details class="pref-more"><summary>言語パック</summary>
     <ul class="pref-packs">${settings.packs.map(pack => UI.template`<li><span class="pref-pack-name"><b>${esc(pack.name)}</b> <span class="small">${esc(pack.id)}・${pack.source === 'installed' ? UI.text('追加済み') : pack.source === 'external' ? UI.text('起動時に指定') : UI.text('本体同梱')}</span></span>
       ${pack.source === 'installed' ? UI.template`<button class="btn plain sm" type="button" data-language="remove" data-pack-id="${esc(pack.id)}" ${languageBusy ? 'disabled' : ''}>削除</button>` : ''}
@@ -465,7 +473,6 @@ function languageSettingsHtml(settings) {
       ${pack.verifiedWith && pack.verifiedWith !== settings.version ? UI.template`<p class="small">v${esc(pack.verifiedWith)} で確認されたパックです。今の版と違うため、一部が日本語で表示されることがあります。</p>` : ''}</li>`).join('')}</ul>
     <div class="pref-packs-add"><button type="button" class="btn plain sm" data-language="import" ${languageBusy ? 'disabled' : ''}>言語パックを追加…</button><span class="small">展開した言語パックのフォルダを選んで追加できます。</span></div>
     </details>
-    <p id="language-notice" role="status" class="small">${esc(languageNotice)}</p>
     ${settings.restartNeeded ? UI.template`<div class="pref-actions"><button type="button" class="btn" data-language="restart" ${languageBusy ? 'disabled' : ''}>今すぐ再起動</button></div>` : ''}`;
 }
 
@@ -807,9 +814,15 @@ function appSettingsCallback3563() {
   if (!button || languageBusy) return;
   const action = button.dataset.language, language = $('#language-choice')?.value, id = button.dataset.packId;
   if (action === 'remove' && !confirm(UI.text('この言語パックを削除しますか？ 使用中なら日本語に戻ります。'))) return;
-  languageBusy = true; languageNotice = ''; ++languageLoadEpoch; drawLanguageSettings();
+  languageBusy = true;
+  languageDownloadId = action === 'download' ? id : '';
+  languageNotice = '';
+  ++languageLoadEpoch; drawLanguageSettings();
   try {
-    if (action === 'import') {
+    if (action === 'download') {
+      languageSettings = await api('/api/langpacks/download', { id });
+      languageNotice = UI.text('言語パックを追加しました。表示言語を選んで保存してください。');
+    } else if (action === 'import') {
       const picked = await api('/api/pick-folder', { prompt: UI.text('展開した言語パックのフォルダを選んでください') });
       if (!picked.path) return;
       languageSettings = await api('/api/langpacks/import', { dir: picked.path });
@@ -823,8 +836,10 @@ function appSettingsCallback3563() {
       languageDraft = null;
       languageNotice = languageRestartMessage(true);
     } else if (action === 'restart') await applyLanguageRestart();
-  } catch (error) { languageNotice = error.message; }
-  finally { languageBusy = false; drawLanguageSettings(); }
+  } catch (error) {
+    languageNotice = action === 'download' && error instanceof TypeError
+      ? UI.text('通信を確認してもう一度お試しください。') : error.message;
+  } finally { languageBusy = false; languageDownloadId = ''; drawLanguageSettings(); }
 });
 }
 

@@ -56,25 +56,29 @@ function pack(dir) {
   const cd = Buffer.concat(central), end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50); end.writeUInt16LE(list.length, 8); end.writeUInt16LE(list.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
   const zip = Buffer.concat([...chunks, cd, end]); if (zip.length > LIMIT) fail('zip-size'); return zip;
 }
-function unpack(zip, destination) {
+function unpack(zip, destination, {
+  allowAscii = false, maxEntryBytes = LIMIT, maxBytes = TOTAL, maxEntries = COUNT, acceptEntry,
+} = {}) {
   // Only our bounded profile is accepted: no ZIP64, encryption, descriptors,
   // extras, comments, symlinks, device files, alternate streams or ambiguous names.
   if (!Buffer.isBuffer(zip) || zip.length < 22 || zip.length > LIMIT) fail('zip-size');
   const end = zip.length - 22; if (zip.readUInt32LE(end) !== 0x06054b50 || zip.readUInt16LE(end + 4) || zip.readUInt16LE(end + 6) || zip.readUInt16LE(end + 20)) fail('zip-format');
   const count = zip.readUInt16LE(end + 10), cdSize = zip.readUInt32LE(end + 12), cdStart = zip.readUInt32LE(end + 16);
-  if (!count || count > COUNT || count !== zip.readUInt16LE(end + 8) || cdStart + cdSize !== end) fail('zip-format');
+  if (!count || count > Math.min(COUNT, maxEntries) || count !== zip.readUInt16LE(end + 8) || cdStart + cdSize !== end) fail('zip-format');
   const records = [], seen = new Set(); let at = cdStart, total = 0, next = 0;
   for (let i = 0; i < count; i++) {
     if (at + 46 > end || zip.readUInt32LE(at) !== 0x02014b50) fail('zip-format');
     const flags = zip.readUInt16LE(at + 8), method = zip.readUInt16LE(at + 10), crc = zip.readUInt32LE(at + 16), size = zip.readUInt32LE(at + 20), plain = zip.readUInt32LE(at + 24), len = zip.readUInt16LE(at + 28), start = zip.readUInt32LE(at + 42), attrs = zip.readUInt32LE(at + 38), kind = attrs >>> 28;
-    if (flags !== 0x800 || ![0, 8].includes(method) || !len || zip.readUInt16LE(at + 30) || zip.readUInt16LE(at + 32) || zip.readUInt16LE(at + 34) || start !== next || ![0, 4, 8].includes(kind) || (attrs & 0x400)) fail('zip-format');
+    if ((flags !== 0x800 && !(allowAscii && flags === 0)) || ![0, 8].includes(method) || !len || zip.readUInt16LE(at + 30) || zip.readUInt16LE(at + 32) || zip.readUInt16LE(at + 34) || start !== next || ![0, 4, 8].includes(kind) || (attrs & 0x400)) fail('zip-format');
     if (at + 46 + len > end) fail('zip-format');
     const nameBytes = zip.subarray(at + 46, at + 46 + len); let name;
+    if (flags === 0 && nameBytes.some(byte => byte > 127)) fail('zip-path');
     try { name = new TextDecoder('utf-8', { fatal: true }).decode(nameBytes); } catch { fail('zip-path'); }
     const directory = name.endsWith('/'); name = safeName(directory ? name.slice(0, -1) : name);
+    if (acceptEntry && !acceptEntry(name, directory)) fail('zip-path');
     if (kind === 4 && !directory || kind === 8 && directory || Boolean(attrs & 16) !== directory) fail('zip-type');
     const key = name.normalize('NFC').toLowerCase(); if (seen.has(key)) fail('zip-duplicate'); seen.add(key);
-    if (plain > LIMIT || (total += plain) > TOTAL || directory && plain) fail('zip-size');
+    if (plain > Math.min(LIMIT, maxEntryBytes) || (total += plain) > Math.min(TOTAL, maxBytes) || directory && plain) fail('zip-size');
     if (start + 30 + len + size > cdStart || zip.readUInt32LE(start) !== 0x04034b50 || zip.readUInt16LE(start + 6) !== flags || zip.readUInt16LE(start + 8) !== method || zip.readUInt32LE(start + 14) !== crc || zip.readUInt32LE(start + 18) !== size || zip.readUInt32LE(start + 22) !== plain || zip.readUInt16LE(start + 26) !== len || zip.readUInt16LE(start + 28) || !zip.subarray(start + 30, start + 30 + len).equals(nameBytes)) fail('zip-format');
     next = start + 30 + len + size; records.push({ name, directory, crc, plain, method, start: start + 30 + len, size }); at += 46 + len;
   }

@@ -854,6 +854,7 @@ let moveSettingsTimer;
 /* @app-function app-settings.js:moveSettingsHtml */
 /* @app-function app-settings.js:loadMoveSettings */
 let languageSettings = null, languageNotice = '', languageBusy = false, languageDraft = null, languageLoadEpoch = 0;
+let languageDownloadId = '';
 /* @app-function app-settings.js:languageSettingsHtml */
 /* @app-function app-settings.js:drawLanguageSettings */
 /* @app-function app-settings.js:loadLanguageSettings */

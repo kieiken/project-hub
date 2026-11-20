@@ -37,3 +37,5 @@ For 4.126.105, the same translations cover the existing interface messages. The 
 For 4.126.106, the existing translations cover the free-talk queue editing fix.
 
 4.126.109 adds translations for the chat input history buttons, Claude Code conversation recovery, and the restart status.
+
+4.126.110 adds translations for the language pack download controls, status messages, and errors.

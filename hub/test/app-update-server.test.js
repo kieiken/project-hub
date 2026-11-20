@@ -3,6 +3,7 @@
 process.env.HUB_LANG = 'ja';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+const http = require('node:http');
 const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'hub-update-server-'));
 const project = path.join(root, 'Product/P');
 fs.mkdirSync(path.join(project, '.ai/tasks'), { recursive: true });
@@ -12,6 +13,9 @@ fs.writeFileSync(path.join(project, '.ai/tasks/t.md'), '---\nid: t\ntitle: t\nst
 // Written before server initialization: a queue that has never been opened in UI.
 const queueFile = path.join(project, '.ai/chat/t.queue.json');
 fs.writeFileSync(queueFile, JSON.stringify([{ id: 'saved', text: 'fixture queued instruction' }]));
+const remoteHost = 'fixture.hubtest.ts.net';
+fs.mkdirSync(path.join(root, '_hub'));
+fs.writeFileSync(path.join(root, '_hub/remote.json'), JSON.stringify({ host: remoteHost }));
 Object.assign(process.env, { HUB_ROOT: root, HUB_PORT: '0', HUB_DRY_RUN: '1', HUB_AI_HOME: path.join(root, 'home'), HUB_STORAGE_GUARD: '', HUB_UPDATE_SOURCE: '', HUB_UPDATE_APP: '', HUB_AUTO_TRANSLATE: '0' });
 let server, sessions, base, updater, updateOptions, shell, restart;
 const moduleShell = require('../lib/app-shell'), RealShell = moduleShell.AppShell;
@@ -35,6 +39,8 @@ test('language APIs import data, save for restart, reject invalid choices and pr
   fs.writeFileSync(path.join(source, 'ui.json'), JSON.stringify({ 'あなたの番': 'Pack text' }));
   fs.writeFileSync(path.join(source, 'backend.json'), JSON.stringify({ messages: {}, labels: {} }));
   assert.equal((await post('/api/langpacks/import', { dir: source }, {})).status, 403);
+  assert.equal((await post('/api/langpacks/download', { id: 'en' }, {})).status, 403);
+  assert.equal((await post('/api/langpacks/download', { id: 'en' }, { 'X-Hub': '1', Origin: 'https://another.example' })).status, 403);
   assert.equal((await post('/api/langpacks/import', { dir: source }, { 'X-Hub': '1', Origin: 'https://another.example' })).status, 403);
   assert.equal((await post('/api/langpacks/import', { dir: source })).status, 200);
   assert.equal((await post('/api/language', { language: 'unknown' })).status, 400);
@@ -53,12 +59,26 @@ test('language APIs import data, save for restart, reject invalid choices and pr
 });
 test('authenticated remote requests cannot read or change language settings', async () => {
   assert.equal((await post('/api/remote', { enabled: true, passcode: 'local-test-passphrase' })).status, 200);
-  const headers = { 'X-Hub': '1', 'X-Forwarded-For': '100.64.0.7', 'X-Forwarded-Host': 'mac.example', Origin: 'https://mac.example' };
-  const login = await post('/api/login', { passcode: 'local-test-passphrase' }, headers); assert.equal(login.status, 200);
-  headers.Cookie = login.headers.get('set-cookie').split(';')[0];
+  const headers = {
+    Host: remoteHost, 'X-Forwarded-For': '100.64.0.7', 'X-Forwarded-Host': remoteHost,
+    'X-Forwarded-Proto': 'https', 'Tailscale-User-Login': 'fixture-remote-user',
+    'X-Hub': '1', Origin: `https://${remoteHost}`, 'Content-Type': 'application/json',
+  };
+  const remoteRequest = (route, body) => new Promise((resolve, reject) => {
+    const req = http.request({
+      host: '127.0.0.1', port: new URL(base).port, path: route, method: body ? 'POST' : 'GET', headers,
+    }, res => { res.resume(); resolve(res); });
+    req.on('error', reject);
+    req.end(body ? JSON.stringify(body) : undefined);
+  });
+  const login = await remoteRequest('/api/login', { passcode: 'local-test-passphrase' });
+  assert.equal(login.statusCode, 200);
+  headers.Cookie = login.headers['set-cookie'][0].split(';')[0];
   const before = fs.readFileSync(path.join(root, '_hub/language.json'));
-  for (const route of ['/api/langpacks/import', '/api/langpacks/remove', '/api/language']) assert.equal((await post(route, {}, headers)).status, 403);
-  assert.equal((await fetch(base + '/api/langpacks', { headers })).status, 403);
+  for (const route of ['/api/langpacks/download', '/api/langpacks/import', '/api/langpacks/remove', '/api/language']) {
+    assert.equal((await remoteRequest(route, { id: 'en' })).statusCode, 403, route);
+  }
+  assert.equal((await remoteRequest('/api/langpacks')).statusCode, 403);
   assert.deepEqual(fs.readFileSync(path.join(root, '_hub/language.json')), before);
   await post('/api/remote', { enabled: false });
 });

@@ -1347,7 +1347,7 @@ async function apiRequest(req, res, url) {
     }catch(e){return send(res,409,{error:e.message,...stopControl.view()});}
   }
 
-  if (fromRemote() && ['/api/langpacks', '/api/langpacks/import', '/api/langpacks/remove', '/api/language'].includes(url.pathname)) return send(res, 403, { error: 'forbidden' });
+  if (fromRemote() && routes.language.packs.matches(req, url)) return send(res, 403, { error: 'forbidden' });
   if (routes.taskhistory.continuation.matches(req, url)) return routes.taskhistory.continuation.handle(req, res, url);
   if (routes.taskhistory.history.matches(req, url)) return routes.taskhistory.history.handle(req, res, url);
 
