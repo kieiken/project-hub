@@ -451,6 +451,8 @@ async function loadMoveSettings() {
 
 function languageSettingsHtml(settings) {
   const choices = settings.packs.filter(pack => pack.usable).filter((pack, index, rows) => rows.findIndex(row => row.id === pack.id) === index);
+  const managed = settings.packs.filter(pack => pack.source === 'installed' || pack.reason
+    || (pack.verifiedWith && pack.verifiedWith !== settings.version));
   const chosen = languageDraft ?? settings.saved;
   const selected = chosen === 'ja' || choices.some(pack => pack.id === chosen) ? chosen : 'ja';
   return UI.template`<div class="pref-control"><select id="language-choice" aria-label="表示言語" ${languageBusy ? 'disabled' : ''}>
@@ -466,24 +468,17 @@ function languageSettingsHtml(settings) {
           : UI.template`<button class="btn plain" type="button" data-language="download" data-pack-id="${esc(pack.id)}" aria-label="${action} · ${esc(pack.name)}" ${languageBusy ? 'disabled' : ''}>${action}</button>`}</li>`;
     }).join('')}</ul>` : ''}
     <p id="language-notice" role="status" class="small">${esc(languageNotice)}</p>
-    <details class="pref-more"><summary>言語パック</summary>
-    <ul class="pref-packs">${settings.packs.map(pack => UI.template`<li><span class="pref-pack-name"><b>${esc(pack.name)}</b> <span class="small">${esc(pack.id)}・${pack.source === 'installed' ? UI.text('追加済み') : pack.source === 'external' ? UI.text('起動時に指定') : UI.text('本体同梱')}</span></span>
+    ${managed.length ? UI.template`<ul class="pref-packs">${managed.map(pack => UI.template`<li><span class="pref-pack-name"><b>${esc(pack.name)}</b> <span class="small">${esc(pack.id)}・${pack.source === 'installed' ? UI.text('追加済み') : pack.source === 'external' ? UI.text('起動時に指定') : UI.text('本体同梱')}</span></span>
       ${pack.source === 'installed' ? UI.template`<button class="btn plain sm" type="button" data-language="remove" data-pack-id="${esc(pack.id)}" ${languageBusy ? 'disabled' : ''}>削除</button>` : ''}
       ${pack.reason ? `<p class="small">${esc(UI.text(pack.reason))}</p>` : ''}
-      ${pack.verifiedWith && pack.verifiedWith !== settings.version ? UI.template`<p class="small">v${esc(pack.verifiedWith)} で確認されたパックです。今の版と違うため、一部が日本語で表示されることがあります。</p>` : ''}</li>`).join('')}</ul>
-    <div class="pref-packs-add"><button type="button" class="btn plain sm" data-language="import" ${languageBusy ? 'disabled' : ''}>言語パックを追加…</button><span class="small">展開した言語パックのフォルダを選んで追加できます。</span></div>
-    </details>
+      ${pack.verifiedWith && pack.verifiedWith !== settings.version ? UI.template`<p class="small">v${esc(pack.verifiedWith)} で確認されたパックです。今の版と違うため、一部が日本語で表示されることがあります。</p>` : ''}</li>`).join('')}</ul>` : ''}
     ${settings.restartNeeded ? UI.template`<div class="pref-actions"><button type="button" class="btn" data-language="restart" ${languageBusy ? 'disabled' : ''}>今すぐ再起動</button></div>` : ''}`;
 }
 
 function drawLanguageSettings() {
   const box = $('#language-box');
   if (box && languageSettings) {
-    if (typeof settingsLayoutRestoreSource === 'function') settingsLayoutRestoreSource('language');
-    const open = box.querySelector('details')?.open === true;
     box.innerHTML = languageSettingsHtml(languageSettings);
-    const details = box.querySelector('details');
-    if (details) details.open = open;
     if (typeof settingsLayoutSync === 'function') settingsLayoutSync();
   }
 }
@@ -821,11 +816,6 @@ function appSettingsCallback3563() {
   try {
     if (action === 'download') {
       languageSettings = await api('/api/langpacks/download', { id });
-      languageNotice = UI.text('言語パックを追加しました。表示言語を選んで保存してください。');
-    } else if (action === 'import') {
-      const picked = await api('/api/pick-folder', { prompt: UI.text('展開した言語パックのフォルダを選んでください') });
-      if (!picked.path) return;
-      languageSettings = await api('/api/langpacks/import', { dir: picked.path });
       languageNotice = UI.text('言語パックを追加しました。表示言語を選んで保存してください。');
     } else if (action === 'remove') {
       languageSettings = await api('/api/langpacks/remove', { id });

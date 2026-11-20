@@ -123,7 +123,6 @@ function buildSettingsLayout(c) {
   add(section('#token-usage-box'), 'ai');
   for (const selector of ['#acceleration', '#skills-box']) add(section(selector), 'ai', true);
   c.mcp = split(document.createElement('div'), 'MCP', 'ai', true);
-  c.language = split(document.createElement('div'), '言語パックの追加', 'basic', true);
   // Emergency stop precedes the read-only permission summary.
   add(section('#emergency-status'), 'recovery');
   const emergency = section('#emergency-status');
@@ -191,7 +190,6 @@ function settingsLayoutSync() {
     for (const node of nodes) settingsLayoutMove(c, node, target, source);
   };
   portal('accounts', [...c.root.querySelectorAll('#ai-accounts .ai-mcp-detail')], c.mcp.querySelector('.pref-list'));
-  portal('language', [...c.root.querySelectorAll('#language-box > details')], c.language.querySelector('.pref-list'));
   const permits = c.root.querySelector('#muse-settings-box #muse-workspace-context');
   if (permits && !c.portals.muse?.length) {
     const first = permits.closest('label')?.previousElementSibling;

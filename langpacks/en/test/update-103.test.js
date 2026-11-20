@@ -57,6 +57,5 @@ for (const language of ['en', 'zh-TW']) {
     assert.ok(messages['会話の保存と実行状態を確認できないため、あとで更新を適用します。']);
     assert.ok(messages['自動で開き直せませんでした。処理が終わったらアプリを閉じて同じアプリを開き直してください。']);
     assert.ok(messages[' 確認箇所：古い試験版の登録記録の保管状態を確認できません。']);
-    assert.equal(read('pack').verifiedWith, '4.126.103');
   });
 }

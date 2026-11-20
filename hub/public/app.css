@@ -1069,7 +1069,6 @@ label.pref-row{cursor:pointer}
 .pref-packs li + li{border-top:1px solid var(--line)}
 .pref-pack-name{flex:1;min-width:0}
 .pref-packs li > p{flex-basis:100%;margin:0}
-.pref-packs-add{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
 .pref-actions{display:flex;gap:8px}
 #language-box > #language-notice:empty,#move-status:empty,.pref-row #license-notice:empty{display:none}
 #language-box > p{margin:0}

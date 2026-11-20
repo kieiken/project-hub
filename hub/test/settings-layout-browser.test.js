@@ -104,6 +104,9 @@ test('a narrow settings screen offers official language packs and lets users ret
   const choice = page.getByRole('combobox', { name: '表示言語' });
   assert.ok(await english.isVisible());
   assert.ok(await chinese.isVisible());
+  assert.equal(await page.locator('[data-layout-tab="basic"] .settings-layout-more').isVisible(), false);
+  assert.equal(await page.getByText('言語パックの追加', { exact: true }).count(), 0);
+  assert.equal(await page.locator('[data-language="import"]').count(), 0);
   assert.deepEqual(await choice.locator('option').evaluateAll(nodes => nodes.map(node => node.value)), ['ja']);
   await english.click();
   assert.equal(await english.isDisabled(), true);
@@ -180,7 +183,6 @@ test('fixed layout search and source redraw keep original controls, events and d
   const { page, errors } = await fixture(t);
   await page.evaluate(() => {
     document.querySelector('#ai-accounts').innerHTML = '<details class="ai-mcp-detail"><summary>MCP fixture</summary><button id="fixture-mcp">MCP action</button></details>';
-    document.querySelector('#language-box').innerHTML = '<details><summary>language fixture</summary><input id="fixture-language" value="draft"></details>';
     document.querySelector('#muse-settings-box').innerHTML = '<h3>Permits fixture</h3><label><select id="muse-workspace-context"><option>fixture</option></select></label><div id="muse-workspace-permits"><button id="fixture-permit">Permit action</button></div>';
     window.fixtureClicks = 0;
     document.querySelector('#fixture-mcp').onclick = () => fixtureClicks++;
@@ -197,16 +199,15 @@ test('fixed layout search and source redraw keep original controls, events and d
   await page.locator('.settings-layout-search button').click();
   assert.equal(await page.locator('#fixture-mcp').evaluate(n => n.closest('details').open), false);
   const restored = await page.evaluate(() => {
-    window.portalNodes = ['#fixture-mcp', '#fixture-language', '#fixture-permit'].map(s => document.querySelector(s));
-    for (const source of ['accounts', 'language', 'muse']) settingsLayoutRestoreSource(source);
+    window.portalNodes = ['#fixture-mcp', '#fixture-permit'].map(s => document.querySelector(s));
+    for (const source of ['accounts', 'muse']) settingsLayoutRestoreSource(source);
     // Inspect synchronously: the observer correctly moves these again next tick.
     return {
       accounts: !!document.querySelector('#ai-accounts #fixture-mcp'),
-      language: document.querySelector('#language-box #fixture-language')?.value,
       muse: !!document.querySelector('#muse-settings-box #fixture-permit'),
     };
   });
-  assert.deepEqual(restored, { accounts: true, language: 'draft', muse: true });
+  assert.deepEqual(restored, { accounts: true, muse: true });
   await page.evaluate(() => settingsLayoutSync());
   assert.equal(await page.evaluate(() => portalNodes.every(n => n.isConnected && n.closest('.settings-layout-panel'))), true);
   await search.fill('MCP fixture');

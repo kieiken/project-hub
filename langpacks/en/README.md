@@ -2,7 +2,7 @@
 
 Project Hub runs in Japanese. This optional pack shows the app in English. Texts without a translation stay in Japanese.
 
-Install: unzip the pack, then in the app open [Settings] → "Language pack" → [Add language pack…], choose this folder, select English as the display language, and save.
+In Project Hub 4.126.111, open Settings → Language and select [Download and add] next to English. Then select English as the display language, save, and restart Hub.
 
 Files: `ui.json` (screens), `backend.json` (messages from the app and to the AIs), `native.json` (Mac app window). Keys are the Japanese source text; values are the English text. Keep `${0}` placeholders, HTML tags, line breaks and Markdown marks as they are.
 
@@ -39,3 +39,5 @@ For 4.126.106, the existing translations cover the free-talk queue editing fix.
 4.126.109 adds translations for the chat input history buttons, Claude Code conversation recovery, and the restart status.
 
 4.126.110 adds translations for the language pack download controls, status messages, and errors.
+
+4.126.111 updates the installation guide for the simplified language settings and adds translations for the HTML sample preview.

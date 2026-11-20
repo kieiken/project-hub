@@ -12,7 +12,7 @@ Before you use it, read "使う前に知っておくこと" (what to know before
 
 The app's display is in Japanese. On Mac 4.126.110, add English or Traditional Chinese in Settings → Language. Language packs are also available from the release page. Some screens stay in Japanese. Most detailed documents in this repository are in Japanese.
 
-Source version in this repository: 4.126.110 (released versions are listed above).
+Source version in this repository: 4.126.111 (released versions are listed above).
 
 ## How it works
 

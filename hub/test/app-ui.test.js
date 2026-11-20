@@ -2751,7 +2751,7 @@ test('language card shows Japanese standard, installed packs, version mismatch a
   assert.match(html, /繁體中文 &lt;img&gt;/); assert.doesNotMatch(html, /繁體中文 <img>/);
   assert.match(html, /v4.107.1 で確認/); assert.match(html, /一部が日本語/);
   assert.match(html, /data-language="remove" data-pack-id="fr-FR"/);
-  assert.doesNotMatch(html, /<option value="fr-FR"/); assert.match(html, /言語パックを追加…/);
+  assert.doesNotMatch(html, /<option value="fr-FR"/); assert.doesNotMatch(html, /data-language="import"|言語パックを追加…/);
 });
 test('language draft survives settings refresh; save persists the choice and explains restart/native menus', async () => {
   const a = languageApp(); a.element('#language-choice').value = 'zh-TW';
@@ -2763,17 +2763,7 @@ test('language draft survives settings refresh; save persists the choice and exp
   const html = a.element('#language-box').innerHTML;
   assert.match(html, /保存しました/); assert.match(html, /アプリを開き直した時/); assert.match(html, /今すぐ再起動/);
 });
-test('language import uses a folder picker and cancellation never submits an import', async () => {
-  for (const chosen of ['', '/expanded pack']) {
-    const a = languageApp(), calls = [];
-    a.context.api = async (route, body) => { calls.push([route, body]); return route === '/api/pick-folder' ? { path: chosen } : languageFixture(); };
-    await a.click('import'); assert.equal(calls[0][0], '/api/pick-folder'); assert.match(calls[0][1].prompt, /展開した言語パック/);
-    assert.equal(calls.length, chosen ? 2 : 1);
-    if (chosen) { assert.equal(calls[1][0], '/api/langpacks/import'); assert.equal(calls[1][1].dir, chosen); }
-    assert.doesNotMatch(a.element('#language-box').innerHTML, /data-language="import" disabled/);
-  }
-});
-test('language removal returns to Japanese; fallback and import errors are visible', async () => {
+test('language removal returns to Japanese; fallback and save errors are visible', async () => {
   const a = languageApp(); const calls = [];
   a.context.api = async (route, body) => { calls.push([route, body]); return { ...languageFixture(), packs: [], saved: 'ja' }; };
   await a.click('remove', 'zh-TW'); assert.equal(calls[0][0], '/api/langpacks/remove'); assert.equal(calls[0][1].id, 'zh-TW');

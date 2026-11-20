@@ -4481,5 +4481,8 @@
   "作業の管理（状態：${57}・手順 ${58}/${59}）": "Task management (status: ${57} · steps ${58}/${59})",
   "手順 ${66}": "Steps ${66}",
   "モデル一覧はAIの作業・順番待ちが終わってから確認します。": "The model list will be checked after AI work and queued requests have finished.",
-  "別のアカウント：": "Another account: "
+  "別のアカウント：": "Another account: ",
+  "見本をプレビュー": "Preview sample",
+  "このプレビューでは、見本独自のボタンやプログラムは動きません。本体のMacで元のファイルを開くと試せます。": "In this preview, the sample’s own buttons and scripts do not run. Open the original file on the host Mac to try them.",
+  "拡大率": "Zoom"
 }
